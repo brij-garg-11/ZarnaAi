@@ -1,8 +1,14 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from app.brain.intent import classify_intent
 from app.brain.generator import generate_zarna_reply
 from app.config import CONVERSATION_HISTORY_LIMIT
 from app.retrieval.base import BaseRetriever
 from app.storage.base import BaseStorage
+
+# Shared thread pool — reused across requests so we don't pay thread-spawn
+# cost on every message.
+_executor = ThreadPoolExecutor(max_workers=4)
 
 
 class ZarnaBrain:
@@ -29,11 +35,13 @@ class ZarnaBrain:
         )
         history = [{"role": m.role, "text": m.text} for m in raw_history[:-1]]
 
-        # 4. Classify intent
-        intent = classify_intent(message_text)
+        # 4 + 5. Classify intent AND retrieve chunks in parallel.
+        #         Both are independent — no reason to run them sequentially.
+        future_intent = _executor.submit(classify_intent, message_text)
+        future_chunks = _executor.submit(self.retriever.get_relevant_chunks, message_text)
 
-        # 5. Retrieve relevant chunks
-        chunks = self.retriever.get_relevant_chunks(message_text)
+        intent = future_intent.result()
+        chunks = future_chunks.result()
 
         # 6. Generate reply
         reply = generate_zarna_reply(
