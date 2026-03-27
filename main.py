@@ -1,4 +1,6 @@
+import json as _json
 import logging
+import threading
 from collections import OrderedDict
 from dotenv import load_dotenv
 load_dotenv()
@@ -18,16 +20,18 @@ slicktext = create_slicktext_adapter()
 # Deduplication: remember the last 200 processed message IDs
 # Prevents double-replies when SlickText retries a webhook we already handled
 _seen_message_ids: OrderedDict = OrderedDict()
+_seen_lock = threading.Lock()
 _MAX_SEEN = 200
 
 def _already_processed(message_id: str) -> bool:
     if not message_id:
         return False
-    if message_id in _seen_message_ids:
-        return True
-    _seen_message_ids[message_id] = True
-    if len(_seen_message_ids) > _MAX_SEEN:
-        _seen_message_ids.popitem(last=False)
+    with _seen_lock:
+        if message_id in _seen_message_ids:
+            return True
+        _seen_message_ids[message_id] = True
+        if len(_seen_message_ids) > _MAX_SEEN:
+            _seen_message_ids.popitem(last=False)
     return False
 
 
@@ -76,6 +80,15 @@ def message():
 # through the SlickText API.
 # ---------------------------------------------------------------------------
 
+def _process_message(phone_number: str, message_text: str) -> None:
+    """Run brain + reply in a background thread so the webhook returns instantly."""
+    try:
+        reply = brain.handle_incoming_message(phone_number, message_text)
+        slicktext.send_reply(phone_number, reply)
+    except Exception as e:
+        logging.error(f"Error processing message from {phone_number}: {e}")
+
+
 @app.route("/slicktext/webhook", methods=["POST"])
 def slicktext_webhook():
     # Try JSON first, fall back to form-encoded (SlickText v1 sends form data)
@@ -86,7 +99,6 @@ def slicktext_webhook():
     logging.info(f"SlickText webhook raw payload: {payload}")
 
     # Deduplicate using ChatMessageId (guards against SlickText retries)
-    import json as _json
     try:
         raw_data = _json.loads(payload.get("data", "{}")) if isinstance(payload.get("data"), str) else payload
         message_id = str(raw_data.get("ChatMessage", {}).get("ChatMessageId", ""))
@@ -103,10 +115,14 @@ def slicktext_webhook():
         logging.warning(f"SlickText webhook: missing fields. Payload: {payload}")
         return jsonify({"error": "Invalid webhook payload"}), 400
 
-    reply = brain.handle_incoming_message(phone_number, message_text)
-    slicktext.send_reply(phone_number, reply)
+    # Return 200 to SlickText immediately — stops retries before they start.
+    # Process the message in a background thread.
+    threading.Thread(
+        target=_process_message,
+        args=(phone_number, message_text),
+        daemon=True,
+    ).start()
 
-    # SlickText expects a 200 response — body is ignored
     return jsonify({"status": "ok"})
 
 
