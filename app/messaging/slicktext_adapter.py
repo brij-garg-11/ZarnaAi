@@ -50,6 +50,25 @@ _REACTION_PREFIXES = (
 )
 
 
+# SlickText / carrier reserved keywords — handled automatically by SlickText,
+# but the webhook still fires. We drop these so the AI never responds to them.
+_RESERVED_KEYWORDS = {
+    # Opt-out (carrier-mandated)
+    "stop", "stopall", "unsubscribe", "cancel", "end", "quit",
+    # Opt-in
+    "start", "yes", "unstop",
+    # Help
+    "help", "info",
+    # Common subscription keywords Zarna uses
+    "zarna",
+}
+
+
+def _is_reserved_keyword(message: str) -> bool:
+    """Return True if the entire message is a SlickText/carrier reserved keyword."""
+    return message.strip().lower() in _RESERVED_KEYWORDS
+
+
 def _is_reaction(message: str) -> bool:
     """Return True if the message is an iOS/Android emoji reaction to a previous text."""
     lower = message.lower()
@@ -128,6 +147,10 @@ class SlickTextAdapter:
         phone   = chat.get("FromNumber", "").strip() or None
         message = chat.get("Body", "").strip() or None
 
+        if message and _is_reserved_keyword(message):
+            logger.info(f"Ignoring reserved keyword from {phone}: {message!r}")
+            return None, None
+
         if message and _is_reaction(message):
             logger.info(f"Ignoring reaction from {phone}: {message[:60]}")
             return None, None
@@ -159,6 +182,10 @@ class SlickTextAdapter:
         contact_id   = data.get("contact_id")
 
         if not contact_id or not message_text:
+            return None, None
+
+        if _is_reserved_keyword(message_text):
+            logger.info(f"Ignoring reserved keyword (v2, contact {contact_id}): {message_text!r}")
             return None, None
 
         if _is_reaction(message_text):
