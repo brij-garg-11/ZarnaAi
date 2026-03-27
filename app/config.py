@@ -36,3 +36,10 @@ SLICKTEXT_TEXTWORD_ID = os.getenv("SLICKTEXT_TEXTWORD_ID", "")
 # v2 (new accounts)
 SLICKTEXT_API_KEY  = os.getenv("SLICKTEXT_API_KEY", "")
 SLICKTEXT_BRAND_ID = os.getenv("SLICKTEXT_BRAND_ID", "")
+
+# --- Twilio ---
+# console.twilio.com → Account Dashboard → Account SID + Auth Token
+# Phone number in E.164 format, e.g. +18557689537
+TWILIO_ACCOUNT_SID  = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN   = os.getenv("TWILIO_AUTH_TOKEN", "")
+TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")

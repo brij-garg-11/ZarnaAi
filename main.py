@@ -9,6 +9,7 @@ from flask import Flask, request, jsonify
 
 from app.brain.handler import create_brain
 from app.messaging.slicktext_adapter import create_slicktext_adapter
+from app.messaging.twilio_adapter import create_twilio_adapter
 
 logging.basicConfig(level=logging.INFO)
 
@@ -16,6 +17,7 @@ app = Flask(__name__)
 
 brain = create_brain()
 slicktext = create_slicktext_adapter()
+twilio    = create_twilio_adapter()
 
 # Deduplication: remember the last 200 processed message IDs
 # Prevents double-replies when SlickText retries a webhook we already handled
@@ -124,6 +126,45 @@ def slicktext_webhook():
     ).start()
 
     return jsonify({"status": "ok"})
+
+
+# ---------------------------------------------------------------------------
+# Twilio webhook
+#
+# Configure in Twilio Console:
+#   Phone Numbers → Active Numbers → your number
+#   Messaging → A message comes in → Webhook → HTTP POST
+#   URL: https://web-production-ec3da.up.railway.app/twilio/webhook
+# ---------------------------------------------------------------------------
+
+@app.route("/twilio/webhook", methods=["POST"])
+def twilio_webhook():
+    form_data = request.form.to_dict()
+    logging.info(f"Twilio webhook received: From={form_data.get('From')} Body={form_data.get('Body')}")
+
+    phone_number, message_text = twilio.parse_inbound(form_data)
+
+    if not phone_number or not message_text:
+        logging.info("Twilio webhook: message filtered or unparseable.")
+        return ("", 204)
+
+    # Return empty 204 immediately — Twilio doesn't retry on 2xx responses.
+    # Process and reply in a background thread.
+    threading.Thread(
+        target=_process_twilio_message,
+        args=(phone_number, message_text),
+        daemon=True,
+    ).start()
+
+    return ("", 204)
+
+
+def _process_twilio_message(phone_number: str, message_text: str) -> None:
+    try:
+        reply = brain.handle_incoming_message(phone_number, message_text)
+        twilio.send_reply(phone_number, reply)
+    except Exception as e:
+        logging.error(f"Error processing Twilio message from {phone_number}: {e}")
 
 
 if __name__ == "__main__":

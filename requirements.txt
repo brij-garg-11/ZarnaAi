@@ -3,3 +3,4 @@ gunicorn==25.3.0
 requests==2.32.5
 python-dotenv==1.2.1
 google-genai==1.68.0
+twilio==9.4.6
