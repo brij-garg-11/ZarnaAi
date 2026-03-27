@@ -3,15 +3,18 @@ Twilio messaging adapter.
 
 Inbound: Twilio POSTs form-encoded data to the webhook:
     From=+16467244908&Body=hello&To=+18557689537
+or for WhatsApp:
+    From=whatsapp:+16467244908&Body=hello&To=whatsapp:+14155238886
 
 Outbound: Uses the Twilio REST API (twilio-python SDK) to send a reply.
 
 Webhook security: Twilio signs every request with an X-Twilio-Signature
-header.  Call validate_signature() in the webhook route to reject spoofed
+header. Call validate_signature() in the webhook route to reject spoofed
 requests (optional but recommended in production).
 """
 
 import logging
+import os
 import unicodedata
 from typing import Optional, Tuple
 
@@ -66,6 +69,21 @@ def _is_emoji_only(message: str) -> bool:
     return True
 
 
+def _is_whatsapp_number(value: str) -> bool:
+    return str(value).startswith("whatsapp:")
+
+
+def _ensure_whatsapp_prefix(value: str) -> str:
+    value = str(value).strip()
+    if value.startswith("whatsapp:"):
+        return value
+    return f"whatsapp:{value}"
+
+
+def _strip_whatsapp_prefix(value: str) -> str:
+    return str(value).replace("whatsapp:", "").strip()
+
+
 class TwilioAdapter:
 
     def __init__(
@@ -75,10 +93,10 @@ class TwilioAdapter:
         from_number: str = TWILIO_PHONE_NUMBER,
     ):
         self._account_sid = account_sid
-        self._auth_token  = auth_token
+        self._auth_token = auth_token
         self._from_number = from_number
-        self._client      = Client(account_sid, auth_token) if account_sid and auth_token else None
-        self._validator   = RequestValidator(auth_token) if auth_token else None
+        self._client = Client(account_sid, auth_token) if account_sid and auth_token else None
+        self._validator = RequestValidator(auth_token) if auth_token else None
         logger.info("TwilioAdapter initialised (from=%s)", from_number or "not set")
 
     # ------------------------------------------------------------------
@@ -101,7 +119,7 @@ class TwilioAdapter:
         Extract (phone_number, message_text) from a Twilio inbound webhook.
         form_data is request.form.to_dict() from Flask.
         """
-        phone   = form_data.get("From", "").strip() or None
+        phone = form_data.get("From", "").strip() or None
         message = form_data.get("Body", "").strip() or None
 
         if not phone or not message:
@@ -126,22 +144,43 @@ class TwilioAdapter:
     # ------------------------------------------------------------------
 
     def send_reply(self, to_number: str, body: str) -> bool:
-        """Send an outbound SMS via the Twilio REST API."""
+        """Send an outbound reply via Twilio SMS or WhatsApp."""
         logger.info("[TWILIO REPLY TO %s]: %s", to_number, body)
+
         if not self._client:
             logger.warning("Twilio client not configured — reply not sent.")
             return False
+
         if not self._from_number:
             logger.warning("TWILIO_PHONE_NUMBER not configured — reply not sent.")
             return False
+
         try:
+            is_whatsapp = _is_whatsapp_number(to_number)
+
+            if is_whatsapp:
+                whatsapp_from = os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
+                final_to = _ensure_whatsapp_prefix(to_number)
+                final_from = _ensure_whatsapp_prefix(whatsapp_from)
+            else:
+                final_to = _strip_whatsapp_prefix(to_number)
+                final_from = _strip_whatsapp_prefix(self._from_number)
+
+            logger.info(
+                "Sending Twilio reply via channel=%s from=%s to=%s",
+                "whatsapp" if is_whatsapp else "sms",
+                final_from,
+                final_to,
+            )
+
             msg = self._client.messages.create(
-                to=to_number,
-                from_=self._from_number,
+                to=final_to,
+                from_=final_from,
                 body=body,
             )
             logger.info("Twilio reply sent: SID=%s", msg.sid)
             return True
+
         except Exception as e:
             logger.error("Twilio send error: %s", e)
             return False
