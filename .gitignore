@@ -1,0 +1,40 @@
+# Secrets — never commit
+.env
+
+# Large uncompressed embeddings file (use .gz version instead)
+training_data/zarna_embeddings.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# ngrok binary and config
+ngrok
+.ngrok2/
+
+# Jupyter / notebooks
+.ipynb_checkpoints/
+
+# Logs
+*.log
