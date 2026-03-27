@@ -1,3 +1,4 @@
+import gzip
 import json
 import os
 import time
@@ -5,8 +6,8 @@ from dotenv import load_dotenv
 load_dotenv()
 from google import genai
 
-INPUT_PATH = "training_data/zarna_chunks.json"
-OUTPUT_PATH = "training_data/zarna_embeddings.json"
+INPUT_PATH  = "training_data/zarna_chunks.json"
+OUTPUT_PATH = "training_data/zarna_embeddings.json.gz"  # compressed — matches what the app reads
 
 API_KEY = os.getenv("GEMINI_API_KEY", "")
 EMBEDDING_MODEL = "gemini-embedding-001"
@@ -30,8 +31,8 @@ def embed_chunks(chunks):
 
         for j, emb in enumerate(result.embeddings):
             embedded.append({
-                "text": batch[j]["text"],
-                "source": batch[j]["source"],
+                "text":      batch[j]["text"],
+                "source":    batch[j]["source"],
                 "embedding": emb.values,
             })
 
@@ -52,7 +53,7 @@ if __name__ == "__main__":
 
     embedded = embed_chunks(chunks)
 
-    with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
+    with gzip.open(OUTPUT_PATH, "wt", encoding="utf-8", compresslevel=6) as f:
         json.dump(embedded, f, ensure_ascii=False)
 
     print(f"Saved {len(embedded)} embeddings to {OUTPUT_PATH}")
