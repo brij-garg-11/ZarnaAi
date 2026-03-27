@@ -1,11 +1,14 @@
 import json
 import math
+import os
+from dotenv import load_dotenv
+load_dotenv()
 from google import genai
 
 EMBEDDINGS_PATH = "training_data/zarna_embeddings.json"
 EMBEDDING_MODEL = "gemini-embedding-001"
 
-API_KEY = "AIzaSyASvhhRlQWODFz35C3r1sSScQZTAME1uz8"
+API_KEY = os.getenv("GEMINI_API_KEY", "")
 client = genai.Client(api_key=API_KEY)
 
 

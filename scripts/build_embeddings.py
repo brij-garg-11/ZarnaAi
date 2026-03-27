@@ -1,11 +1,14 @@
 import json
+import os
 import time
+from dotenv import load_dotenv
+load_dotenv()
 from google import genai
 
 INPUT_PATH = "training_data/zarna_chunks.json"
 OUTPUT_PATH = "training_data/zarna_embeddings.json"
 
-API_KEY = "AIzaSyASvhhRlQWODFz35C3r1sSScQZTAME1uz8"
+API_KEY = os.getenv("GEMINI_API_KEY", "")
 EMBEDDING_MODEL = "gemini-embedding-001"
 BATCH_SIZE = 50
 

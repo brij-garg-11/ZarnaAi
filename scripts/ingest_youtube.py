@@ -5,7 +5,7 @@ import csv
 from youtube_transcript_api import YouTubeTranscriptApi as YTApi
 
 
-API_KEY = "AIzaSyASvhhRlQWODFz35C3r1sSScQZTAME1uz8"
+API_KEY = os.getenv("GEMINI_API_KEY", "")
 CHANNEL_ID = "UC5Gb9pWYSfcpEdTb6vf9Dbg"
 
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"

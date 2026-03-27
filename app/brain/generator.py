@@ -23,7 +23,7 @@ Rules:
 - Do not sound like a random comedian
 - Do not sound male
 - Prefer family, parenting, marriage, immigrant-family, and Indian-mom style angles when relevant
-- Keep the response tight — 1 to 2 SHORT sentences max (aim for under 160 characters total)
+- Keep the response tight — 2 to 3 sentences max. Jokes can have a setup + punchline. Don't pad beyond that.
 - No setup padding, no preamble, no filler
 - Lead with the sharpest line, end on the funniest one
 - Do not explain the joke
@@ -97,18 +97,17 @@ Use these style examples for tone and inspiration:
 {_STYLE_RULES}"""
 
 
-_MAX_CHARS = 320  # ~2 SMS segments; enforced as a hard ceiling after generation
+_MAX_CHARS = 480  # ~3 SMS segments; hard ceiling after generation
 
 
 def _trim_to_two_sentences(text: str) -> str:
     """
-    Trim the model's output to at most 2 sentences.
+    Trim the model's output to at most 3 sentences.
     Splits on sentence-ending punctuation followed by a space or end-of-string,
     so it doesn't break URLs like https://zarnagarg.com/tickets/.
     """
-    # Split into sentences (keep delimiter attached to each sentence)
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    trimmed = " ".join(sentences[:2])
+    trimmed = " ".join(sentences[:3])
     # Hard char ceiling as a fallback
     if len(trimmed) > _MAX_CHARS:
         trimmed = trimmed[:_MAX_CHARS].rsplit(" ", 1)[0] + "…"
