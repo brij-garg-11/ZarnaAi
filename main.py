@@ -112,8 +112,8 @@ def slicktext_webhook():
     phone_number, message_text = slicktext.parse_inbound(payload)
 
     if not phone_number or not message_text:
-        logging.warning(f"SlickText webhook: missing fields. Payload: {payload}")
-        return jsonify({"error": "Invalid webhook payload"}), 400
+        logging.info(f"SlickText webhook: message filtered or unparseable. Payload: {payload}")
+        return jsonify({"status": "ignored"}), 200
 
     # Return 200 to SlickText immediately — stops retries before they start.
     # Process the message in a background thread.
