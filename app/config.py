@@ -6,8 +6,11 @@ GENERATION_MODEL = "gemini-2.5-flash"
 EMBEDDING_MODEL = "gemini-embedding-001"
 
 # --- Data ---
-CHUNKS_PATH = "training_data/zarna_chunks.json"
-EMBEDDINGS_PATH = "training_data/zarna_embeddings.json.gz"
+# Use absolute paths relative to this file so the app works regardless of
+# the working directory Railway (or any other host) launches the process from.
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CHUNKS_PATH = os.path.join(_BASE_DIR, "training_data", "zarna_chunks.json")
+EMBEDDINGS_PATH = os.path.join(_BASE_DIR, "training_data", "zarna_embeddings.json.gz")
 
 # --- Retrieval / Generation ---
 TOP_K_CHUNKS = 5
