@@ -30,21 +30,6 @@ _CLIP_KEYWORDS = {
     "video", "videos", "clip", "clips", "youtube", "watch",
     "episode", "special", "stand up", "standup", "stand-up",
 }
-_BOOK_KEYWORDS = {
-    "this american woman",   # the actual book title
-    "your book",
-    "the book",
-    "zarna's book",
-    "zarnas book",
-    "where can i get the book",
-    "where do i get the book",
-    "where can i buy the book",
-    "get the book",
-    "buy the book",
-    "order the book",
-    "pre-order",
-    "preorder",
-}
 
 
 def _fast_classify(message: str) -> Intent | None:
@@ -60,8 +45,6 @@ def _fast_classify(message: str) -> Intent | None:
         return Intent.JOKE
     if words & _CLIP_KEYWORDS or any(k in lower for k in _CLIP_KEYWORDS if " " in k):
         return Intent.CLIP
-    if words & _BOOK_KEYWORDS or any(k in lower for k in _BOOK_KEYWORDS if " " in k):
-        return Intent.BOOK
     return None
 
 
