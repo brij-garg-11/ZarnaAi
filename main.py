@@ -157,7 +157,7 @@ def slicktext_webhook():
         return jsonify({"status": "ignored"}), 200
 
     if _is_rate_limited(phone_number):
-        logging.warning("Rate limit hit for %s — dropping message", phone_number)
+        logging.warning("Rate limit hit for ...%s — dropping message", phone_number[-4:] if phone_number else "?")
         return jsonify({"status": "rate_limited"}), 200
 
     threading.Thread(
@@ -189,9 +189,10 @@ def _process_twilio_message(phone_number: str, message_text: str) -> None:
 @app.route("/twilio/webhook", methods=["POST"])
 def twilio_webhook():
     form_data = request.form.to_dict()
+    _from = form_data.get("From", "")
     logging.info(
-        "Twilio webhook received: From=%s Body=%s",
-        form_data.get("From"),
+        "Twilio webhook received: From=...%s Body=%s",
+        _from[-4:] if _from else "?",
         form_data.get("Body"),
     )
 
@@ -205,7 +206,8 @@ def twilio_webhook():
         if forwarded_proto == "https" and url.startswith("http://"):
             url = "https://" + url[len("http://"):]
         if not twilio.validate_signature(url, form_data, sig):
-            logging.warning("Invalid Twilio signature from %s", form_data.get("From"))
+            _sig_from = form_data.get("From", "")
+            logging.warning("Invalid Twilio signature from ...%s", _sig_from[-4:] if _sig_from else "?")
             return ("Forbidden", 403)
 
     # Deduplicate using MessageSid
@@ -221,7 +223,7 @@ def twilio_webhook():
         return ("", 204)
 
     if _is_rate_limited(phone_number):
-        logging.warning("Rate limit hit for Twilio %s — dropping message", phone_number)
+        logging.warning("Rate limit hit for Twilio ...%s — dropping message", phone_number[-4:] if phone_number else "?")
         return ("", 204)
 
     threading.Thread(

@@ -11,6 +11,7 @@ Tabs:
 """
 
 import csv
+import hmac
 import io
 import os
 from collections import Counter
@@ -25,9 +26,12 @@ _ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 
 def _check_auth():
     if not _ADMIN_PASSWORD:
-        return True
+        return False  # fail closed — no password configured means no access
     auth = request.authorization
-    return auth and auth.password == _ADMIN_PASSWORD
+    if not auth or not auth.password:
+        return False
+    # constant-time comparison prevents timing-based password guessing
+    return hmac.compare_digest(auth.password, _ADMIN_PASSWORD)
 
 
 def _require_auth():
@@ -35,6 +39,16 @@ def _require_auth():
         "Authentication required.",
         401,
         {"WWW-Authenticate": 'Basic realm="Zarna AI Admin"'},
+    )
+
+
+def _no_password_configured():
+    return Response(
+        "<h2 style='font-family:sans-serif;padding:40px;color:#dc2626'>"
+        "Admin access is disabled: ADMIN_PASSWORD environment variable is not set.<br>"
+        "<small style='color:#6b7280'>Set it in Railway → Variables to enable the dashboard.</small>"
+        "</h2>",
+        503,
     )
 
 
@@ -89,6 +103,8 @@ def _fetch_export(tag_filter="", location_filter=""):
 
 @admin_bp.route("/admin/export")
 def admin_export():
+    if not _ADMIN_PASSWORD:
+        return _no_password_configured()
     if not _check_auth():
         return _require_auth()
 
@@ -309,6 +325,8 @@ def _trend_html(current, previous, label="vs last week"):
 
 @admin_bp.route("/admin")
 def admin():
+    if not _ADMIN_PASSWORD:
+        return _no_password_configured()
     if not _check_auth():
         return _require_auth()
 
