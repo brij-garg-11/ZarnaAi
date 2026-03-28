@@ -31,9 +31,19 @@ _CLIP_KEYWORDS = {
     "episode", "special", "stand up", "standup", "stand-up",
 }
 _BOOK_KEYWORDS = {
-    "book", "books", "this american woman", "where can i get",
-    "where do i buy", "buy", "purchase", "order", "amazon",
-    "read", "reading", "pre-order", "preorder",
+    "this american woman",   # the actual book title
+    "your book",
+    "the book",
+    "zarna's book",
+    "zarnas book",
+    "where can i get the book",
+    "where do i get the book",
+    "where can i buy the book",
+    "get the book",
+    "buy the book",
+    "order the book",
+    "pre-order",
+    "preorder",
 }
 
 
