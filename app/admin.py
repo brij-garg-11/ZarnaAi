@@ -10,6 +10,8 @@ Tabs:
   /admin?tab=convos   → Conversations (searchable, filterable)
 """
 
+import csv
+import io
 import os
 from collections import Counter
 from datetime import datetime, timezone
@@ -45,7 +47,87 @@ def _get_db():
     return psycopg2.connect(dsn)
 
 
-def _fetch_stats(tag_filter="", phone_search=""):
+def _fetch_export(tag_filter="", location_filter=""):
+    """Query fans matching the given filters and return rows for CSV export."""
+    conn = _get_db()
+    if not conn:
+        return []
+    try:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            if tag_filter and location_filter:
+                cur.execute("""
+                    SELECT phone_number, fan_memory, fan_tags, fan_location, created_at
+                    FROM contacts
+                    WHERE %s = ANY(fan_tags)
+                      AND LOWER(fan_location) LIKE %s
+                    ORDER BY created_at DESC
+                """, (tag_filter.lower(), f"%{location_filter.lower()}%"))
+            elif tag_filter:
+                cur.execute("""
+                    SELECT phone_number, fan_memory, fan_tags, fan_location, created_at
+                    FROM contacts
+                    WHERE %s = ANY(fan_tags)
+                    ORDER BY created_at DESC
+                """, (tag_filter.lower(),))
+            elif location_filter:
+                cur.execute("""
+                    SELECT phone_number, fan_memory, fan_tags, fan_location, created_at
+                    FROM contacts
+                    WHERE LOWER(fan_location) LIKE %s
+                    ORDER BY created_at DESC
+                """, (f"%{location_filter.lower()}%",))
+            else:
+                cur.execute("""
+                    SELECT phone_number, fan_memory, fan_tags, fan_location, created_at
+                    FROM contacts ORDER BY created_at DESC
+                """)
+            return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+@admin_bp.route("/admin/export")
+def admin_export():
+    if not _check_auth():
+        return _require_auth()
+
+    tag_filter      = request.args.get("tag", "").strip().lower()
+    location_filter = request.args.get("location", "").strip()
+
+    rows = _fetch_export(tag_filter=tag_filter, location_filter=location_filter)
+
+    # Build CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["phone_number", "fan_memory", "fan_tags", "fan_location", "joined_at"])
+    for r in rows:
+        writer.writerow([
+            r["phone_number"],
+            r.get("fan_memory") or "",
+            ", ".join(r.get("fan_tags") or []),
+            r.get("fan_location") or "",
+            r["created_at"].strftime("%Y-%m-%d") if r.get("created_at") else "",
+        ])
+
+    # Build a descriptive filename
+    parts = []
+    if tag_filter:
+        parts.append(tag_filter)
+    if location_filter:
+        parts.append(location_filter.replace(" ", "-").lower())
+    if not parts:
+        parts.append("all-fans")
+    filename = f"zarna-fans-{'_'.join(parts)}-{datetime.now().strftime('%Y%m%d')}.csv"
+
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _fetch_stats(tag_filter="", phone_search="", location_filter=""):
     conn = _get_db()
     if not conn:
         return None
@@ -154,13 +236,27 @@ def _fetch_stats(tag_filter="", phone_search=""):
             """)
             tag_breakdown = [(r["tag"], r["cnt"]) for r in cur.fetchall()]
 
-            # ── Fan profiles ───────────────────────────────────────────────
-            if tag_filter:
+            # ── Fan profiles (supports tag + location filtering) ───────────
+            if tag_filter and location_filter:
+                cur.execute("""
+                    SELECT phone_number, fan_memory, fan_tags, fan_location, created_at
+                    FROM contacts
+                    WHERE %s = ANY(fan_tags) AND LOWER(fan_location) LIKE %s
+                    ORDER BY created_at DESC
+                """, (tag_filter.lower(), f"%{location_filter.lower()}%"))
+            elif tag_filter:
                 cur.execute("""
                     SELECT phone_number, fan_memory, fan_tags, fan_location, created_at
                     FROM contacts WHERE %s = ANY(fan_tags)
                     ORDER BY created_at DESC
                 """, (tag_filter.lower(),))
+            elif location_filter:
+                cur.execute("""
+                    SELECT phone_number, fan_memory, fan_tags, fan_location, created_at
+                    FROM contacts
+                    WHERE LOWER(fan_location) LIKE %s
+                    ORDER BY created_at DESC
+                """, (f"%{location_filter.lower()}%",))
             else:
                 cur.execute("""
                     SELECT phone_number, fan_memory, fan_tags, fan_location, created_at
@@ -216,15 +312,16 @@ def admin():
     if not _check_auth():
         return _require_auth()
 
-    tab         = request.args.get("tab", "overview").strip().lower()
-    tag_filter  = request.args.get("tag", "").strip().lower()
-    phone_search = request.args.get("phone", "").strip()
+    tab             = request.args.get("tab", "overview").strip().lower()
+    tag_filter      = request.args.get("tag", "").strip().lower()
+    phone_search    = request.args.get("phone", "").strip()
+    location_filter = request.args.get("location", "").strip()
 
-    # Tag filter implies audience tab
-    if tag_filter and tab == "overview":
+    # Tag or location filter implies audience tab
+    if (tag_filter or location_filter) and tab == "overview":
         tab = "audience"
 
-    stats = _fetch_stats(tag_filter=tag_filter, phone_search=phone_search)
+    stats = _fetch_stats(tag_filter=tag_filter, phone_search=phone_search, location_filter=location_filter)
     if stats is None:
         return "<h2 style='font-family:sans-serif;padding:40px'>No database configured (DATABASE_URL not set).</h2>", 503
 
@@ -402,6 +499,8 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
 .search-input:focus {{ border-color: #7c3aed; }}
 .search-btn {{ background: #7c3aed; color: white; border: none; border-radius: 8px; padding: 9px 18px; font-size: 14px; cursor: pointer; white-space: nowrap; }}
 .search-btn:hover {{ background: #6d28d9; }}
+.export-btn {{ display:inline-flex;align-items:center;gap:6px;background:#064e3b;color:#6ee7b7;border:1px solid #065f46;border-radius:8px;padding:9px 18px;font-size:14px;text-decoration:none;transition:background 0.15s; }}
+.export-btn:hover {{ background:#065f46;color:white; }}
 table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
 th {{ color: #6b7280; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; padding: 8px 12px; text-align: left; border-bottom: 1px solid #1f2937; white-space: nowrap; }}
 .col-phone {{ color: #6b7280; font-size: 12px; font-family: monospace; white-space: nowrap; }}
@@ -541,9 +640,26 @@ tr:hover td {{ background: rgba(124,58,237,0.04); }}
       <div style="margin-top:4px">{tag_breakdown_html}</div>
     </div>
 
+    <!-- Location search + export row -->
+    <div class="card">
+      <div class="card-title">Search & Export by Location or Tag</div>
+      <form method="get" action="/admin" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        <input type="hidden" name="tab" value="audience">
+        <input type="text" name="tag" class="search-input" style="flex:1;min-width:160px"
+               placeholder="Tag: doctor, lawyer, married…"
+               value="{tag_filter}">
+        <input type="text" name="location" class="search-input" style="flex:1;min-width:160px"
+               placeholder="Location: Rhode Island, Boston, Chicago…"
+               value="{request.args.get('location', '')}">
+        <button type="submit" class="search-btn">Filter</button>
+        {'<a href="/admin?tab=audience" class="search-btn" style="background:#374151;text-decoration:none">Clear</a>' if tag_filter or request.args.get('location') else ''}
+      </form>
+      {'<a href="/admin/export?tag=' + tag_filter + '&location=' + request.args.get("location", "") + '" class="export-btn">⬇ Export CSV (' + str(len(stats["fan_profiles"])) + ' fans)</a>' if tag_filter or request.args.get("location") else '<a href="/admin/export" class="export-btn">⬇ Export All Fans</a>'}
+    </div>
+
     <div class="card">
       <div class="card-title">
-        {'Fan Profiles — ' + tag_filter if tag_filter else 'Fan Profiles (most recent 100 with memory)'}
+        {'Fan Profiles — ' + tag_filter + (' in ' + request.args.get('location','') if request.args.get('location') else '') if tag_filter else ('Fans in ' + request.args.get('location','') if request.args.get('location') else 'Fan Profiles (most recent 100 with memory)')}
       </div>
       {fan_profiles_html}
     </div>
