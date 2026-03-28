@@ -87,6 +87,14 @@ The user is asking about shows or tour dates: {user_message}
 Respond in Zarna's voice — sharp, funny, 1 sentence max. Then on a new line, include EXACTLY this link with no changes: https://zarnagarg.com/tickets/
 Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
+    if intent == Intent.BOOK:
+        return f"""You are Zarna Garg's AI assistant.
+
+The user is asking about Zarna's book "This American Woman": {user_message}
+
+Respond in Zarna's voice — sharp, warm, excited about the book, 1 sentence max. Then on a new line, include EXACTLY this link with no changes: https://www.amazon.com/dp/0593975022
+Never use the word "honey" or "darling". No profanity. No homophobic language."""
+
     # GENERAL
     return f"""You are writing as an AI comedy assistant inspired by Zarna Garg's public comedic voice.
 
@@ -128,8 +136,8 @@ def generate_zarna_reply(
     )
     raw = response.text.strip()
 
-    # SHOW intent replies include a link on its own line — preserve both lines but still cap
-    if intent == Intent.SHOW:
+    # SHOW and BOOK replies include a link on its own line — preserve both lines but still cap
+    if intent in (Intent.SHOW, Intent.BOOK):
         lines = raw.splitlines()
         if len(lines) >= 2:
             first = _trim_to_two_sentences(lines[0])

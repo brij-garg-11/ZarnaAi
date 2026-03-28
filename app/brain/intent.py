@@ -6,9 +6,10 @@ from app.config import GEMINI_API_KEY, GENERATION_MODEL
 
 
 class Intent(str, Enum):
-    JOKE = "joke"
-    CLIP = "clip"
-    SHOW = "show"
+    JOKE    = "joke"
+    CLIP    = "clip"
+    SHOW    = "show"
+    BOOK    = "book"
     GENERAL = "general"
 
 
@@ -29,6 +30,11 @@ _CLIP_KEYWORDS = {
     "video", "videos", "clip", "clips", "youtube", "watch",
     "episode", "special", "stand up", "standup", "stand-up",
 }
+_BOOK_KEYWORDS = {
+    "book", "books", "this american woman", "where can i get",
+    "where do i buy", "buy", "purchase", "order", "amazon",
+    "read", "reading", "pre-order", "preorder",
+}
 
 
 def _fast_classify(message: str) -> Intent | None:
@@ -44,6 +50,8 @@ def _fast_classify(message: str) -> Intent | None:
         return Intent.JOKE
     if words & _CLIP_KEYWORDS or any(k in lower for k in _CLIP_KEYWORDS if " " in k):
         return Intent.CLIP
+    if words & _BOOK_KEYWORDS or any(k in lower for k in _BOOK_KEYWORDS if " " in k):
+        return Intent.BOOK
     return None
 
 
@@ -60,11 +68,12 @@ Intents:
 - joke: user wants a joke, something funny, or comedy content
 - clip: user wants a video or clip recommendation
 - show: user wants show dates, tour info, ticket links, or where to see Zarna live
+- book: user is asking about Zarna's book "This American Woman", where to buy it, or how to get it
 - general: general conversation, questions, or anything else
 
 Message: "{message}"
 
-Reply with only one word: joke, clip, show, or general"""
+Reply with only one word: joke, clip, show, book, or general"""
 
     response = _client.models.generate_content(
         model=GENERATION_MODEL,
