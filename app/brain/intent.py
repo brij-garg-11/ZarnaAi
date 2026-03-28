@@ -68,8 +68,8 @@ Intents:
 - clip: user wants a video or clip recommendation
 - show: user wants show dates, tour info, ticket links, or where to see Zarna live
 - book: user is asking about Zarna's book "This American Woman", where to buy it, or how to get it
-- podcast: user is asking about the Zarna Garg Family Podcast, whether there's an episode on a topic, or wants to listen
-- general: general conversation, questions, or anything else
+- podcast: user is EXPLICITLY asking about the podcast by name, asking if there's a podcast episode on a specific topic, or asking where to listen. Questions about Zarna's family members (husband, kids, Shalabh, Veer, Brij, Zoya) are NOT podcast intent — they are general.
+- general: general conversation, questions about Zarna or her family, or anything else
 
 Message: "{message}"
 

@@ -51,13 +51,23 @@ def _format_history(history: List[dict]) -> str:
     return "Recent conversation:\n" + "\n".join(lines) + "\n"
 
 
+def _filter_chunks(chunks: List[str], intent: Intent) -> List[str]:
+    """
+    For non-podcast intents, strip podcast episode chunks from context.
+    They contain embedded YouTube links that bleed into general responses.
+    """
+    if intent == Intent.PODCAST:
+        return chunks
+    return [c for c in chunks if not c.startswith("Podcast Episode:")]
+
+
 def _build_prompt(
     intent: Intent,
     user_message: str,
     chunks: List[str],
     history: List[dict],
 ) -> str:
-    context = "\n\n".join(chunks) if chunks else ""
+    context = "\n\n".join(_filter_chunks(chunks, intent)) if chunks else ""
     history_text = _format_history(history)
 
     if intent == Intent.JOKE:
