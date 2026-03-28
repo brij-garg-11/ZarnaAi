@@ -11,12 +11,6 @@ from app.storage.base import BaseStorage
 # cost on every message.
 _executor = ThreadPoolExecutor(max_workers=4)
 
-_WELCOME = (
-    "Welcome to Zarna's world! 🎉 I'm her AI — sharp, opinionated, and fully trained "
-    "on everything Zarna. Ask me for a joke, about the family, the book, the podcast, "
-    "upcoming shows — I'm here for all of it!"
-)
-
 
 class ZarnaBrain:
     """
@@ -33,19 +27,16 @@ class ZarnaBrain:
         # 1. Ensure contact exists
         self.storage.save_contact(phone_number)
 
-        # 2. Check if this is the very first message from this number
-        first_time = self.storage.is_first_message(phone_number)
-
-        # 3. Persist the user's message
+        # 2. Persist the user's message
         self.storage.save_message(phone_number, "user", message_text)
 
-        # 4. Pull prior conversation (excluding the message we just saved)
+        # 3. Pull prior conversation (excluding the message we just saved)
         raw_history = self.storage.get_conversation_history(
             phone_number, limit=CONVERSATION_HISTORY_LIMIT + 1
         )
         history = [{"role": m.role, "text": m.text} for m in raw_history[:-1]]
 
-        # 5 + 6. Classify intent AND retrieve chunks in parallel.
+        # 4 + 5. Classify intent AND retrieve chunks in parallel.
         #         Both are independent — no reason to run them sequentially.
         future_intent = _executor.submit(classify_intent, message_text)
         future_chunks = _executor.submit(self.retriever.get_relevant_chunks, message_text)
@@ -53,7 +44,7 @@ class ZarnaBrain:
         intent = future_intent.result()
         chunks = future_chunks.result()
 
-        # 7. Generate reply
+        # 6. Generate reply
         reply = generate_zarna_reply(
             intent=intent,
             user_message=message_text,
@@ -61,11 +52,7 @@ class ZarnaBrain:
             history=history,
         )
 
-        # 8. Prepend welcome on the very first message
-        if first_time:
-            reply = _WELCOME + "\n\n" + reply
-
-        # 9. Persist the assistant's reply
+        # 7. Persist the assistant's reply
         self.storage.save_message(phone_number, "assistant", reply)
 
         return reply
