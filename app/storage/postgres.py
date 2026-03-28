@@ -64,6 +64,11 @@ class PostgresStorage(BaseStorage):
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(_DDL)
+        except psycopg2.errors.UniqueViolation:
+            # Race condition: two workers started simultaneously and both tried
+            # to CREATE TABLE at the same moment. The other worker already
+            # created the tables — safe to continue.
+            conn.rollback()
         finally:
             self._release(conn)
 
