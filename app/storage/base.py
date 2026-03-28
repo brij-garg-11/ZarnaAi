@@ -25,3 +25,15 @@ class BaseStorage(ABC):
     def is_first_message(self, phone_number: str) -> bool:
         """Return True if this phone number has no prior messages. Override for efficiency."""
         return len(self.get_conversation_history(phone_number, limit=1)) == 0
+
+    def get_memory(self, phone_number: str) -> str:
+        return ""
+
+    def update_memory(self, phone_number: str, memory: str, tags: list, location: str = "") -> None:
+        pass
+
+    def get_fans_by_tag(self, tag: str) -> list:
+        return []
+
+    def get_fans_by_location(self, location: str) -> list:
+        return []

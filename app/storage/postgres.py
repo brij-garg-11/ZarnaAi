@@ -39,6 +39,13 @@ CREATE INDEX IF NOT EXISTS messages_phone_created
     ON messages (phone_number, created_at);
 """
 
+# Additive migrations — safe to run on every startup (idempotent)
+_MIGRATIONS = """
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_memory   TEXT    DEFAULT '';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_tags     TEXT[]  DEFAULT '{}';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_location TEXT    DEFAULT '';
+"""
+
 
 class PostgresStorage(BaseStorage):
     """Thread-safe Postgres storage using a connection pool."""
@@ -64,6 +71,7 @@ class PostgresStorage(BaseStorage):
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(_DDL)
+                    cur.execute(_MIGRATIONS)
         except psycopg2.errors.UniqueViolation:
             # Race condition: two workers started simultaneously and both tried
             # to CREATE TABLE at the same moment. The other worker already
@@ -156,5 +164,68 @@ class PostgresStorage(BaseStorage):
                     (phone_number,),
                 )
                 return cur.fetchone() is None
+        finally:
+            self._release(conn)
+
+    def get_memory(self, phone_number: str) -> str:
+        conn = self._acquire()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT fan_memory FROM contacts WHERE phone_number = %s",
+                    (phone_number,),
+                )
+                row = cur.fetchone()
+                return (row[0] or "") if row else ""
+        finally:
+            self._release(conn)
+
+    def update_memory(self, phone_number: str, memory: str, tags: list, location: str = "") -> None:
+        conn = self._acquire()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE contacts
+                        SET fan_memory = %s, fan_tags = %s, fan_location = COALESCE(NULLIF(%s, ''), fan_location)
+                        WHERE phone_number = %s
+                        """,
+                        (memory[:400], tags, location[:100], phone_number),
+                    )
+        finally:
+            self._release(conn)
+
+    def get_fans_by_tag(self, tag: str) -> list:
+        conn = self._acquire()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT phone_number, fan_memory, fan_tags, fan_location, created_at
+                    FROM contacts
+                    WHERE %s = ANY(fan_tags)
+                    ORDER BY created_at DESC
+                    """,
+                    (tag.lower(),),
+                )
+                return [dict(r) for r in cur.fetchall()]
+        finally:
+            self._release(conn)
+
+    def get_fans_by_location(self, location: str) -> list:
+        conn = self._acquire()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT phone_number, fan_memory, fan_tags, fan_location, created_at
+                    FROM contacts
+                    WHERE LOWER(fan_location) LIKE %s
+                    ORDER BY created_at DESC
+                    """,
+                    (f"%{location.lower()}%",),
+                )
+                return [dict(r) for r in cur.fetchall()]
         finally:
             self._release(conn)

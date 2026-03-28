@@ -92,14 +92,22 @@ def _filter_chunks(chunks: List[str], intent: Intent) -> List[str]:
     return [c for c in chunks if not c.startswith("Podcast Episode:")]
 
 
+def _format_memory(fan_memory: str) -> str:
+    if not fan_memory or not fan_memory.strip():
+        return ""
+    return f"Known about this fan (use to make response feel personal — never recite these facts directly, weave them in naturally):\n{fan_memory.strip()}\n\n"
+
+
 def _build_prompt(
     intent: Intent,
     user_message: str,
     chunks: List[str],
     history: List[dict],
+    fan_memory: str = "",
 ) -> str:
     context = "\n\n".join(_filter_chunks(chunks, intent)) if chunks else ""
     history_text = _format_history(history)
+    memory_text = _format_memory(fan_memory)
 
     if intent == Intent.JOKE:
         return f"""You are writing as an AI comedy assistant inspired by Zarna Garg's public comedic voice.
@@ -107,7 +115,7 @@ def _build_prompt(
 Background knowledge about Zarna (use to make jokes richer and more specific — never recite this as facts):
 {context}
 
-{history_text}Request: {user_message}
+{memory_text}{history_text}Request: {user_message}
 {_STYLE_RULES}
 If the user asks for a joke, deliver one punchy one-liner or a two-line bit. That's it."""
 
@@ -157,7 +165,7 @@ Background knowledge about Zarna (use to make responses richer and more specific
 {context}
 
 {_TONE_EXAMPLES}
-{history_text}Message: {user_message}
+{memory_text}{history_text}Message: {user_message}
 {_STYLE_RULES}"""
 
 
@@ -198,11 +206,12 @@ def generate_zarna_reply(
     user_message: str,
     chunks: List[str],
     history: List[dict] = None,
+    fan_memory: str = "",
 ) -> str:
     import logging
     logger = logging.getLogger(__name__)
 
-    prompt = _build_prompt(intent, user_message, chunks, history or [])
+    prompt = _build_prompt(intent, user_message, chunks, history or [], fan_memory)
 
     try:
         response = _client.models.generate_content(

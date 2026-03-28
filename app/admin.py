@@ -43,13 +43,14 @@ def _get_db():
     return psycopg2.connect(dsn)
 
 
-def _fetch_stats():
+def _fetch_stats(tag_filter: str = ""):
     conn = _get_db()
     if not conn:
         return None
 
     try:
-        with conn.cursor(cursor_factory=__import__("psycopg2.extras", fromlist=["DictCursor"]).DictCursor) as cur:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
 
             # Total unique subscribers
             cur.execute("SELECT COUNT(DISTINCT phone_number) FROM contacts")
@@ -106,13 +107,23 @@ def _fetch_stats():
                     area_codes[digits[:3]] += 1
             top_area_codes = area_codes.most_common(15)
 
-            # Recent 50 conversations
-            cur.execute("""
-                SELECT phone_number, role, text, created_at
-                FROM messages
-                ORDER BY created_at DESC
-                LIMIT 100
-            """)
+            # Recent conversations (filtered by tag if provided)
+            if tag_filter:
+                cur.execute("""
+                    SELECT m.phone_number, m.role, m.text, m.created_at
+                    FROM messages m
+                    JOIN contacts c ON c.phone_number = m.phone_number
+                    WHERE %s = ANY(c.fan_tags)
+                    ORDER BY m.created_at DESC
+                    LIMIT 100
+                """, (tag_filter.lower(),))
+            else:
+                cur.execute("""
+                    SELECT phone_number, role, text, created_at
+                    FROM messages
+                    ORDER BY created_at DESC
+                    LIMIT 100
+                """)
             raw_messages = cur.fetchall()
             conversations = [
                 {
@@ -124,6 +135,29 @@ def _fetch_stats():
                 for r in raw_messages
             ]
 
+            # Tag breakdown — top 20 tags across all fans
+            cur.execute("""
+                SELECT UNNEST(fan_tags) as tag, COUNT(*) as cnt
+                FROM contacts
+                WHERE fan_tags IS NOT NULL AND fan_tags != '{}'
+                GROUP BY tag
+                ORDER BY cnt DESC
+                LIMIT 20
+            """)
+            tag_breakdown = [(r["tag"], r["cnt"]) for r in cur.fetchall()]
+
+            # Fans with memory profiles (for tag filter view)
+            if tag_filter:
+                cur.execute("""
+                    SELECT phone_number, fan_memory, fan_tags, fan_location, created_at
+                    FROM contacts
+                    WHERE %s = ANY(fan_tags)
+                    ORDER BY created_at DESC
+                """, (tag_filter.lower(),))
+                fan_profiles = [dict(r) for r in cur.fetchall()]
+            else:
+                fan_profiles = []
+
         return {
             "total_subscribers": total_subscribers,
             "total_messages": total_messages,
@@ -134,6 +168,9 @@ def _fetch_stats():
             "top_messages": top_messages,
             "top_area_codes": top_area_codes,
             "conversations": conversations,
+            "tag_breakdown": tag_breakdown,
+            "fan_profiles": fan_profiles,
+            "tag_filter": tag_filter,
             "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         }
     finally:
@@ -145,7 +182,8 @@ def admin():
     if not _check_auth():
         return _require_auth()
 
-    stats = _fetch_stats()
+    tag_filter = request.args.get("tag", "").strip().lower()
+    stats = _fetch_stats(tag_filter=tag_filter)
 
     if stats is None:
         return "<h2 style='font-family:sans-serif;padding:40px'>No database configured (DATABASE_URL not set).</h2>", 503
@@ -192,6 +230,49 @@ def admin():
             <span style="color:#10b981;font-weight:600">{cnt}</span>
         </div>"""
 
+    # Tag breakdown pills
+    tag_breakdown_html = ""
+    if stats["tag_breakdown"]:
+        for tag, cnt in stats["tag_breakdown"]:
+            tag_breakdown_html += f"""
+            <a href="/admin?tag={tag}" style="display:inline-flex;align-items:center;gap:6px;background:#1e3a5f;color:#93c5fd;padding:5px 12px;border-radius:20px;font-size:13px;text-decoration:none;margin:4px">
+                {tag} <span style="background:#3b82f6;color:white;border-radius:10px;padding:1px 7px;font-size:11px">{cnt}</span>
+            </a>"""
+    else:
+        tag_breakdown_html = '<span style="color:#64748b;font-size:13px">No tags yet — tags build up as fans text in.</span>'
+
+    # Fan profiles for tag filter view
+    fan_profiles_html = ""
+    if stats["fan_profiles"]:
+        for fan in stats["fan_profiles"]:
+            phone_display = fan["phone_number"][-4:] if len(fan["phone_number"]) >= 4 else fan["phone_number"]
+            memory_escaped = (fan["fan_memory"] or "").replace("<", "&lt;").replace(">", "&gt;")
+            location = fan.get("fan_location") or ""
+            location_html = f'<span style="color:#f59e0b;font-size:12px">📍 {location}</span>' if location else ""
+            tags_html = " ".join(f'<a href="/admin?tag={t}" style="background:#1e3a5f;color:#93c5fd;padding:2px 8px;border-radius:10px;font-size:11px;text-decoration:none">{t}</a>' for t in (fan["fan_tags"] or []))
+            fan_profiles_html += f"""
+            <div style="padding:12px 0;border-bottom:1px solid #334155">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+                    <div style="flex:1">
+                        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+                            <span style="color:#94a3b8;font-size:12px">...{phone_display}</span>
+                            {location_html}
+                        </div>
+                        <p style="color:#e2e8f0;font-size:14px;margin:4px 0">{memory_escaped or "<em style='color:#64748b'>No profile yet</em>"}</p>
+                        <div style="margin-top:6px">{tags_html}</div>
+                    </div>
+                </div>
+            </div>"""
+
+    active_filter_banner = ""
+    if stats["tag_filter"]:
+        fan_count = len(stats["fan_profiles"])
+        active_filter_banner = f"""
+        <div style="background:#1e3a5f;border:1px solid #3b82f6;border-radius:8px;padding:12px 20px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center">
+            <span style="color:#93c5fd">Filtering by tag: <strong>{stats["tag_filter"]}</strong> — {fan_count} fan{"s" if fan_count != 1 else ""}</span>
+            <a href="/admin" style="color:#64748b;font-size:13px;text-decoration:none">✕ Clear filter</a>
+        </div>"""
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -219,6 +300,10 @@ def admin():
   .card h3 {{ color: #94a3b8; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 16px; }}
   .conversations-card {{ background: #1e293b; border-radius: 12px; padding: 20px 24px; border: 1px solid #334155; }}
   .conversations-card h3 {{ color: #94a3b8; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 16px; }}
+  .search-bar {{ display:flex;gap:10px;margin-bottom:28px }}
+  .search-bar input {{ flex:1;background:#1e293b;border:1px solid #334155;border-radius:8px;padding:10px 16px;color:#e2e8f0;font-size:14px;outline:none }}
+  .search-bar input:focus {{ border-color:#6366f1 }}
+  .search-bar button {{ background:#6366f1;color:white;border:none;border-radius:8px;padding:10px 20px;font-size:14px;cursor:pointer }}
   table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
   th {{ color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding: 8px 12px; text-align: left; border-bottom: 1px solid #334155; }}
   td {{ padding: 10px 12px; border-bottom: 1px solid #1e293b; vertical-align: top; }}
@@ -238,6 +323,14 @@ def admin():
   <small style="color:rgba(255,255,255,0.6)">Updated: {stats["generated_at"]}</small>
 </div>
 <div class="container">
+
+  <!-- Tag search bar -->
+  <form method="get" action="/admin" class="search-bar" style="margin-top:24px">
+    <input type="text" name="tag" placeholder="Filter by tag: doctor, lawyer, married, repeat-attendee…" value="{stats['tag_filter']}">
+    <button type="submit">Search</button>
+  </form>
+
+  {active_filter_banner}
 
   <!-- Key Stats -->
   <div class="stats-grid">
@@ -287,9 +380,22 @@ def admin():
     </div>
   </div>
 
+  <!-- Audience Tag Breakdown -->
+  <div class="card" style="margin-bottom:28px">
+    <h3>Audience Tags (click any tag to filter)</h3>
+    <div style="margin-top:8px">{tag_breakdown_html}</div>
+  </div>
+
+  <!-- Fan profiles (only shown when filtering by tag) -->
+  {f'''
+  <div class="card" style="margin-bottom:28px">
+    <h3>Fan Profiles — {stats["tag_filter"]}</h3>
+    {fan_profiles_html}
+  </div>''' if stats["tag_filter"] and stats["fan_profiles"] else ""}
+
   <!-- Recent conversations -->
   <div class="conversations-card">
-    <h3>Recent Conversations (Last 100 Messages)</h3>
+    <h3>{"Conversations — " + stats["tag_filter"] if stats["tag_filter"] else "Recent Conversations (Last 100 Messages)"}</h3>
     <div style="overflow-x:auto">
       <table>
         <thead>

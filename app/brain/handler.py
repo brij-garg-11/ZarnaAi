@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.brain.intent import classify_intent
 from app.brain.generator import generate_zarna_reply
+from app.brain.memory import extract_memory
 from app.config import CONVERSATION_HISTORY_LIMIT
 from app.retrieval.base import BaseRetriever
 from app.storage.base import BaseStorage
@@ -37,26 +38,40 @@ class ZarnaBrain:
         )
         history = [{"role": m.role, "text": m.text} for m in raw_history[:-1]]
 
-        # 4 + 5. Classify intent AND retrieve chunks in parallel.
-        #         Both are independent — no reason to run them sequentially.
+        # 4. Load existing fan memory for personalization
+        fan_memory = self.storage.get_memory(phone_number)
+
+        # 5 + 6. Classify intent AND retrieve chunks in parallel.
         future_intent = _executor.submit(classify_intent, message_text)
         future_chunks = _executor.submit(self.retriever.get_relevant_chunks, message_text)
 
         intent = future_intent.result()
         chunks = future_chunks.result()
 
-        # 6. Generate reply
+        # 7. Generate reply (with fan memory injected)
         reply = generate_zarna_reply(
             intent=intent,
             user_message=message_text,
             chunks=chunks,
             history=history,
+            fan_memory=fan_memory,
         )
 
-        # 7. Persist the assistant's reply
+        # 8. Persist the assistant's reply
         self.storage.save_message(phone_number, "assistant", reply)
 
+        # 9. Update fan memory in the background — no latency impact on reply
+        _executor.submit(self._update_memory, phone_number, message_text, fan_memory)
+
         return reply
+
+    def _update_memory(self, phone_number: str, message_text: str, current_memory: str) -> None:
+        try:
+            new_memory, new_tags, location = extract_memory(current_memory, message_text)
+            if new_memory != current_memory or new_tags or location:
+                self.storage.update_memory(phone_number, new_memory, new_tags, location)
+        except Exception:
+            pass  # Memory update is best-effort; never block a reply
 
 
 def create_brain() -> ZarnaBrain:
