@@ -2,7 +2,7 @@ from enum import Enum
 
 from google import genai
 
-from app.config import GEMINI_API_KEY, GENERATION_MODEL
+from app.config import GEMINI_API_KEY, INTENT_MODEL
 
 
 class Intent(str, Enum):
@@ -23,16 +23,22 @@ _SHOW_KEYWORDS = {
     "where are you", "when are you", "dates", "venue",
 }
 _JOKE_KEYWORDS = {
-    "joke", "jokes", "funny", "laugh", "comedy", "make me laugh",
-    "tell me something funny", "humor", "humour", "lol", "haha",
-    "roast", "one liner", "one-liner",
+    "joke", "jokes", "funny", "laugh", "laughter", "comedy", "comic",
+    "make me laugh", "tell me something funny", "tell me a joke",
+    "humor", "humour", "lol", "haha", "hahaha", "lmao", "😂",
+    "roast", "one liner", "one-liner", "hilarious", "witty",
+    "crack me up", "make me smile",
 }
 _CLIP_KEYWORDS = {
     "video", "videos", "clip", "clips", "youtube", "watch",
-    "special", "stand up", "standup", "stand-up",
+    "special", "stand up", "standup", "stand-up", "reel", "reels",
 }
 _PODCAST_KEYWORDS = {
-    "podcast",
+    "podcast", "episode", "listen", "audio show",
+}
+_BOOK_KEYWORDS = {
+    "book", "this american woman", "buy", "purchase", "order",
+    "amazon", "kindle", "hardcover", "paperback",
 }
 
 
@@ -49,8 +55,10 @@ def _fast_classify(message: str) -> Intent | None:
         return Intent.JOKE
     if words & _CLIP_KEYWORDS or any(k in lower for k in _CLIP_KEYWORDS if " " in k):
         return Intent.CLIP
-    if words & _PODCAST_KEYWORDS:
+    if words & _PODCAST_KEYWORDS or any(k in lower for k in _PODCAST_KEYWORDS if " " in k):
         return Intent.PODCAST
+    if words & _BOOK_KEYWORDS or any(k in lower for k in _BOOK_KEYWORDS if " " in k):
+        return Intent.BOOK
     return None
 
 
@@ -76,7 +84,7 @@ Message: "{message}"
 Reply with only one word: joke, clip, show, book, podcast, or general"""
 
     response = _client.models.generate_content(
-        model=GENERATION_MODEL,
+        model=INTENT_MODEL,
         contents=prompt,
     )
 

@@ -3,7 +3,8 @@ import os
 # --- Gemini ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GENERATION_MODEL = "gemini-2.5-flash"
-EMBEDDING_MODEL = "gemini-embedding-001"
+INTENT_MODEL     = "gemini-2.0-flash-lite"   # lightweight classifier — faster, same accuracy for 1-word tasks
+EMBEDDING_MODEL  = "gemini-embedding-001"
 
 # --- Data ---
 # Use absolute paths relative to this file so the app works regardless of
@@ -14,7 +15,7 @@ EMBEDDINGS_PATH = os.path.join(_BASE_DIR, "training_data", "zarna_embeddings.jso
 
 # --- Retrieval / Generation ---
 TOP_K_CHUNKS = 7
-CONVERSATION_HISTORY_LIMIT = 6
+CONVERSATION_HISTORY_LIMIT = 4
 
 # --- SlickText ---
 # The adapter auto-detects which API version to use based on which keys are present:
