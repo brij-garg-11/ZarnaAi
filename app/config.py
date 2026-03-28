@@ -3,7 +3,7 @@ import os
 # --- Gemini ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GENERATION_MODEL = "gemini-2.5-flash"
-INTENT_MODEL     = "gemini-2.0-flash"   # lightweight classifier — faster, same accuracy for 1-word tasks
+INTENT_MODEL     = "gemini-2.5-flash"   # same model as generation — older flash versions deprecated
 EMBEDDING_MODEL  = "gemini-embedding-001"
 
 # --- Data ---
