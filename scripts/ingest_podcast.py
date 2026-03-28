@@ -3,6 +3,9 @@
 Fetch all episodes from the Zarna Garg Family Podcast RSS feed and append
 them as chunks to training_data/zarna_chunks.json.
 
+Each episode chunk links to its specific YouTube video URL (matched by title).
+Falls back to the channel URL if no match is found.
+
 Safe to re-run: episodes already ingested (tracked by GUID in
 training_data/podcast_guids.json) are skipped automatically.
 
@@ -20,12 +23,14 @@ import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 
 import requests
+import scrapetube
 from dotenv import load_dotenv
 
 load_dotenv()
 
-RSS_URL = "https://feeds.megaphone.fm/ASTI4272864122"
-PODCAST_LISTEN_URL = "https://www.youtube.com/@ZarnaGarg"
+RSS_URL            = "https://feeds.megaphone.fm/ASTI4272864122"
+YOUTUBE_CHANNEL    = "https://www.youtube.com/@ZarnaGarg"
+PODCAST_LISTEN_URL = YOUTUBE_CHANNEL  # fallback if no episode match found
 
 _BASE_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHUNKS_PATH = os.path.join(_BASE_DIR, "training_data", "zarna_chunks.json")
@@ -82,11 +87,40 @@ def fetch_episodes() -> list[dict]:
     return episodes
 
 
-def _episode_to_chunk(ep: dict) -> dict:
+def fetch_youtube_urls() -> dict[str, str]:
+    """
+    Returns a dict mapping normalised episode title → YouTube URL.
+    YouTube titles look like "The Zarna Garg Family Podcast | Episode 121: What Are We Snacking On?"
+    We extract the part after the last colon and normalise for matching.
+    """
+    print("  Fetching YouTube video list …")
+    url_map: dict[str, str] = {}
+    try:
+        videos = scrapetube.get_channel(channel_url=YOUTUBE_CHANNEL, content_type="videos")
+        for v in videos:
+            yt_title = v.get("title", {}).get("runs", [{}])[0].get("text", "")
+            vid_id   = v.get("videoId", "")
+            if not vid_id:
+                continue
+            # Extract episode name from "... | Episode N: Title" or use full title
+            match = re.search(r":\s*(.+)$", yt_title)
+            key = (match.group(1) if match else yt_title).strip().lower()
+            url_map[key] = f"https://www.youtube.com/watch?v={vid_id}"
+    except Exception as e:
+        print(f"  Warning: could not fetch YouTube URLs ({e}). Using channel fallback.")
+    print(f"  Found {len(url_map)} YouTube videos.")
+    return url_map
+
+
+def _normalise(title: str) -> str:
+    return title.strip().lower()
+
+
+def _episode_to_chunk(ep: dict, youtube_url: str) -> dict:
     text = (
         f"Podcast Episode: \"{ep['title']}\" ({ep['date']}) — "
         f"{ep['description']}\n\n"
-        f"Listen at: {PODCAST_LISTEN_URL}"
+        f"Watch/listen at: {youtube_url}"
     )
     return {"text": text, "source": "podcast_episodes"}
 
@@ -114,7 +148,7 @@ def _save_chunks(chunks: list) -> None:
 
 
 def main() -> None:
-    print(f"Fetching RSS feed …")
+    print("Fetching RSS feed …")
     episodes = fetch_episodes()
     print(f"  Found {len(episodes)} episodes in feed.")
 
@@ -126,15 +160,26 @@ def main() -> None:
         print("Nothing to do — all episodes already ingested.")
         return
 
+    youtube_urls = fetch_youtube_urls()
+
+    matched = 0
     chunks     = _load_chunks()
-    new_chunks = [_episode_to_chunk(ep) for ep in new_episodes]
+    new_chunks = []
+    for ep in new_episodes:
+        key = _normalise(ep["title"])
+        yt_url = youtube_urls.get(key, PODCAST_LISTEN_URL)
+        if yt_url != PODCAST_LISTEN_URL:
+            matched += 1
+        new_chunks.append(_episode_to_chunk(ep, yt_url))
+
     chunks.extend(new_chunks)
     _save_chunks(chunks)
 
     updated_guids = seen_guids | {ep["guid"] for ep in new_episodes}
     _save_seen_guids(updated_guids)
 
-    print(f"  Added {len(new_chunks)} episode chunks. Total chunks: {len(chunks)}")
+    print(f"  Added {len(new_chunks)} episode chunks ({matched} with specific YouTube URLs, "
+          f"{len(new_chunks) - matched} using channel fallback). Total chunks: {len(chunks)}")
     print("\nNext step: rebuild embeddings with:")
     print("  python3 scripts/build_embeddings.py")
 

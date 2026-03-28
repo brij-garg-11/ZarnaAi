@@ -103,8 +103,8 @@ Here are the most relevant episodes from The Zarna Garg Family Podcast:
 
 The fan asked: {user_message}
 
-Respond in Zarna's warm, sharp voice. If one of the episodes above is a strong match, recommend it by name in one excited sentence — like you're telling a friend "oh we literally talked about this!" Then on a new line include EXACTLY this link: https://www.youtube.com/@ZarnaGarg
-If no episode above is a strong match, tell them to check out the podcast for that topic in one short sentence, then include the link on a new line.
+Respond in Zarna's warm, sharp voice. If one of the episodes above is a strong match, recommend it by name in one excited sentence — like you're telling a friend "oh we literally talked about this!" Then on a new line include the "Watch/listen at:" link exactly as it appears in the episode context above.
+If no episode above is a strong match, tell them to check out the podcast in one short sentence, then include this link on a new line: https://www.youtube.com/@ZarnaGarg
 Never use the word "honey" or "darling". No profanity. No homophobic language. Keep the text to 1-2 sentences max before the link."""
 
     # GENERAL
