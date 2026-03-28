@@ -18,9 +18,9 @@ _client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Keywords that unambiguously signal an intent — no API call needed for these.
 _SHOW_KEYWORDS = {
-    "ticket", "tickets", "show", "shows", "tour", "touring",
+    "ticket", "tickets", "tour", "touring",
     "performing", "performance", "come see",
-    "where are you", "when are you", "dates", "venue",
+    "where are you", "when are you", "tour dates", "venue",
 }
 _JOKE_KEYWORDS = {
     "joke", "jokes", "funny", "laugh", "laughter", "comedy", "comic",
@@ -74,7 +74,7 @@ def classify_intent(message: str) -> Intent:
 Intents:
 - joke: user wants a joke, something funny, or comedy content
 - clip: user wants a video or clip recommendation
-- show: user wants show dates, tour info, ticket links, or where to see Zarna live
+- show: user is EXPLICITLY asking for ticket links, tour dates, or where to see Zarna perform. Personal stories, fun facts about themselves, or general conversation are NEVER show intent.
 - book: user is asking about Zarna's book "This American Woman", where to buy it, or how to get it
 - podcast: user is EXPLICITLY asking about the podcast by name, asking if there's a podcast episode on a specific topic, or asking where to listen. Questions about Zarna's family members (husband, kids, Shalabh, Veer, Brij, Zoya) are NOT podcast intent — they are general.
 - general: general conversation, questions about Zarna or her family, or anything else
