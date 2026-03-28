@@ -67,7 +67,18 @@ class ZarnaBrain:
 
     def _update_memory(self, phone_number: str, message_text: str, current_memory: str) -> None:
         try:
-            new_memory, new_tags, location = extract_memory(current_memory, message_text)
+            new_memory, new_tags, location, minor_detected = extract_memory(current_memory, message_text)
+
+            if minor_detected:
+                # COPPA / privacy: clear any existing profile for this number
+                if current_memory:
+                    self.storage.update_memory(phone_number, "", [], "")
+                    import logging
+                    logging.getLogger(__name__).info(
+                        "Cleared fan profile for %s — minor signal detected", phone_number[-4:]
+                    )
+                return  # Never store data for minors
+
             if new_memory != current_memory or new_tags or location:
                 self.storage.update_memory(phone_number, new_memory, new_tags, location)
         except Exception:
