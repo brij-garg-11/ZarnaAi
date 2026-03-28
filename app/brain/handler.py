@@ -8,8 +8,9 @@ from app.retrieval.base import BaseRetriever
 from app.storage.base import BaseStorage
 
 # Shared thread pool — reused across requests so we don't pay thread-spawn
-# cost on every message.
-_executor = ThreadPoolExecutor(max_workers=4)
+# cost on every message. 32 threads handles 100+ simultaneous AI calls
+# without queuing (each call is mostly I/O-bound waiting on Gemini).
+_executor = ThreadPoolExecutor(max_workers=32)
 
 
 class ZarnaBrain:
