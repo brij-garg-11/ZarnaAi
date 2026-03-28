@@ -10,6 +10,7 @@ class Intent(str, Enum):
     CLIP    = "clip"
     SHOW    = "show"
     BOOK    = "book"
+    PODCAST = "podcast"
     GENERAL = "general"
 
 
@@ -28,7 +29,10 @@ _JOKE_KEYWORDS = {
 }
 _CLIP_KEYWORDS = {
     "video", "videos", "clip", "clips", "youtube", "watch",
-    "episode", "special", "stand up", "standup", "stand-up",
+    "special", "stand up", "standup", "stand-up",
+}
+_PODCAST_KEYWORDS = {
+    "podcast",
 }
 
 
@@ -45,6 +49,8 @@ def _fast_classify(message: str) -> Intent | None:
         return Intent.JOKE
     if words & _CLIP_KEYWORDS or any(k in lower for k in _CLIP_KEYWORDS if " " in k):
         return Intent.CLIP
+    if words & _PODCAST_KEYWORDS:
+        return Intent.PODCAST
     return None
 
 
@@ -62,11 +68,12 @@ Intents:
 - clip: user wants a video or clip recommendation
 - show: user wants show dates, tour info, ticket links, or where to see Zarna live
 - book: user is asking about Zarna's book "This American Woman", where to buy it, or how to get it
+- podcast: user is asking about the Zarna Garg Family Podcast, whether there's an episode on a topic, or wants to listen
 - general: general conversation, questions, or anything else
 
 Message: "{message}"
 
-Reply with only one word: joke, clip, show, book, or general"""
+Reply with only one word: joke, clip, show, book, podcast, or general"""
 
     response = _client.models.generate_content(
         model=GENERATION_MODEL,
