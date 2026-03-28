@@ -90,8 +90,11 @@ def fetch_episodes() -> list[dict]:
 def fetch_youtube_urls() -> dict[str, str]:
     """
     Returns a dict mapping normalised episode title → YouTube URL.
-    YouTube titles look like "The Zarna Garg Family Podcast | Episode 121: What Are We Snacking On?"
-    We extract the part after the last colon and normalise for matching.
+
+    Handles multiple YouTube title formats:
+      "The Zarna Garg Family Podcast | Episode 121: What Are We Snacking On?"
+      "The Zarna Garg Family Podcast | Ep. 54 Passion Vs Prestige"
+      "HOLIDAY RERUN: The Zarna Garg Family Podcast | Make Money or Move Out"
     """
     print("  Fetching YouTube video list …")
     url_map: dict[str, str] = {}
@@ -102,14 +105,49 @@ def fetch_youtube_urls() -> dict[str, str]:
             vid_id   = v.get("videoId", "")
             if not vid_id:
                 continue
-            # Extract episode name from "... | Episode N: Title" or use full title
-            match = re.search(r":\s*(.+)$", yt_title)
-            key = (match.group(1) if match else yt_title).strip().lower()
-            url_map[key] = f"https://www.youtube.com/watch?v={vid_id}"
+            yt_url = f"https://www.youtube.com/watch?v={vid_id}"
+
+            # Pattern 1: "... | Episode N: Title"  →  extract after last colon
+            m = re.search(r":\s*(.+)$", yt_title)
+            if m:
+                url_map[m.group(1).strip().lower()] = yt_url
+
+            # Pattern 2: "... | Ep. N Title"  →  extract after "Ep. N "
+            m2 = re.search(r"\|\s*(?:Ep\.|Episode)\s*\d+[:\s]+(.+)$", yt_title, re.IGNORECASE)
+            if m2:
+                url_map[m2.group(1).strip().lower()] = yt_url
+
+            # Pattern 3: "HOLIDAY RERUN: ... | Title"  →  extract after last pipe
+            m3 = re.search(r"\|\s*(.+)$", yt_title)
+            if m3:
+                url_map[m3.group(1).strip().lower()] = yt_url
+
+            # Always store full title normalised too
+            url_map[yt_title.strip().lower()] = yt_url
+
     except Exception as e:
         print(f"  Warning: could not fetch YouTube URLs ({e}). Using channel fallback.")
-    print(f"  Found {len(url_map)} YouTube videos.")
+    print(f"  Found {len(url_map)} YouTube title variants mapped.")
     return url_map
+
+
+# RSS titles that don't exactly match any YouTube title variant — mapped manually.
+_MANUAL_OVERRIDES: dict[str, str] = {
+    "make money or move out (holiday rerun)":
+        "https://www.youtube.com/watch?v=KzJ54X1dzPU",
+    "who is the favorite child (holiday rerun)":
+        "https://www.youtube.com/watch?v=Wp5y7xFfW78",
+    "secrets we kept from our parents":
+        "https://www.youtube.com/watch?v=rDVMK1c7rnU",
+    "how to launch a second act in life - zarna garg x washington post podcasts":
+        "https://www.youtube.com/watch?v=Sa7b5eGMuUk",
+    "what your siblings will never tell you":
+        "https://www.youtube.com/watch?v=D3P8YWTpAQo",
+    "discipline in asian households":
+        "https://www.youtube.com/watch?v=_ndxLjJ8mxg",
+    "friendship blueprint":
+        "https://www.youtube.com/watch?v=Ba0HM_3PJQ4",
+}
 
 
 def _normalise(title: str) -> str:
@@ -167,7 +205,7 @@ def main() -> None:
     new_chunks = []
     for ep in new_episodes:
         key = _normalise(ep["title"])
-        yt_url = youtube_urls.get(key, PODCAST_LISTEN_URL)
+        yt_url = _MANUAL_OVERRIDES.get(key) or youtube_urls.get(key, PODCAST_LISTEN_URL)
         if yt_url != PODCAST_LISTEN_URL:
             matched += 1
         new_chunks.append(_episode_to_chunk(ep, yt_url))
