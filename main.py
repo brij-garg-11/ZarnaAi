@@ -1,6 +1,8 @@
 import json as _json
 import logging
+import os
 import threading
+import time
 from collections import OrderedDict
 from dotenv import load_dotenv
 load_dotenv()
@@ -15,15 +17,19 @@ logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
-brain = create_brain()
+brain     = create_brain()
 slicktext = create_slicktext_adapter()
 twilio    = create_twilio_adapter()
 
-# Deduplication: remember the last 200 processed message IDs
-# Prevents double-replies when SlickText retries a webhook we already handled
+# ---------------------------------------------------------------------------
+# Deduplication: last 200 message IDs (SlickText + Twilio)
+# Prevents double-replies when either platform retries a webhook we already handled
+# ---------------------------------------------------------------------------
+
 _seen_message_ids: OrderedDict = OrderedDict()
 _seen_lock = threading.Lock()
 _MAX_SEEN = 200
+
 
 def _already_processed(message_id: str) -> bool:
     if not message_id:
@@ -34,6 +40,30 @@ def _already_processed(message_id: str) -> bool:
         _seen_message_ids[message_id] = True
         if len(_seen_message_ids) > _MAX_SEEN:
             _seen_message_ids.popitem(last=False)
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Per-phone rate limiting — max 3 messages per 60 seconds per number
+# Protects against runaway loops and abuse during high-volume events
+# ---------------------------------------------------------------------------
+
+_rate_data: dict = {}   # phone -> [timestamp, ...]
+_rate_lock = threading.Lock()
+_RATE_WINDOW = 60       # seconds
+_RATE_MAX    = 3        # messages per window
+
+
+def _is_rate_limited(phone_number: str) -> bool:
+    now = time.monotonic()
+    with _rate_lock:
+        timestamps = _rate_data.get(phone_number, [])
+        timestamps = [t for t in timestamps if now - t < _RATE_WINDOW]
+        if len(timestamps) >= _RATE_MAX:
+            _rate_data[phone_number] = timestamps
+            return True
+        timestamps.append(now)
+        _rate_data[phone_number] = timestamps
     return False
 
 
@@ -76,29 +106,24 @@ def message():
 # Configure this URL in SlickText:
 #   Dashboard → API & Webhooks → Webhook URL → https://yourdomain.com/slicktext/webhook
 #   Event to subscribe: "Inbox Chat Message Received"
-#
-# SlickText POSTs JSON with event type "ChatMessageRecieved" (their spelling).
-# We parse the sender + message, run the brain, then send the reply back
-# through the SlickText API.
 # ---------------------------------------------------------------------------
 
-def _process_message(phone_number: str, message_text: str) -> None:
+def _process_slicktext_message(phone_number: str, message_text: str) -> None:
     """Run brain + reply in a background thread so the webhook returns instantly."""
     try:
         reply = brain.handle_incoming_message(phone_number, message_text)
         slicktext.send_reply(phone_number, reply)
     except Exception as e:
-        logging.error(f"Error processing message from {phone_number}: {e}")
+        logging.error("Error processing SlickText message from %s: %s", phone_number, e)
 
 
 @app.route("/slicktext/webhook", methods=["POST"])
 def slicktext_webhook():
-    # Try JSON first, fall back to form-encoded (SlickText v1 sends form data)
     payload = request.get_json(silent=True)
     if payload is None:
         payload = request.form.to_dict() or {}
 
-    logging.info(f"SlickText webhook raw payload: {payload}")
+    logging.info("SlickText webhook raw payload: %s", payload)
 
     # Deduplicate using ChatMessageId (guards against SlickText retries)
     try:
@@ -108,19 +133,21 @@ def slicktext_webhook():
         message_id = ""
 
     if _already_processed(message_id):
-        logging.info(f"Duplicate webhook ignored (ChatMessageId={message_id})")
+        logging.info("Duplicate SlickText webhook ignored (ChatMessageId=%s)", message_id)
         return jsonify({"status": "duplicate"}), 200
 
     phone_number, message_text = slicktext.parse_inbound(payload)
 
     if not phone_number or not message_text:
-        logging.info(f"SlickText webhook: message filtered or unparseable. Payload: {payload}")
+        logging.info("SlickText webhook: message filtered or unparseable. Payload: %s", payload)
         return jsonify({"status": "ignored"}), 200
 
-    # Return 200 to SlickText immediately — stops retries before they start.
-    # Process the message in a background thread.
+    if _is_rate_limited(phone_number):
+        logging.warning("Rate limit hit for %s — dropping message", phone_number)
+        return jsonify({"status": "rate_limited"}), 200
+
     threading.Thread(
-        target=_process_message,
+        target=_process_slicktext_message,
         args=(phone_number, message_text),
         daemon=True,
     ).start()
@@ -137,10 +164,41 @@ def slicktext_webhook():
 #   URL: https://web-production-ec3da.up.railway.app/twilio/webhook
 # ---------------------------------------------------------------------------
 
+def _process_twilio_message(phone_number: str, message_text: str) -> None:
+    try:
+        reply = brain.handle_incoming_message(phone_number, message_text)
+        twilio.send_reply(phone_number, reply)
+    except Exception as e:
+        logging.error("Error processing Twilio message from %s: %s", phone_number, e)
+
+
 @app.route("/twilio/webhook", methods=["POST"])
 def twilio_webhook():
     form_data = request.form.to_dict()
-    logging.info(f"Twilio webhook received: From={form_data.get('From')} Body={form_data.get('Body')}")
+    logging.info(
+        "Twilio webhook received: From=%s Body=%s",
+        form_data.get("From"),
+        form_data.get("Body"),
+    )
+
+    # Signature validation — rejects spoofed requests in production.
+    # Behind Railway's proxy, request.url is http:// but Twilio signs the https:// URL,
+    # so we reconstruct the correct URL using the X-Forwarded-Proto header.
+    if os.getenv("TWILIO_VALIDATE_SIGNATURE", "true").lower() == "true":
+        sig = request.headers.get("X-Twilio-Signature", "")
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
+        url = request.url
+        if forwarded_proto == "https" and url.startswith("http://"):
+            url = "https://" + url[len("http://"):]
+        if not twilio.validate_signature(url, form_data, sig):
+            logging.warning("Invalid Twilio signature from %s", form_data.get("From"))
+            return ("Forbidden", 403)
+
+    # Deduplicate using MessageSid
+    message_sid = form_data.get("MessageSid", "")
+    if _already_processed(message_sid):
+        logging.info("Duplicate Twilio webhook ignored (MessageSid=%s)", message_sid)
+        return ("", 204)
 
     phone_number, message_text = twilio.parse_inbound(form_data)
 
@@ -148,8 +206,10 @@ def twilio_webhook():
         logging.info("Twilio webhook: message filtered or unparseable.")
         return ("", 204)
 
-    # Return empty 204 immediately — Twilio doesn't retry on 2xx responses.
-    # Process and reply in a background thread.
+    if _is_rate_limited(phone_number):
+        logging.warning("Rate limit hit for Twilio %s — dropping message", phone_number)
+        return ("", 204)
+
     threading.Thread(
         target=_process_twilio_message,
         args=(phone_number, message_text),
@@ -159,15 +219,6 @@ def twilio_webhook():
     return ("", 204)
 
 
-def _process_twilio_message(phone_number: str, message_text: str) -> None:
-    try:
-        reply = brain.handle_incoming_message(phone_number, message_text)
-        twilio.send_reply(phone_number, reply)
-    except Exception as e:
-        logging.error(f"Error processing Twilio message from {phone_number}: {e}")
-
-
 if __name__ == "__main__":
-    import os
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)

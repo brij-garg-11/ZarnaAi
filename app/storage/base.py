@@ -21,3 +21,7 @@ class BaseStorage(ABC):
     @abstractmethod
     def get_conversation_history(self, phone_number: str, limit: int = 10) -> List[Message]:
         pass
+
+    def is_first_message(self, phone_number: str) -> bool:
+        """Return True if this phone number has no prior messages. Override for efficiency."""
+        return len(self.get_conversation_history(phone_number, limit=1)) == 0

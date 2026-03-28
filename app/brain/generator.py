@@ -88,7 +88,8 @@ Use these transcript excerpts to identify a relevant topic:
 
 Request: {user_message}
 
-Respond in Zarna's sharp, high-energy voice. Mention a specific topic or theme from her YouTube channel that matches what they're looking for. Keep it to 1-2 sentences. Do not make up video titles. Never use the word "honey" or "darling". No profanity. No homophobic language."""
+Respond in Zarna's sharp, high-energy voice. Mention a specific topic or theme from her YouTube channel that matches what they're looking for, in 1 sentence. Then on a new line include EXACTLY this link with no changes: https://www.youtube.com/@ZarnaGarg
+Do not make up video titles. Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
     if intent == Intent.SHOW:
         return f"""You are Zarna Garg's AI assistant.
@@ -131,7 +132,7 @@ Background knowledge about Zarna (use to make responses richer and more specific
 _MAX_CHARS = 480  # ~3 SMS segments; hard ceiling after generation
 
 
-def _trim_to_two_sentences(text: str) -> str:
+def _trim_reply(text: str) -> str:
     """
     Trim the model's output to at most 3 sentences.
     Splits on sentence-ending punctuation followed by a space or end-of-string,
@@ -145,25 +146,47 @@ def _trim_to_two_sentences(text: str) -> str:
     return trimmed
 
 
+_FALLBACK_REPLIES = [
+    "Ha! I got distracted trying to keep up with Zarna's life — she's a lot. Try me again?",
+    "Okay, I had a whole joke ready and then… nothing. Zarna would say that's very on-brand for me. Try again!",
+    "My brain went on a little vacation (must be the immigrant-parent guilt). Send that again?",
+]
+_fallback_idx = 0
+
+
+def _get_fallback() -> str:
+    global _fallback_idx
+    reply = _FALLBACK_REPLIES[_fallback_idx % len(_FALLBACK_REPLIES)]
+    _fallback_idx += 1
+    return reply
+
+
 def generate_zarna_reply(
     intent: Intent,
     user_message: str,
     chunks: List[str],
     history: List[dict] = None,
 ) -> str:
+    import logging
+    logger = logging.getLogger(__name__)
+
     prompt = _build_prompt(intent, user_message, chunks, history or [])
 
-    response = _client.models.generate_content(
-        model=GENERATION_MODEL,
-        contents=prompt,
-    )
-    raw = response.text.strip()
+    try:
+        response = _client.models.generate_content(
+            model=GENERATION_MODEL,
+            contents=prompt,
+        )
+        raw = response.text.strip()
+    except Exception as exc:
+        logger.error("Gemini generation error: %s", exc)
+        return _get_fallback()
 
-    # SHOW, BOOK, and PODCAST replies include a link on its own line — preserve both lines but still cap
-    if intent in (Intent.SHOW, Intent.BOOK, Intent.PODCAST):
+    # SHOW, BOOK, PODCAST, and CLIP replies include a link on its own line — preserve both lines but still cap
+    if intent in (Intent.SHOW, Intent.BOOK, Intent.PODCAST, Intent.CLIP):
         lines = raw.splitlines()
         if len(lines) >= 2:
-            first = _trim_to_two_sentences(lines[0])
+            first = _trim_reply(lines[0])
             return first + "\n" + lines[-1]
 
-    return _trim_to_two_sentences(raw)
+    return _trim_reply(raw)

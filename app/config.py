@@ -13,7 +13,7 @@ CHUNKS_PATH = os.path.join(_BASE_DIR, "training_data", "zarna_chunks.json")
 EMBEDDINGS_PATH = os.path.join(_BASE_DIR, "training_data", "zarna_embeddings.json.gz")
 
 # --- Retrieval / Generation ---
-TOP_K_CHUNKS = 5
+TOP_K_CHUNKS = 7
 CONVERSATION_HISTORY_LIMIT = 6
 
 # --- SlickText ---

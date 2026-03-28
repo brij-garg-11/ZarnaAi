@@ -19,7 +19,7 @@ _client = genai.Client(api_key=GEMINI_API_KEY)
 # Keywords that unambiguously signal an intent — no API call needed for these.
 _SHOW_KEYWORDS = {
     "ticket", "tickets", "show", "shows", "tour", "touring",
-    "performing", "performance", "live", "see you", "come see",
+    "performing", "performance", "come see",
     "where are you", "when are you", "dates", "venue",
 }
 _JOKE_KEYWORDS = {
