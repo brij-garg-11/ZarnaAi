@@ -81,8 +81,20 @@ def health():
 # POST JSON: { "phone_number": "...", "message": "..." }
 # ---------------------------------------------------------------------------
 
+_API_SECRET = os.getenv("API_SECRET_KEY", "")
+
+
 @app.route("/message", methods=["POST"])
 def message():
+    # API key check — requires X-Api-Key header matching API_SECRET_KEY env var
+    if _API_SECRET and request.headers.get("X-Api-Key") != _API_SECRET:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    # IP-based rate limiting — max 3 requests per 60 seconds
+    client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
+    if _is_rate_limited(client_ip):
+        return jsonify({"error": "Rate limit exceeded"}), 429
+
     data = request.get_json(silent=True)
 
     if not data:
