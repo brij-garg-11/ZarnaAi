@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 RSS_URL = "https://feeds.megaphone.fm/ASTI4272864122"
-PODCAST_LISTEN_URL = "https://www.iheart.com/podcast/269-the-zarna-garg-family-podc-119786148/"
+PODCAST_LISTEN_URL = "https://www.youtube.com/@ZarnaGarg"
 
 _BASE_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHUNKS_PATH = os.path.join(_BASE_DIR, "training_data", "zarna_chunks.json")
