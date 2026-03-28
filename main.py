@@ -12,10 +12,12 @@ from flask import Flask, request, jsonify
 from app.brain.handler import create_brain
 from app.messaging.slicktext_adapter import create_slicktext_adapter
 from app.messaging.twilio_adapter import create_twilio_adapter
+from app.admin import admin_bp
 
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
+app.register_blueprint(admin_bp)
 
 brain     = create_brain()
 slicktext = create_slicktext_adapter()
