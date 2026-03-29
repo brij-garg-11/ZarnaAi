@@ -14,3 +14,5 @@ def test_style_rules_include_question_and_my_friend_guidance():
     assert "my friend" in rules.lower()
     assert "Never stack two questions" in rules or "At most one question per reply" in rules
     assert "rhetorical" in rules.lower()
+    assert "Do not mirror the fan's words back" in rules or "mirror the fan" in rules.lower()
+    assert "direct question" in rules.lower()
