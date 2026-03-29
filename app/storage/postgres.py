@@ -50,7 +50,7 @@ ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_location TEXT    DEFAULT '';
 class PostgresStorage(BaseStorage):
     """Thread-safe Postgres storage using a connection pool."""
 
-    def __init__(self, dsn: str, minconn: int = 1, maxconn: int = 10):
+    def __init__(self, dsn: str, minconn: int = 2, maxconn: int = 50):
         self._pool = ThreadedConnectionPool(minconn, maxconn, dsn)
         self._ensure_tables()
         logger.info("PostgresStorage initialised")
