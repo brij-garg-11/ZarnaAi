@@ -27,6 +27,23 @@ def test_substantive_messages_not_enders():
     assert not is_conversation_ender("ok but what about taxes")
 
 
+def test_ambiguous_one_word_acks_get_replies():
+    """nice/cool alone used to skip; now only strict closers end the thread."""
+    assert not is_conversation_ender("nice")
+    assert not is_conversation_ender("cool")
+    assert not is_conversation_ender("awesome")
+    assert not is_conversation_ender("yep")
+
+
+def test_long_thanks_still_gets_reply():
+    assert not is_conversation_ender("thank you for the show last night it meant a lot")
+
+
+def test_short_strict_still_enders():
+    assert is_conversation_ender("thank you so much")
+    assert is_conversation_ender("ty!!")
+
+
 def test_handler_skips_reply_for_lol():
     from unittest.mock import patch, MagicMock
     from app.brain.handler import ZarnaBrain
