@@ -2,11 +2,15 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import pytest
+
+from tests.gemini_test_util import live_gemini_configured
 from app.brain.handler import create_brain
 
 PHONE = "+11234567890"
 
 
+@pytest.mark.skipif(not live_gemini_configured(), reason="Needs valid GEMINI_API_KEY (embedding + generation)")
 def test_handler():
     brain = create_brain()
 

@@ -153,6 +153,9 @@ def test_slicktext_webhook_endpoint():
         )
 
         import main as app_module
+        from app.messaging.slicktext_adapter import SlickTextAdapter
+
+        app_module.slicktext = SlickTextAdapter(api_key="test-api-key", brand_id="99999")
         client = app_module.app.test_client()
 
         payload = {
@@ -178,7 +181,11 @@ def test_slicktext_webhook_endpoint():
 
 
 def test_slicktext_webhook_bad_payload():
+    """Missing contact_id / message → parse_inbound returns None; webhook responds 200 ignored."""
     import main as app_module
+    from app.messaging.slicktext_adapter import SlickTextAdapter
+
+    app_module.slicktext = SlickTextAdapter(api_key="test-api-key", brand_id="99999")
     client = app_module.app.test_client()
 
     response = client.post(
@@ -186,8 +193,9 @@ def test_slicktext_webhook_bad_payload():
         data=json.dumps({"name": "inbox_message_received", "data": {}}),
         content_type="application/json",
     )
-    assert response.status_code == 400
-    print("✓ /slicktext/webhook: returns 400 on missing fields")
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "ignored"
+    print("✓ /slicktext/webhook: returns 200 + ignored on missing fields")
 
 
 if __name__ == "__main__":

@@ -83,12 +83,14 @@ Message: "{message}"
 
 Reply with only one word: joke, clip, show, book, podcast, or general"""
 
-    response = _client.models.generate_content(
-        model=INTENT_MODEL,
-        contents=prompt,
-    )
-
-    raw = response.text.strip().lower()
+    try:
+        response = _client.models.generate_content(
+            model=INTENT_MODEL,
+            contents=prompt,
+        )
+        raw = response.text.strip().lower()
+    except Exception:
+        return Intent.GENERAL
 
     try:
         return Intent(raw)

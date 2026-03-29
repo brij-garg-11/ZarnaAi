@@ -2,11 +2,15 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import pytest
+
 from app.config import EMBEDDINGS_PATH
+from tests.gemini_test_util import live_gemini_configured
 
 EMBEDDINGS_READY = os.path.exists(EMBEDDINGS_PATH)
 
 
+@pytest.mark.skipif(not live_gemini_configured(), reason="Needs valid GEMINI_API_KEY for query embeddings")
 def test_retrieval():
     if not EMBEDDINGS_READY:
         print(f"⚠️  Embeddings file not found at '{EMBEDDINGS_PATH}'")
