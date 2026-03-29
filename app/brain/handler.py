@@ -1,6 +1,7 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
 
+from app.brain.conversation_end import is_conversation_ender
 from app.brain.emphasis import should_suppress_all_emphasis
 from app.brain.intent import classify_intent
 from app.brain.generator import generate_zarna_reply
@@ -32,6 +33,10 @@ class ZarnaBrain:
 
         # 2. Persist the user's message
         self.storage.save_message(phone_number, "user", message_text)
+
+        # 2b. Conversation closers (lol, thanks, ok) — no reply expected
+        if is_conversation_ender(message_text):
+            return ""
 
         # 3. Pull prior conversation (excluding the message we just saved)
         raw_history = self.storage.get_conversation_history(

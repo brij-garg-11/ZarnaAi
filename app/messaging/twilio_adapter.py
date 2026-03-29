@@ -145,6 +145,9 @@ class TwilioAdapter:
 
     def send_reply(self, to_number: str, body: str) -> bool:
         """Send an outbound reply via Twilio SMS or WhatsApp."""
+        if not (body or "").strip():
+            logger.info("[TWILIO REPLY TO %s]: skipped (empty body)", to_number)
+            return False
         logger.info("[TWILIO REPLY TO %s]: %s", to_number, body)
 
         if not self._client:

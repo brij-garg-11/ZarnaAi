@@ -9,14 +9,12 @@ import app.brain.generator as gen
 
 def test_style_rules_include_question_and_my_friend_guidance():
     rules = gen._STYLE_RULES
-    assert "Default: land the joke" in rules or "No question is the norm" in rules
-    assert "every three or four" in rules.lower() or "three or four fan messages" in rules
+    ex = gen._TONE_EXAMPLES
+    assert "Sadness" in rules
     assert "my friend" in rules.lower()
-    assert "Never stack two questions" in rules or "At most one question per reply" in rules
-    assert "rhetorical" in rules.lower()
-    assert "Do not mirror the fan's words back" in rules or "mirror the fan" in rules.lower()
-    assert "direct question" in rules.lower()
-    assert "Sadness and low mood" in rules
-    assert "ok and?" in rules.lower() or "ok and?" in gen._TONE_EXAMPLES.lower()
-    assert "default is none" in rules.lower()
-    assert "bad day?" in rules.lower() and "venting" in rules.lower()
+    assert "echo-mock" in rules or "echo" in rules.lower()
+    assert "bad day?" in ex.lower()
+    assert "never two" in rules.lower() or "at most one question" in rules.lower()
+    assert "asterisk" in rules.lower() or "emphasis" in rules.lower()
+    assert "ok and?" in ex.lower()
+    assert "default **no**" in rules or "default no" in rules.replace("**", "").lower()

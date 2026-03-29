@@ -111,7 +111,7 @@ def message():
         return jsonify({"error": "message is required"}), 400
 
     reply = brain.handle_incoming_message(phone_number, message_text)
-    return jsonify({"reply": reply})
+    return jsonify({"reply": reply, "skipped": not (reply or "").strip()})
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +126,9 @@ def _process_slicktext_message(phone_number: str, message_text: str) -> None:
     """Run brain + reply in a background thread so the webhook returns instantly."""
     try:
         reply = brain.handle_incoming_message(phone_number, message_text)
+        if not (reply or "").strip():
+            logging.info("No reply for ...%s (conversation ender or empty)", phone_number[-4:])
+            return
         slicktext.send_reply(phone_number, reply)
     except Exception as e:
         logging.error("Error processing SlickText message from %s: %s", phone_number, e)
@@ -181,6 +184,9 @@ def slicktext_webhook():
 def _process_twilio_message(phone_number: str, message_text: str) -> None:
     try:
         reply = brain.handle_incoming_message(phone_number, message_text)
+        if not (reply or "").strip():
+            logging.info("No Twilio reply for ...%s (conversation ender or empty)", phone_number[-4:])
+            return
         twilio.send_reply(phone_number, reply)
     except Exception as e:
         logging.error("Error processing Twilio message from %s: %s", phone_number, e)

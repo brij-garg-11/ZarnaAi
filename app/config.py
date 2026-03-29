@@ -15,7 +15,7 @@ EMBEDDINGS_PATH = os.path.join(_BASE_DIR, "training_data", "zarna_embeddings.jso
 
 # --- Retrieval / Generation ---
 TOP_K_CHUNKS = 7
-CONVERSATION_HISTORY_LIMIT = 4
+CONVERSATION_HISTORY_LIMIT = 8
 
 # --- SlickText ---
 # The adapter auto-detects which API version to use based on which keys are present:

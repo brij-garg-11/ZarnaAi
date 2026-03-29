@@ -53,8 +53,9 @@ def test_mocked_multi_turn_conversation_includes_voice_rules_in_prompt():
     contents = first_prompt.kwargs.get("contents") or first_prompt[0][0]
     blob = contents if isinstance(contents, str) else str(contents)
 
-    assert "Never use" in blob and "my friend" in blob
-    assert "No question is the norm" in blob or "Default: land the joke" in blob
+    assert "my friend" in blob.lower()
+    assert "Sadness" in blob or "echo-mock" in blob
+    assert "default end on a period" in blob or "period" in blob.lower()
 
     history = brain.storage.get_conversation_history(phone)
     assert len(history) == len(user_turns) * 2

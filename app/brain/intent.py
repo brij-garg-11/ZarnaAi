@@ -22,10 +22,11 @@ _SHOW_KEYWORDS = {
     "performing", "performance", "come see",
     "where are you", "when are you", "tour dates", "venue",
 }
+# Do not include lol/haha/lmao — those are often conversation-enders, not joke requests.
 _JOKE_KEYWORDS = {
     "joke", "jokes", "funny", "laugh", "laughter", "comedy", "comic",
     "make me laugh", "tell me something funny", "tell me a joke",
-    "humor", "humour", "lol", "haha", "hahaha", "lmao", "😂",
+    "humor", "humour",
     "roast", "one liner", "one-liner", "hilarious", "witty",
     "crack me up", "make me smile",
 }
@@ -36,10 +37,34 @@ _CLIP_KEYWORDS = {
 _PODCAST_KEYWORDS = {
     "podcast", "episode", "listen", "audio show",
 }
-_BOOK_KEYWORDS = {
-    "book", "this american woman", "buy", "purchase", "order",
-    "amazon", "kindle", "hardcover", "paperback",
-}
+_BOOK_PHRASES = (
+    "this american woman",
+    "your book",
+    "the book",
+    "read your book",
+    "buy your book",
+    "buy the book",
+    "order your book",
+    "order the book",
+    "zarna's book",
+    "zarnas book",
+    "zarna book",
+    "get your book",
+    "where to buy",
+    "amazon.com/dp",
+)
+_BOOK_EXTRA_WORDS = frozenset({"kindle", "hardcover", "paperback"})
+
+
+def _fast_book_intent(lower: str, words: set) -> bool:
+    """Avoid classifying every 'buy' / 'order' as book (e.g. 'buy milk')."""
+    if any(p in lower for p in _BOOK_PHRASES):
+        return True
+    if words & _BOOK_EXTRA_WORDS:
+        return True
+    if "book" in words and ("zarna" in lower or "american woman" in lower):
+        return True
+    return False
 
 
 def _fast_classify(message: str) -> Intent | None:
@@ -57,7 +82,7 @@ def _fast_classify(message: str) -> Intent | None:
         return Intent.CLIP
     if words & _PODCAST_KEYWORDS or any(k in lower for k in _PODCAST_KEYWORDS if " " in k):
         return Intent.PODCAST
-    if words & _BOOK_KEYWORDS or any(k in lower for k in _BOOK_KEYWORDS if " " in k):
+    if _fast_book_intent(lower, words):
         return Intent.BOOK
     return None
 

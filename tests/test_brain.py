@@ -14,6 +14,9 @@ def test_intent_classification():
         ("where are her shows", Intent.SHOW),
         ("when is her next tour", Intent.SHOW),
         ("hi how are you", Intent.GENERAL),
+        ("lol", Intent.GENERAL),
+        ("buy milk on the way home", Intent.GENERAL),
+        ("where can I buy your book", Intent.BOOK),
     ]
 
     print("--- Intent Classification ---")

@@ -223,6 +223,9 @@ class SlickTextAdapter:
 
     def send_reply(self, to_number: str, body: str) -> bool:
         """Send an outbound SMS reply. Routes to v1 or v2 automatically."""
+        if not (body or "").strip():
+            logger.info("[REPLY TO %s]: skipped (empty body)", to_number)
+            return False
         logger.info(f"[REPLY TO {to_number}]: {body}")
         if self._version == "v1":
             return self._send_v1(to_number, body)

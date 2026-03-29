@@ -44,6 +44,20 @@ _DISTRESS_PHRASES = (
     "panic attack",
     "can't cope",
     "cant cope",
+    "going bad",
+    "day is bad",
+    "bad day",
+    "rough day",
+    "terrible day",
+    "awful day",
+    "horrible day",
+    "feeling low",
+    "feeling down",
+    "i'm down",
+    "im down",
+    "feel down",
+    "in a funk",
+    "really down",
 )
 
 
@@ -55,6 +69,10 @@ def user_signals_distress(message: str) -> bool:
     if any(p in lower for p in _DISTRESS_PHRASES):
         return True
     if re.search(r"\bsad\b", lower) and not re.search(r"\bnot\s+sad\b", lower):
+        return True
+    if re.search(r"\bbad\b", lower) and any(
+        p in lower for p in ("day", "week", "mood", "time", "going")
+    ):
         return True
     if re.search(r"\bblue\b", lower) and any(
         w in lower for w in ("feeling", "feel", "so ", "very ", "i'm ", "im ")

@@ -17,10 +17,16 @@ def test_user_signals_distress_phrases():
     assert user_signals_distress("I'm feeling very sad today")
     assert user_signals_distress("i have anxiety about work")
     assert user_signals_distress("This is hopeless")
+    assert user_signals_distress("My day is going bad")
+    assert user_signals_distress("having a rough day")
 
 
 def test_user_signals_distress_not_false_on_negation():
     assert not user_signals_distress("I am not sad at all, just tired")
+
+
+def test_user_signals_distress_bad_without_day_context():
+    assert not user_signals_distress("that was a bad joke")
 
 
 def test_user_signals_distress_word_sad():
