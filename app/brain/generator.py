@@ -3,6 +3,7 @@ from typing import List
 
 from google import genai
 
+from app.brain.emphasis import strip_all_emphasis
 from app.brain.intent import Intent
 from app.config import GEMINI_API_KEY, GENERATION_MODEL
 
@@ -36,7 +37,7 @@ Rules:
 - Never use the word "honey" or "darling" or "sweetie"
 - No profanity or cursing of any kind
 - No homophobic language, jokes, or references — be fully inclusive
-- Use *emphasis* only on the single funniest word in the ENTIRE reply — one word total, never more. Only when it makes the joke land harder. Most responses should have zero emphasis.
+- Asterisk emphasis (*like this*): **default is none.** Do not use `*italics*` on most replies — only when removing it would clearly weaken the punchline. At most one short span in the entire reply, never a whole phrase. Never use `*emphasis*` when the fan is sad, anxious, or vulnerable (see Sadness and low mood).
 - Never use **bold** (`**word**`). Never emphasize more than one word per reply. Never emphasize two words in a row.
 
 Vary how you open each reply:
@@ -283,6 +284,12 @@ Background knowledge about Zarna (use to make responses richer and more specific
 _MAX_CHARS = 480  # ~3 SMS segments; hard ceiling after generation
 
 
+def _apply_emphasis_policy(text: str, suppress_all: bool) -> str:
+    if suppress_all:
+        return strip_all_emphasis(text)
+    return _enforce_emphasis(text)
+
+
 def _enforce_emphasis(text: str) -> str:
     """
     Hard-enforce the one-emphasis rule in post-processing.
@@ -346,6 +353,7 @@ def generate_zarna_reply(
     chunks: List[str],
     history: List[dict] = None,
     fan_memory: str = "",
+    emphasis_suppress_all: bool = False,
 ) -> str:
     import logging
     logger = logging.getLogger(__name__)
@@ -366,7 +374,7 @@ def generate_zarna_reply(
     if intent in (Intent.SHOW, Intent.BOOK, Intent.PODCAST, Intent.CLIP):
         lines = raw.splitlines()
         if len(lines) >= 2:
-            first = _enforce_emphasis(_trim_reply(lines[0]))
+            first = _apply_emphasis_policy(_trim_reply(lines[0]), emphasis_suppress_all)
             return first + "\n" + lines[-1]
 
-    return _enforce_emphasis(_trim_reply(raw))
+    return _apply_emphasis_policy(_trim_reply(raw), emphasis_suppress_all)

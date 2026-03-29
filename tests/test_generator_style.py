@@ -18,3 +18,4 @@ def test_style_rules_include_question_and_my_friend_guidance():
     assert "direct question" in rules.lower()
     assert "Sadness and low mood" in rules
     assert "ok and?" in rules.lower() or "ok and?" in gen._TONE_EXAMPLES.lower()
+    assert "default is none" in rules.lower()

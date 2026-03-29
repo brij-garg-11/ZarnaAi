@@ -1,6 +1,7 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
 
+from app.brain.emphasis import should_suppress_all_emphasis
 from app.brain.intent import classify_intent
 from app.brain.generator import generate_zarna_reply
 from app.brain.memory import extract_memory
@@ -48,6 +49,15 @@ class ZarnaBrain:
         intent = future_intent.result()
         chunks = future_chunks.result()
 
+        # Recent assistant bodies for *emphasis* throttle (exclude this turn)
+        history_for_emphasis = self.storage.get_conversation_history(
+            phone_number, limit=24
+        )
+        assistant_texts = [m.text for m in history_for_emphasis if m.role == "assistant"]
+        emphasis_suppress_all = should_suppress_all_emphasis(
+            message_text, intent, assistant_texts
+        )
+
         # 7. Generate reply (with fan memory injected)
         reply = generate_zarna_reply(
             intent=intent,
@@ -55,6 +65,7 @@ class ZarnaBrain:
             chunks=chunks,
             history=history,
             fan_memory=fan_memory,
+            emphasis_suppress_all=emphasis_suppress_all,
         )
 
         # 8. Persist the assistant's reply
