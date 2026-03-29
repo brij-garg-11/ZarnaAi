@@ -27,12 +27,18 @@ def test_substantive_messages_not_enders():
     assert not is_conversation_ender("ok but what about taxes")
 
 
-def test_ambiguous_one_word_acks_get_replies():
-    """nice/cool alone used to skip; now only strict closers end the thread."""
-    assert not is_conversation_ender("nice")
-    assert not is_conversation_ender("cool")
-    assert not is_conversation_ender("awesome")
-    assert not is_conversation_ender("yep")
+def test_soft_closers_end_thread_when_whole_message():
+    assert is_conversation_ender("nice")
+    assert is_conversation_ender("cool")
+    assert is_conversation_ender("awesome")
+    assert is_conversation_ender("yep")
+    assert is_conversation_ender("sounds good")
+    assert is_conversation_ender("love it")
+
+
+def test_soft_closer_not_whole_sentence():
+    assert not is_conversation_ender("nice try though")
+    assert not is_conversation_ender("cool story tell me more")
 
 
 def test_long_thanks_still_gets_reply():

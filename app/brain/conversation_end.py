@@ -29,7 +29,7 @@ _CONTINUATION_RE = re.compile(
 # Single-letter / minimal ack (whole message)
 _MINIMAL_RE = re.compile(r"^[\s.!?,]*[kK][\s.!?,]*$")
 
-# Whole message = allowed closer only (no nice/cool/yep — too often means "go on").
+# Whole message = classic SMS closers (lol, thanks, ok, …).
 _STRICT_ACK_RE = re.compile(
     r"""^[\s.!?,;'"“”]*(?: 
         lol{1,3}z? | lmao | lmfao | rofl | rotfl |
@@ -39,6 +39,19 @@ _STRICT_ACK_RE = re.compile(
         thanks? | thank\s+you(\s+so\s+much|\s+a\s+lot)? |
         np | no\s+problem |
         got\s*it | gotcha
+    )[\s.!?,;'"“”]*$""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Whole message = short vibe / ack closers — still gated (no "but", "?", long text).
+_SOFT_ACK_RE = re.compile(
+    r"""^[\s.!?,;'"“”]*(?: 
+        nice | cool | sweet | perfect | awesome | amazing | fantastic |
+        yep | yup | sure | yeah |
+        exactly | agreed | facts | literally |
+        for\s+sure | you\s+bet | right\s+on | will\s+do |
+        sounds\s+good | makes\s+sense | fair\s+enough |
+        love\s+it | love\s+this
     )[\s.!?,;'"“”]*$""",
     re.IGNORECASE | re.VERBOSE,
 )
@@ -103,7 +116,9 @@ def is_conversation_ender(text: str) -> bool:
     normalized = " ".join(text.strip().split())
 
     structural = _structural_ack(normalized)
-    strict_phrase = bool(_STRICT_ACK_RE.match(normalized))
+    strict_phrase = bool(
+        _STRICT_ACK_RE.match(normalized) or _SOFT_ACK_RE.match(normalized)
+    )
 
     if not structural and not strict_phrase:
         return False
