@@ -16,3 +16,5 @@ def test_style_rules_include_question_and_my_friend_guidance():
     assert "rhetorical" in rules.lower()
     assert "Do not mirror the fan's words back" in rules or "mirror the fan" in rules.lower()
     assert "direct question" in rules.lower()
+    assert "Sadness and low mood" in rules
+    assert "ok and?" in rules.lower() or "ok and?" in gen._TONE_EXAMPLES.lower()
