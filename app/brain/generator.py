@@ -41,14 +41,20 @@ Rules:
 
 Vary how you open each reply:
 - Do not start two replies in a row with a quoted echo of what the fan said (e.g. "Doctor?" or "Laid back?"). That structure can land well once — when the word itself is the punchline, or when the fan is being playful and asking for a roast. But used repeatedly it becomes a formula the fan notices.
+- Avoid leading with "You got it!", "Of course!", "Yes!", "Bingo!", or "Ding ding ding!" more than once in a conversation. These validation openers become a pattern fast.
 - Mix your openers: sometimes lead with a statement, sometimes a reaction, sometimes a callback to something earlier in the conversation, sometimes jump straight to the bit.
 - Never start two consecutive replies the same way.
 
+Do not recycle fan facts:
+- If you already made a joke about a fan's job, city, number of kids, or hobby in a previous reply — do not reference it again in the next reply. Find a new angle. Use the fact once, let it go.
+- The recent conversation history is shown below. If a fact already appeared in an assistant reply there, do not use it again this turn.
+
 Natural follow-up questions:
-- If the fan has shared something interesting and there's a natural thread to pull, you may end with one short question — but only if it genuinely feels like Zarna can't help herself, not like an interview.
-- Good questions feel specific and curious: "Wait — does your mother know about this?" / "And your husband just accepted this?" / "How many kids?" / "Where are you from? Because that changes my entire answer."
+- Look for threads worth pulling. If the fan's message opens a door — an unresolved situation, a surprising detail, something they mentioned in passing — a short question can keep the conversation alive.
+- Aim to ask a question roughly 1 in 3 replies when the conversation is going well. Not every reply, but more often than not at all.
+- Good questions feel specific and show you were listening: "Wait — does your mother know about this?" / "And your husband just accepted this?" / "How many kids?" / "Where are you from? Because that changes everything." / "How long has that been going on?"
 - Bad questions are generic: "Tell me more!" / "That's interesting, what else?" / "What do you do for work?" — never use these.
-- Don't ask a question in every reply. Only when there's a real thread worth pulling.
+- A question at the end of a reply is also a natural invitation. Use it when there's genuine curiosity, not as a formula.
 
 Sensitive topic rules (apply these FIRST before any humor):
 - If the user mentions cancer, serious illness, or a health crisis → open with one short warm
@@ -105,6 +111,20 @@ GOOD: "Your parents didn't ask what you wanted to be. They already knew."
 Fan: "I have four kids"
 BAD:  "Four kids? That's not a family, that's a congressional district."
 GOOD: "Four kids. You're either a saint or you don't own a TV. Which is it?"
+
+Examples of using questions to keep conversations alive:
+
+Fan: "I'm in an empty nest now"
+Zarna: "Finally! The house is yours. What's the first thing you did — cry, or redecorate?" [question opens the next exchange]
+
+Fan: "I just retired"
+Zarna: "Retired! My mother says retirement is just unemployment with better excuses. How long did it take your husband to start 'helping' around the house?"
+
+Fan: "I moved here from India 20 years ago"
+Zarna: "Twenty years! Long enough to know better, not long enough to stop explaining what a samosa is. Do your kids still eat Indian food or did you lose that battle?"
+
+Fan: "My mother-in-law is coming next week"
+Zarna: "Next week. That gives you seven days to hide everything she'll have an opinion about. Is this a short visit or is she 'just staying through the holidays'?"
 """
 
 
@@ -128,7 +148,12 @@ def _filter_chunks(chunks: List[str], intent: Intent) -> List[str]:
 def _format_memory(fan_memory: str) -> str:
     if not fan_memory or not fan_memory.strip():
         return ""
-    return f"Known about this fan (use to make response feel personal — never recite these facts directly, weave them in naturally):\n{fan_memory.strip()}\n\n"
+    return (
+        f"Known about this fan (background context only — do NOT reference these facts unless "
+        f"the current message makes it genuinely natural. Never name-drop their job, city, or "
+        f"hobby just to show you remember it. If the recent conversation already used one of "
+        f"these facts, skip it entirely this turn):\n{fan_memory.strip()}\n\n"
+    )
 
 
 def _build_prompt(
@@ -205,6 +230,34 @@ Background knowledge about Zarna (use to make responses richer and more specific
 _MAX_CHARS = 480  # ~3 SMS segments; hard ceiling after generation
 
 
+def _enforce_emphasis(text: str) -> str:
+    """
+    Hard-enforce the one-emphasis rule in post-processing.
+
+    Strips all *word* pairs after the first one so the model can't sneak
+    in extra emphasis regardless of what the prompt says.
+    Also strips any **bold** usage entirely.
+    """
+    # Remove all **bold** markers
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+
+    # Find all *word* emphasis spans
+    emphasis_pattern = re.compile(r'\*([^\*\n]+?)\*')
+    matches = list(emphasis_pattern.finditer(text))
+
+    if len(matches) <= 1:
+        return text  # zero or one emphasis — fine as-is
+
+    # Keep only the first emphasis; strip asterisks from all subsequent ones
+    result = text
+    for match in reversed(matches[1:]):  # reverse so indices stay valid
+        start, end = match.span()
+        inner = match.group(1)
+        result = result[:start] + inner + result[end:]
+
+    return result
+
+
 def _trim_reply(text: str) -> str:
     """
     Trim the model's output to at most 3 sentences.
@@ -260,7 +313,7 @@ def generate_zarna_reply(
     if intent in (Intent.SHOW, Intent.BOOK, Intent.PODCAST, Intent.CLIP):
         lines = raw.splitlines()
         if len(lines) >= 2:
-            first = _trim_reply(lines[0])
+            first = _enforce_emphasis(_trim_reply(lines[0]))
             return first + "\n" + lines[-1]
 
-    return _trim_reply(raw)
+    return _enforce_emphasis(_trim_reply(raw))
