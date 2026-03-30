@@ -183,7 +183,12 @@ def _show_table_rows(show_list: list, empty_msg: str) -> str:
         sid = s["id"]
         n = s.get("signup_count", 0)
         ec = (s.get("event_category") or "other").lower()
-        et = "Comedy" if ec == "comedy" else "Other"
+        if ec == "comedy":
+            et = "Comedy"
+        elif ec in ("live_stream", "livestream"):
+            et = "Live stream"
+        else:
+            et = "Other"
         exp = f'<a class="btn btn-secondary" style="padding:6px 12px;font-size:12px;margin:0" href="/admin/live-shows/{sid}/export">CSV</a>'
         rows += f"""<tr>
           <td><a href="/admin/live-shows/{sid}" style="color:#a78bfa;font-weight:500">{_e(s['name'])}</a></td>
@@ -243,7 +248,9 @@ def new_show():
         if deliver not in ("sms", "whatsapp"):
             deliver = "sms"
         event_cat = (request.form.get("event_category") or "other").strip().lower()
-        if event_cat not in ("comedy", "other"):
+        if event_cat == "livestream":
+            event_cat = "live_stream"
+        if event_cat not in ("comedy", "live_stream", "other"):
             event_cat = "other"
         if not name:
             return _shell("New live show", '<div class="card"><p style="color:#f87171">Name required.</p></div>')
@@ -273,7 +280,7 @@ def new_show():
   </select>
   <label>Keyword (keyword mode)</label>
   <input type="text" name="keyword" placeholder="e.g. CHICAGO">
-  <small class="hint">Case-insensitive; minor typos allowed for 3+ character keywords. Keyword-only messages skip the AI; comedy events also send a fun confirmation SMS.</small>
+  <small class="hint">Case-insensitive; minor typos allowed for 3+ character keywords. Keyword-only messages skip the AI; comedy and live stream send a fun rotating confirmation SMS.</small>
   <label>Event timezone</label>
   <select name="event_timezone">
 {_timezone_options_html("America/New_York")}
@@ -291,10 +298,11 @@ def new_show():
   </select>
   <label>Event type</label>
   <select name="event_category">
-    <option value="comedy" selected>Comedy show — fans get a fun confirmation SMS when they text the keyword (keyword-only join)</option>
+    <option value="comedy" selected>Comedy show — fun rotating confirmation SMS (keyword-only join)</option>
+    <option value="live_stream">Live stream — fun rotating confirmation themed for the live (keyword-only join)</option>
     <option value="other">Other — keyword join stays silent (no auto confirmation)</option>
   </select>
-  <small class="hint">Comedy confirmations: upbeat welcome, a joke, enjoy the show — all automated SMS.</small>
+  <small class="hint">Comedy &amp; live stream: upbeat welcome, joke, sign-off — all automated SMS; no human reply promised.</small>
   <p><button type="submit" class="btn">Create draft</button>
   <a class="btn btn-secondary" href="/admin/live-shows">Cancel</a></p>
 </form>
@@ -369,7 +377,12 @@ def show_detail(show_id: int):
         created_line = f'<p style="color:#64748b;font-size:12px;margin:8px 0 0 0">Created: {created}</p>'
 
     ec = (show.get("event_category") or "other").lower()
-    type_lbl = "Comedy" if ec == "comedy" else "Other"
+    if ec == "comedy":
+        type_lbl = "Comedy"
+    elif ec in ("live_stream", "livestream"):
+        type_lbl = "Live stream"
+    else:
+        type_lbl = "Other"
     stats_block = f"""
 <div class="stats-grid">
   <div class="stat-box"><div class="num">{show.get("signup_count", 0)}</div><div class="lbl">Signups</div></div>

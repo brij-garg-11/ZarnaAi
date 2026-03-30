@@ -97,6 +97,61 @@ def test_comedy_repeat_still_gets_short_confirmation():
         assert "list" in low or "still" in low or "already" in low or "got" in low
 
 
+def test_live_stream_sends_confirmation_on_new_signup():
+    show = {
+        "id": 1,
+        "keyword": "watch",
+        "use_keyword_only": True,
+        "window_start": None,
+        "window_end": None,
+        "event_category": "live_stream",
+    }
+    with patch.object(ls.repo, "active_live_shows", return_value=[show]), patch.object(
+        ls.repo, "add_signup", return_value=True
+    ):
+        r = ls.try_live_show_signup("+15551234567", "watch", "slicktext")
+        assert r.suppress_ai is True
+        assert r.join_confirmation_sms
+        low = r.join_confirmation_sms.lower()
+        assert "live" in low or "stream" in low
+        assert r.confirmation_phone == "+15551234567"
+
+
+def test_live_stream_repeat_gets_confirmation():
+    show = {
+        "id": 1,
+        "keyword": "watch",
+        "use_keyword_only": True,
+        "window_start": None,
+        "window_end": None,
+        "event_category": "live_stream",
+    }
+    with patch.object(ls.repo, "active_live_shows", return_value=[show]), patch.object(
+        ls.repo, "add_signup", return_value=False
+    ):
+        r = ls.try_live_show_signup("+15551234567", "watch", "slicktext")
+        assert r.suppress_ai is True
+        assert r.join_confirmation_sms
+        assert "live" in r.join_confirmation_sms.lower() or "stream" in r.join_confirmation_sms.lower()
+
+
+def test_event_category_livestream_alias():
+    show = {
+        "id": 1,
+        "keyword": "watch",
+        "use_keyword_only": True,
+        "window_start": None,
+        "window_end": None,
+        "event_category": "livestream",
+    }
+    with patch.object(ls.repo, "active_live_shows", return_value=[show]), patch.object(
+        ls.repo, "add_signup", return_value=True
+    ):
+        r = ls.try_live_show_signup("+15551234567", "watch", "slicktext")
+        assert r.suppress_ai is True
+        assert r.join_confirmation_sms
+
+
 def test_try_live_show_signup_no_suppress_when_extra_words():
     show = {
         "id": 1,

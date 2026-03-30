@@ -11,6 +11,8 @@ from app.live_shows import repository as repo
 from app.live_shows.join_confirmations import (
     random_comedy_confirmation_new,
     random_comedy_confirmation_repeat,
+    random_live_stream_confirmation_new,
+    random_live_stream_confirmation_repeat,
 )
 from app.live_shows.keyword_match import body_matches_keyword, is_keyword_only_join
 
@@ -56,15 +58,18 @@ def _in_time_window(show: dict, now: datetime) -> bool:
 
 def _event_category(show: dict) -> str:
     raw = (show.get("event_category") or "other") or "other"
-    return str(raw).strip().lower()
+    v = str(raw).strip().lower()
+    if v == "livestream":
+        return "live_stream"
+    return v
 
 
 def try_live_show_signup(phone_number: str, message_text: str, channel: str) -> LiveShowSignupResult:
     """
     Record signup when a live show's rules match.
 
-    Comedy + keyword-only: sends a random confirmation SMS on new signup;
-    shorter message if they're already on the list.
+    Comedy or live stream + keyword-only: random confirmation SMS (new vs repeat);
+    other categories: keyword-only suppresses AI, no SMS.
     """
     out = LiveShowSignupResult()
     if not phone_number or not message_text:
@@ -114,11 +119,17 @@ def try_live_show_signup(phone_number: str, message_text: str, channel: str) -> 
                 )
 
             cat = _event_category(show)
-            if use_kw and is_keyword_only_join(message_text, show_kw) and cat == "comedy":
-                if inserted:
-                    out.join_confirmation_sms = random_comedy_confirmation_new()
+            if use_kw and is_keyword_only_join(message_text, show_kw) and cat in ("comedy", "live_stream"):
+                if cat == "comedy":
+                    if inserted:
+                        out.join_confirmation_sms = random_comedy_confirmation_new()
+                    else:
+                        out.join_confirmation_sms = random_comedy_confirmation_repeat()
                 else:
-                    out.join_confirmation_sms = random_comedy_confirmation_repeat()
+                    if inserted:
+                        out.join_confirmation_sms = random_live_stream_confirmation_new()
+                    else:
+                        out.join_confirmation_sms = random_live_stream_confirmation_repeat()
                 out.confirmation_phone = phone_number
                 out.confirmation_channel = channel
 

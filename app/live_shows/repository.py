@@ -52,7 +52,9 @@ def get_show(show_id: int) -> Optional[Dict[str, Any]]:
 
 def _normalize_event_category(raw: Optional[str]) -> str:
     v = (raw or "other").strip().lower()
-    return v if v in ("comedy", "other") else "other"
+    if v == "livestream":
+        v = "live_stream"
+    return v if v in ("comedy", "live_stream", "other") else "other"
 
 
 def create_show(
