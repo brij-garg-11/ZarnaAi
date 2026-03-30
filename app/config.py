@@ -38,6 +38,12 @@ SLICKTEXT_TEXTWORD_ID = os.getenv("SLICKTEXT_TEXTWORD_ID", "")
 SLICKTEXT_API_KEY  = os.getenv("SLICKTEXT_API_KEY", "")
 SLICKTEXT_BRAND_ID = os.getenv("SLICKTEXT_BRAND_ID", "")
 
+# --- Inbound webhook hardening (see app/inbound_security.py + main.py) ---
+# SLICKTEXT_WEBHOOK_SECRET — if set, POST /slicktext/webhook must include header:
+#   X-Zarna-Webhook-Secret: <same value>   (use a long random string; store only in Railway/env)
+# API_SECRET_KEY — required in production for POST /message (X-Api-Key header).
+# LOG_SENSITIVE_WEBHOOK_DATA — if true, log full SlickText payloads and Twilio bodies (default off).
+
 # --- Twilio ---
 # console.twilio.com → Account Dashboard → Account SID + Auth Token
 # Phone number in E.164 format, e.g. +18557689537

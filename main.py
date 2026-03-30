@@ -9,6 +9,15 @@ load_dotenv()
 
 from flask import Flask, request, jsonify
 
+from app.inbound_security import (
+    log_sensitive_webhook_data,
+    running_in_production,
+    slicktext_ignored_log,
+    slicktext_webhook_log_line,
+    slicktext_webhook_secret_configured,
+    timing_safe_equal,
+    verify_slicktext_webhook_secret,
+)
 from app.brain.handler import create_brain
 from app.messaging.slicktext_adapter import create_slicktext_adapter
 from app.messaging.twilio_adapter import create_twilio_adapter
@@ -34,6 +43,13 @@ app.register_blueprint(live_shows_bp)
 brain     = create_brain()
 slicktext = create_slicktext_adapter()
 twilio    = create_twilio_adapter()
+
+if running_in_production() and not slicktext_webhook_secret_configured():
+    logging.warning(
+        "Production: SLICKTEXT_WEBHOOK_SECRET is not set — anyone who can POST /slicktext/webhook "
+        "may trigger your bot. Generate a long random secret, set it in Railway, and add header "
+        "X-Zarna-Webhook-Secret on SlickText's webhook (if their UI supports custom headers)."
+    )
 
 # ---------------------------------------------------------------------------
 # Deduplication: last 200 message IDs (SlickText + Twilio)
@@ -95,14 +111,23 @@ def health():
 # POST JSON: { "phone_number": "...", "message": "..." }
 # ---------------------------------------------------------------------------
 
-_API_SECRET = os.getenv("API_SECRET_KEY", "")
+_API_SECRET = (os.getenv("API_SECRET_KEY") or "").strip()
 
 
 @app.route("/message", methods=["POST"])
 def message():
-    # API key check — requires X-Api-Key header matching API_SECRET_KEY env var
-    if _API_SECRET and request.headers.get("X-Api-Key") != _API_SECRET:
-        return jsonify({"error": "Unauthorized"}), 403
+    if running_in_production() and not _API_SECRET:
+        return jsonify(
+            {
+                "error": "Misconfigured",
+                "detail": "Set API_SECRET_KEY in the host environment to use POST /message in production.",
+            }
+        ), 503
+
+    got = (request.headers.get("X-Api-Key") or "").strip()
+    if _API_SECRET:
+        if not timing_safe_equal(_API_SECRET, got):
+            return jsonify({"error": "Unauthorized"}), 403
 
     # IP-based rate limiting — max 3 requests per 60 seconds
     client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
@@ -129,9 +154,12 @@ def message():
 # ---------------------------------------------------------------------------
 # SlickText webhook
 #
-# Configure this URL in SlickText:
-#   Dashboard → API & Webhooks → Webhook URL → https://yourdomain.com/slicktext/webhook
-#   Event to subscribe: "Inbox Chat Message Received"
+# Dashboard → API & Webhooks → Webhook URL → https://yourdomain.com/slicktext/webhook
+# Event: "Inbox Chat Message Received" (or equivalent for your account).
+#
+# If SLICKTEXT_WEBHOOK_SECRET is set in the environment, SlickText must also send header:
+#   X-Zarna-Webhook-Secret: <same value>
+# (Only when their product allows custom webhook headers; otherwise leave secret unset until it does.)
 # ---------------------------------------------------------------------------
 
 def _process_slicktext_message(phone_number: str, message_text: str) -> None:
@@ -148,11 +176,15 @@ def _process_slicktext_message(phone_number: str, message_text: str) -> None:
 
 @app.route("/slicktext/webhook", methods=["POST"])
 def slicktext_webhook():
+    if not verify_slicktext_webhook_secret():
+        logging.warning("SlickText webhook rejected: bad or missing X-Zarna-Webhook-Secret")
+        return jsonify({"error": "Unauthorized"}), 401
+
     payload = request.get_json(silent=True)
     if payload is None:
         payload = request.form.to_dict() or {}
 
-    logging.info("SlickText webhook raw payload: %s", payload)
+    slicktext_webhook_log_line(payload)
 
     # Deduplicate using ChatMessageId (guards against SlickText retries)
     try:
@@ -180,7 +212,7 @@ def slicktext_webhook():
         return jsonify({"status": "ok", "live_show": "join_no_reply"}), 200
 
     if not phone_number or not message_text:
-        logging.info("SlickText webhook: message filtered or unparseable. Payload: %s", payload)
+        slicktext_ignored_log(payload)
         return jsonify({"status": "ignored"}), 200
 
     if _is_rate_limited(phone_number):
@@ -220,11 +252,19 @@ def _process_twilio_message(phone_number: str, message_text: str) -> None:
 def twilio_webhook():
     form_data = request.form.to_dict()
     _from = form_data.get("From", "")
-    logging.info(
-        "Twilio webhook received: From=...%s Body=%s",
-        _from[-4:] if _from else "?",
-        form_data.get("Body"),
-    )
+    if log_sensitive_webhook_data():
+        logging.info(
+            "Twilio webhook received: From=...%s Body=%s",
+            _from[-4:] if _from else "?",
+            form_data.get("Body"),
+        )
+    else:
+        _body = form_data.get("Body") or ""
+        logging.info(
+            "Twilio webhook received: From=...%s body_chars=%s",
+            _from[-4:] if _from else "?",
+            len(str(_body)),
+        )
 
     # Signature validation — rejects spoofed requests in production.
     # Behind Railway's proxy, request.url is http:// but Twilio signs the https:// URL,
