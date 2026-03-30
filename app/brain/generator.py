@@ -1,14 +1,38 @@
+import logging
 import re
-from typing import List
+from typing import List, Optional
 
 from google import genai
 
 from app.brain.emphasis import strip_all_emphasis
 from app.brain.intent import Intent
-from app.config import CONVERSATION_HISTORY_LIMIT, GEMINI_API_KEY, GENERATION_MODEL
+from app.config import (
+    ANTHROPIC_API_KEY,
+    CONVERSATION_HISTORY_LIMIT,
+    GEMINI_API_KEY,
+    GENERATION_MODEL,
+    HIGH_MODEL,
+    MID_MODEL,
+    MULTI_MODEL_REPLY,
+    OPENAI_API_KEY,
+)
+
+_CLIENT = genai.Client(api_key=GEMINI_API_KEY)
+_LOGGER = logging.getLogger(__name__)
+
+# Links / strict formats — keep on Gemini only to reduce broken URLs.
+_STRUCTURED_INTENTS = frozenset(
+    {Intent.CLIP, Intent.SHOW, Intent.BOOK, Intent.PODCAST},
+)
 
 
-_client = genai.Client(api_key=GEMINI_API_KEY)
+def _multi_model_enabled() -> bool:
+    if MULTI_MODEL_REPLY in ("0", "false", "off"):
+        return False
+    if MULTI_MODEL_REPLY == "on":
+        return bool((OPENAI_API_KEY or "").strip() or (ANTHROPIC_API_KEY or "").strip())
+    # auto: use OpenAI and/or Anthropic when at least one key is set
+    return bool((OPENAI_API_KEY or "").strip() or (ANTHROPIC_API_KEY or "").strip())
 
 _STYLE_RULES = """
 Voice: sharp, high-energy, opinionated, family- and culture-aware — conversational stand-up energy, never generic or male-coded. Prefer parenting, marriage, immigrant-family, Indian-mom angles when relevant.
@@ -300,6 +324,106 @@ def _get_fallback() -> str:
     return reply
 
 
+def _generate_gemini_raw(prompt: str) -> str:
+    response = _CLIENT.models.generate_content(
+        model=GENERATION_MODEL,
+        contents=prompt,
+    )
+    return (response.text or "").strip()
+
+
+def _generate_openai_raw(prompt: str) -> str:
+    from openai import OpenAI
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    r = client.chat.completions.create(
+        model=MID_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=500,
+        temperature=0.85,
+    )
+    return ((r.choices[0].message.content or "") if r.choices else "").strip()
+
+
+def _generate_anthropic_raw(prompt: str) -> str:
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    msg = client.messages.create(
+        model=HIGH_MODEL,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    parts: list[str] = []
+    for block in msg.content:
+        if getattr(block, "type", None) == "text":
+            parts.append(block.text)
+    return "".join(parts).strip()
+
+
+def _produce_raw_text(
+    intent: Intent,
+    prompt: str,
+    routing_tier: Optional[str],
+) -> str:
+    """Choose provider; fall back to Gemini on errors or missing keys."""
+    structured = intent in _STRUCTURED_INTENTS
+    if structured or not _multi_model_enabled():
+        try:
+            return _generate_gemini_raw(prompt)
+        except Exception as exc:
+            _LOGGER.error("Gemini generation error: %s", exc)
+            return ""
+
+    # Explicit tier only (handler passes low|medium|high). No tier => legacy Gemini-only.
+    if routing_tier is None:
+        try:
+            return _generate_gemini_raw(prompt)
+        except Exception as exc:
+            _LOGGER.error("Gemini generation error: %s", exc)
+            return ""
+
+    tier = routing_tier.lower()
+    if tier not in ("low", "medium", "high"):
+        tier = "medium"
+
+    if tier == "low":
+        try:
+            return _generate_gemini_raw(prompt)
+        except Exception as exc:
+            _LOGGER.error("Gemini (low) error: %s", exc)
+            return ""
+
+    if tier == "medium":
+        if (OPENAI_API_KEY or "").strip():
+            try:
+                return _generate_openai_raw(prompt)
+            except Exception as exc:
+                _LOGGER.warning("OpenAI generation error, falling back to Gemini: %s", exc)
+        try:
+            return _generate_gemini_raw(prompt)
+        except Exception as exc:
+            _LOGGER.error("Gemini fallback error: %s", exc)
+            return ""
+
+    # high
+    if (ANTHROPIC_API_KEY or "").strip():
+        try:
+            return _generate_anthropic_raw(prompt)
+        except Exception as exc:
+            _LOGGER.warning("Anthropic generation error: %s", exc)
+    if (OPENAI_API_KEY or "").strip():
+        try:
+            return _generate_openai_raw(prompt)
+        except Exception as exc:
+            _LOGGER.warning("OpenAI fallback error: %s", exc)
+    try:
+        return _generate_gemini_raw(prompt)
+    except Exception as exc:
+        _LOGGER.error("Gemini final fallback error: %s", exc)
+        return ""
+
+
 def generate_zarna_reply(
     intent: Intent,
     user_message: str,
@@ -307,20 +431,16 @@ def generate_zarna_reply(
     history: List[dict] = None,
     fan_memory: str = "",
     emphasis_suppress_all: bool = False,
+    routing_tier: Optional[str] = None,
 ) -> str:
-    import logging
-    logger = logging.getLogger(__name__)
-
+    """
+    Generate reply. For GENERAL/JOKE with multi-model enabled, pass routing_tier
+    from classify_routing_tier(). Structured intents (clip/show/book/podcast) always use Gemini.
+    """
     prompt = _build_prompt(intent, user_message, chunks, history or [], fan_memory)
 
-    try:
-        response = _client.models.generate_content(
-            model=GENERATION_MODEL,
-            contents=prompt,
-        )
-        raw = response.text.strip()
-    except Exception as exc:
-        logger.error("Gemini generation error: %s", exc)
+    raw = _produce_raw_text(intent, prompt, routing_tier)
+    if not (raw or "").strip():
         return _get_fallback()
 
     # SHOW, BOOK, PODCAST, and CLIP replies include a link on its own line — preserve both lines but still cap

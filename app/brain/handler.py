@@ -3,9 +3,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.brain.conversation_end import is_conversation_ender
 from app.brain.emphasis import should_suppress_all_emphasis
-from app.brain.intent import classify_intent
 from app.brain.generator import generate_zarna_reply
+from app.brain.intent import Intent, classify_intent
 from app.brain.memory import extract_memory
+from app.brain.routing import classify_routing_tier
 from app.config import CONVERSATION_HISTORY_LIMIT
 from app.retrieval.base import BaseRetriever
 from app.storage.base import BaseStorage
@@ -63,7 +64,12 @@ class ZarnaBrain:
             message_text, intent, assistant_texts
         )
 
-        # 7. Generate reply (with fan memory injected)
+        # 7. Route complexity (Gemini Flash) for GENERAL/JOKE; structured intents stay Gemini-only.
+        if intent in (Intent.CLIP, Intent.SHOW, Intent.BOOK, Intent.PODCAST):
+            routing_tier = None
+        else:
+            routing_tier = classify_routing_tier(message_text, history, fan_memory)
+
         reply = generate_zarna_reply(
             intent=intent,
             user_message=message_text,
@@ -71,6 +77,7 @@ class ZarnaBrain:
             history=history,
             fan_memory=fan_memory,
             emphasis_suppress_all=emphasis_suppress_all,
+            routing_tier=routing_tier,
         )
 
         # 8. Persist the assistant's reply

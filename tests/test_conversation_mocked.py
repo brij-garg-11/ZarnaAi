@@ -20,7 +20,9 @@ class _StubRetriever(BaseRetriever):
         ]
 
 
-def test_mocked_multi_turn_conversation_includes_voice_rules_in_prompt():
+@patch("app.brain.handler.extract_memory", return_value=("", [], "", False))
+@patch("app.brain.handler.classify_routing_tier", return_value="low")
+def test_mocked_multi_turn_conversation_includes_voice_rules_in_prompt(mock_route, _mem):
     phone = "+19998887777"
     user_turns = [
         "tell me a joke about Indian moms",
@@ -39,7 +41,7 @@ def test_mocked_multi_turn_conversation_includes_voice_rules_in_prompt():
         ),
     ]
 
-    with patch("app.brain.generator._client.models.generate_content") as mock_gen:
+    with patch("app.brain.generator._CLIENT.models.generate_content") as mock_gen:
         mock_gen.side_effect = mock_responses
 
         brain = ZarnaBrain(storage=InMemoryStorage(), retriever=_StubRetriever())

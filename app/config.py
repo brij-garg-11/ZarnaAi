@@ -2,9 +2,20 @@ import os
 
 # --- Gemini ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GENERATION_MODEL = "gemini-2.5-flash"
-INTENT_MODEL     = "gemini-2.5-flash"   # same model as generation — older flash versions deprecated
-EMBEDDING_MODEL  = "gemini-embedding-001"
+GENERATION_MODEL = os.getenv("GENERATION_MODEL", "gemini-2.5-flash")
+INTENT_MODEL     = os.getenv("INTENT_MODEL", "gemini-2.5-flash")  # older flash versions deprecated
+ROUTER_MODEL     = os.getenv("ROUTER_MODEL", "gemini-2.5-flash")  # complexity routing (fast/cheap)
+EMBEDDING_MODEL  = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001")
+
+# --- Multi-model replies (optional; falls back to Gemini if keys missing) ---
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+# Mid tier (conversation): override to your org’s mini model ID, e.g. gpt-4o-mini
+MID_MODEL = os.getenv("MID_MODEL", "gpt-4o-mini")
+# High tier (nuanced / long / advice): override to current Claude Sonnet ID
+HIGH_MODEL = os.getenv("HIGH_MODEL", "claude-sonnet-4-20250514")
+# auto | on | off — off forces all replies through Gemini even if keys are set
+MULTI_MODEL_REPLY = os.getenv("MULTI_MODEL_REPLY", "auto").strip().lower()
 
 # --- Data ---
 # Use absolute paths relative to this file so the app works regardless of
