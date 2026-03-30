@@ -56,9 +56,10 @@ def try_live_show_signup(phone_number: str, message_text: str, channel: str) -> 
         use_kw = bool(show.get("use_keyword_only", True))
 
         if use_kw:
-            if not kw:
+            show_kw = (show.get("keyword") or "").strip()
+            if not show_kw:
                 continue
-            if not _body_matches_keyword(message_text, kw):
+            if not _body_matches_keyword(message_text, show_kw):
                 continue
             if not _in_time_window(show, now):
                 continue
