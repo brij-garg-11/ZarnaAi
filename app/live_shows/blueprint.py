@@ -143,6 +143,7 @@ def list_shows():
         rows = '<tr><td colspan="4" style="color:#6b7280">No shows yet.</td></tr>'
     body = f"""
 <div class="callout">
+  <strong>Live mode</strong> — Only one show can be <code>live</code> at a time. Clicking <strong>Go live</strong> automatically ends any other live show so signups match the right keyword.<br><br>
   <strong>How bulk send works</strong><br>
   • <strong>Twilio:</strong> one <code>messages.create</code> per number (optional <code>TWILIO_MESSAGING_SERVICE_SID</code>).<br>
   • <strong>SlickText one-by-one:</strong> same API as chat; works on v1 and v2.<br>

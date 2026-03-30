@@ -84,6 +84,16 @@ def update_show_status(show_id: int, status: str) -> None:
     try:
         with c:
             with c.cursor() as cur:
+                # Only one show may be "live" — otherwise inbound signup matches the
+                # lowest id first and fans texting the new show's keyword never join it.
+                if status == "live":
+                    cur.execute(
+                        """
+                        UPDATE live_shows SET status = 'ended', updated_at = NOW()
+                        WHERE status = 'live' AND id <> %s
+                        """,
+                        (show_id,),
+                    )
                 cur.execute(
                     """
                     UPDATE live_shows SET status = %s, updated_at = NOW()

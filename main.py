@@ -164,13 +164,15 @@ def slicktext_webhook():
         logging.info("Duplicate SlickText webhook ignored (ChatMessageId=%s)", message_id)
         return jsonify({"status": "duplicate"}), 200
 
-    phone_number, message_text = slicktext.parse_inbound(payload)
+    raw_phone, raw_body = slicktext.peek_inbound(payload)
+    if raw_phone and raw_body:
+        _safe_try_live_show_signup(raw_phone, raw_body, "slicktext")
+
+    phone_number, message_text = slicktext.filter_inbound_for_ai(raw_phone, raw_body)
 
     if not phone_number or not message_text:
         logging.info("SlickText webhook: message filtered or unparseable. Payload: %s", payload)
         return jsonify({"status": "ignored"}), 200
-
-    _safe_try_live_show_signup(phone_number, message_text, "slicktext")
 
     if _is_rate_limited(phone_number):
         logging.warning("Rate limit hit for ...%s — dropping message", phone_number[-4:] if phone_number else "?")
@@ -235,14 +237,16 @@ def twilio_webhook():
         logging.info("Duplicate Twilio webhook ignored (MessageSid=%s)", message_sid)
         return ("", 204)
 
-    phone_number, message_text = twilio.parse_inbound(form_data)
+    raw_from, raw_body = twilio.peek_inbound(form_data)
+    if raw_from and raw_body:
+        _tw_ch = "twilio_whatsapp" if raw_from.lower().startswith("whatsapp:") else "twilio"
+        _safe_try_live_show_signup(raw_from, raw_body, _tw_ch)
+
+    phone_number, message_text = twilio.filter_inbound_for_ai(raw_from, raw_body)
 
     if not phone_number or not message_text:
         logging.info("Twilio webhook: message filtered or unparseable.")
         return ("", 204)
-
-    _tw_ch = "twilio_whatsapp" if phone_number.lower().startswith("whatsapp:") else "twilio"
-    _safe_try_live_show_signup(phone_number, message_text, _tw_ch)
 
     if _is_rate_limited(phone_number):
         logging.warning("Rate limit hit for Twilio ...%s — dropping message", phone_number[-4:] if phone_number else "?")

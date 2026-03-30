@@ -114,14 +114,15 @@ class TwilioAdapter:
     # Inbound
     # ------------------------------------------------------------------
 
-    def parse_inbound(self, form_data: dict) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Extract (phone_number, message_text) from a Twilio inbound webhook.
-        form_data is request.form.to_dict() from Flask.
-        """
+    def peek_inbound(self, form_data: dict) -> Tuple[Optional[str], Optional[str]]:
+        """Raw From + Body for live-show signup (before AI filters)."""
         phone = form_data.get("From", "").strip() or None
         message = form_data.get("Body", "").strip() or None
+        return phone, message
 
+    def filter_inbound_for_ai(
+        self, phone: Optional[str], message: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
         if not phone or not message:
             return None, None
 
@@ -138,6 +139,14 @@ class TwilioAdapter:
             return None, None
 
         return phone, message
+
+    def parse_inbound(self, form_data: dict) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Extract (phone_number, message_text) from a Twilio inbound webhook.
+        form_data is request.form.to_dict() from Flask.
+        """
+        p, m = self.peek_inbound(form_data)
+        return self.filter_inbound_for_ai(p, m)
 
     # ------------------------------------------------------------------
     # Outbound

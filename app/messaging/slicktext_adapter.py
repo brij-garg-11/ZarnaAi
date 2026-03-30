@@ -116,16 +116,45 @@ class SlickTextAdapter:
     # Inbound
     # ------------------------------------------------------------------
 
+    def peek_inbound(self, payload: dict) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Raw FromNumber + Body (or v2 equivalent) with no keyword/reaction filtering.
+        Use for live-show signup before filter_inbound_for_ai drops marketing keywords.
+        """
+        if self._version == "v1":
+            return self._peek_inbound_v1(payload)
+        return self._peek_inbound_v2(payload)
+
+    def filter_inbound_for_ai(
+        self, phone: Optional[str], message: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Apply reserved-keyword / reaction / emoji-only rules for the AI reply path."""
+        if not message:
+            return phone, message
+
+        if _is_reserved_keyword(message):
+            logger.info(f"Ignoring reserved keyword from {phone}: {message!r}")
+            return None, None
+
+        if _is_reaction(message):
+            logger.info(f"Ignoring reaction from {phone}: {message[:60]}")
+            return None, None
+
+        if _is_emoji_only(message):
+            logger.info(f"Ignoring emoji-only message from {phone}: {message[:60]}")
+            return None, None
+
+        return phone, message
+
     def parse_inbound(self, payload: dict) -> Tuple[Optional[str], Optional[str]]:
         """
         Extract (phone_number, message_text) from a SlickText webhook payload.
         Handles both v1 and v2 payload shapes automatically.
         """
-        if self._version == "v1":
-            return self._parse_inbound_v1(payload)
-        return self._parse_inbound_v2(payload)
+        p, m = self.peek_inbound(payload)
+        return self.filter_inbound_for_ai(p, m)
 
-    def _parse_inbound_v1(self, payload: dict) -> Tuple[Optional[str], Optional[str]]:
+    def _peek_inbound_v1(self, payload: dict) -> Tuple[Optional[str], Optional[str]]:
         """
         v1 payload: SlickText sends a form POST with a single field "data"
         whose value is a JSON string:
@@ -144,24 +173,11 @@ class SlickTextAdapter:
                 pass
 
         chat = payload.get("ChatMessage", {})
-        phone   = chat.get("FromNumber", "").strip() or None
+        phone = chat.get("FromNumber", "").strip() or None
         message = chat.get("Body", "").strip() or None
-
-        if message and _is_reserved_keyword(message):
-            logger.info(f"Ignoring reserved keyword from {phone}: {message!r}")
-            return None, None
-
-        if message and _is_reaction(message):
-            logger.info(f"Ignoring reaction from {phone}: {message[:60]}")
-            return None, None
-
-        if message and _is_emoji_only(message):
-            logger.info(f"Ignoring emoji-only message from {phone}: {message[:60]}")
-            return None, None
-
         return phone, message
 
-    def _parse_inbound_v2(self, payload: dict) -> Tuple[Optional[str], Optional[str]]:
+    def _peek_inbound_v2(self, payload: dict) -> Tuple[Optional[str], Optional[str]]:
         """
         v2 payload shape:
         {
@@ -179,21 +195,9 @@ class SlickTextAdapter:
             return None, None
 
         message_text = data.get("last_message", "").strip() or None
-        contact_id   = data.get("contact_id")
+        contact_id = data.get("contact_id")
 
         if not contact_id or not message_text:
-            return None, None
-
-        if _is_reserved_keyword(message_text):
-            logger.info(f"Ignoring reserved keyword (v2, contact {contact_id}): {message_text!r}")
-            return None, None
-
-        if _is_reaction(message_text):
-            logger.info(f"Ignoring reaction (v2, contact {contact_id}): {message_text[:60]}")
-            return None, None
-
-        if _is_emoji_only(message_text):
-            logger.info(f"Ignoring emoji-only message (v2, contact {contact_id}): {message_text[:60]}")
             return None, None
 
         phone_number = self._lookup_phone_v2(contact_id)
