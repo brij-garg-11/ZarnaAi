@@ -15,7 +15,6 @@ from __future__ import annotations
 import csv
 import io
 import logging
-from datetime import datetime, timezone
 from urllib.parse import quote
 
 from flask import Blueprint, Response, redirect, request, url_for
@@ -28,6 +27,13 @@ from app.admin_auth import (
 )
 from app.live_shows import repository as repo
 from app.live_shows.broadcast_worker import start_broadcast_thread
+from app.live_shows.event_time import (
+    EVENT_TIMEZONE_CHOICES,
+    format_window_human,
+    parse_local_datetime,
+    timezone_select_value_from_show,
+    utc_to_datetime_local_value,
+)
 from app.messaging.broadcast import normalize_e164, resolve_broadcast_provider
 from app.messaging.slicktext_adapter import create_slicktext_adapter
 from app.messaging.twilio_adapter import create_twilio_adapter
@@ -85,16 +91,12 @@ def _auth_gate():
     return None
 
 
-def _parse_utc_datetime(value: str | None):
-    if not value or not str(value).strip():
-        return None
-    v = str(value).strip()
-    try:
-        if len(v) == 16 and "T" in v:
-            return datetime.strptime(v, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc)
-        return datetime.fromisoformat(v.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+def _timezone_options_html(selected: str) -> str:
+    opts = []
+    for z, lbl in EVENT_TIMEZONE_CHOICES:
+        sel = " selected" if z == selected else ""
+        opts.append(f'<option value="{_e(z)}"{sel}>{_e(lbl)}</option>')
+    return "\n".join(opts)
 
 
 def _shell(title: str, body: str, nav_active: str = "live") -> str:
@@ -234,8 +236,9 @@ def new_show():
         keyword = request.form.get("keyword", "").strip()
         mode = request.form.get("signup_mode", "keyword")
         use_kw = mode == "keyword"
-        ws = _parse_utc_datetime(request.form.get("window_start"))
-        we = _parse_utc_datetime(request.form.get("window_end"))
+        etz_raw = request.form.get("event_timezone") or "America/New_York"
+        ws = parse_local_datetime(request.form.get("window_start"), etz_raw)
+        we = parse_local_datetime(request.form.get("window_end"), etz_raw)
         deliver = (request.form.get("deliver_as") or "sms").strip().lower()
         if deliver not in ("sms", "whatsapp"):
             deliver = "sms"
@@ -252,13 +255,13 @@ def new_show():
                 '<div class="card"><p style="color:#f87171">Window start and end required for time-window mode.</p></div>',
             )
         try:
-            sid = repo.create_show(name, keyword, use_kw, ws, we, deliver, event_cat)
+            sid = repo.create_show(name, keyword, use_kw, ws, we, deliver, event_cat, etz_raw)
         except Exception as e:
             logger.exception("create_show")
             return _shell("New live show", f'<div class="card"><p style="color:#f87171">{_e(str(e))}</p></div>')
         return redirect(url_for("live_shows.show_detail", show_id=sid))
 
-    form = """
+    form = f"""
 <div class="card">
 <form method="post">
   <label>Show name</label>
@@ -271,11 +274,16 @@ def new_show():
   <label>Keyword (keyword mode)</label>
   <input type="text" name="keyword" placeholder="e.g. CHICAGO">
   <small class="hint">Case-insensitive; minor typos allowed for 3+ character keywords. Keyword-only messages skip the AI; comedy events also send a fun confirmation SMS.</small>
-  <label>Window start (UTC, optional filter)</label>
+  <label>Event timezone</label>
+  <select name="event_timezone">
+{_timezone_options_html("America/New_York")}
+  </select>
+  <small class="hint">Where the show is (e.g. Eastern for NYC). The window times below are in this zone; we save exact instants in UTC.</small>
+  <label>Window start</label>
   <input type="datetime-local" name="window_start">
-  <label>Window end (UTC, optional filter)</label>
+  <label>Window end</label>
   <input type="datetime-local" name="window_end">
-  <small class="hint">In keyword mode, optional window still restricts when signups count. Times are interpreted as UTC.</small>
+  <small class="hint">Keyword mode: leave blank for no time limit. Time-window mode: both required.</small>
   <label>Broadcast channel</label>
   <select name="deliver_as">
     <option value="sms">SMS (Twilio SMS / SlickText SMS)</option>
@@ -286,7 +294,7 @@ def new_show():
     <option value="comedy" selected>Comedy show — fans get a fun confirmation SMS when they text the keyword (keyword-only join)</option>
     <option value="other">Other — keyword join stays silent (no auto confirmation)</option>
   </select>
-  <small class="hint">Comedy confirmations are positive, in Zarna's voice, and invite them to text with questions.</small>
+  <small class="hint">Comedy confirmations: upbeat welcome, a joke, enjoy the show — all automated SMS.</small>
   <p><button type="submit" class="btn">Create draft</button>
   <a class="btn btn-secondary" href="/admin/live-shows">Cancel</a></p>
 </form>
@@ -309,6 +317,8 @@ def show_detail(show_id: int):
         err_banner = '<div class="callout" style="border-color:#f87171;color:#fecaca">Campaign mode needs SlickText (not Twilio). Set provider to SlickText or Auto with v2 keys.</div>'
     elif err == "test_bad_phone":
         err_banner = '<div class="callout" style="border-color:#f87171;color:#fecaca">Test send failed — check the phone number format and provider (SMS vs WhatsApp).</div>'
+    elif err == "window":
+        err_banner = '<div class="callout" style="border-color:#f87171;color:#fecaca">Time-window mode needs both start and end in the signup window form.</div>'
     ok_banner = ""
     if request.args.get("test") == "sent":
         ok_banner = '<div class="callout" style="border-color:#065f46;color:#6ee7b7">Test message sent — check that phone.</div>'
@@ -366,6 +376,30 @@ def show_detail(show_id: int):
   <div class="stat-box"><div class="num" style="font-size:17px;line-height:1.25;word-break:break-word">{_e(show.get("keyword") or "—")}</div><div class="lbl">Keyword</div></div>
   <div class="stat-box"><div class="num" style="font-size:15px">{_e(show.get("deliver_as") or "sms")}</div><div class="lbl">Channel</div></div>
   <div class="stat-box"><div class="num" style="font-size:15px">{_e(type_lbl)}</div><div class="lbl">Event type</div></div>
+</div>"""
+
+    tz_sel = timezone_select_value_from_show(show.get("event_timezone"))
+    ws_val = utc_to_datetime_local_value(show.get("window_start"), show.get("event_timezone"))
+    we_val = utc_to_datetime_local_value(show.get("window_end"), show.get("event_timezone"))
+    win_human = format_window_human(
+        show.get("window_start"), show.get("window_end"), show.get("event_timezone")
+    )
+    schedule_card = f"""
+<div class="card">
+  <h3 style="margin-top:0">Signup window</h3>
+  <p style="font-size:14px;line-height:1.6;margin:0 0 14px 0">{win_human}</p>
+  <form method="post" action="/admin/live-shows/{show_id}/schedule">
+    <label>Event timezone</label>
+    <select name="event_timezone">
+{_timezone_options_html(tz_sel)}
+    </select>
+    <label>Window start</label>
+    <input type="datetime-local" name="window_start" value="{_e(ws_val)}">
+    <label>Window end</label>
+    <input type="datetime-local" name="window_end" value="{_e(we_val)}">
+    <small class="hint">Keyword mode: leave both blank for no time limit. Time-window mode: both required.</small>
+    <p><button type="submit" class="btn">Save window</button></p>
+  </form>
 </div>"""
 
     sample_lines = [_mask_phone_display(u["phone_number"]) for u in signups[:10]]
@@ -458,9 +492,26 @@ def show_detail(show_id: int):
 <a class="btn btn-secondary" href="/admin/live-shows/{show_id}/export">Export CSV</a>
 <a class="btn btn-secondary" href="/admin/live-shows">All shows</a></p>
 {header_card}
+{schedule_card}
 {signups_card}
 {broadcast_form}"""
     return _shell(show["name"], body)
+
+
+@live_shows_bp.route("/admin/live-shows/<int:show_id>/schedule", methods=["POST"])
+def show_schedule(show_id: int):
+    show = repo.get_show(show_id)
+    if not show:
+        return redirect("/admin/live-shows")
+    etz_raw = request.form.get("event_timezone") or "America/New_York"
+    ws = parse_local_datetime(request.form.get("window_start"), etz_raw)
+    we = parse_local_datetime(request.form.get("window_end"), etz_raw)
+    if not show.get("use_keyword_only"):
+        if ws is None or we is None:
+            return redirect(url_for("live_shows.show_detail", show_id=show_id, err="window"))
+    repo.update_show_schedule(show_id, ws, we, etz_raw)
+    repo.log_audit("show_schedule", "signup window / timezone updated", show_id)
+    return redirect(url_for("live_shows.show_detail", show_id=show_id))
 
 
 @live_shows_bp.route("/admin/live-shows/<int:show_id>/status", methods=["POST"])

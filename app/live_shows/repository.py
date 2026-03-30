@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 import psycopg2.extras
 
 from app.admin_auth import get_db_connection
+from app.live_shows.event_time import normalize_event_timezone
 from app.messaging.broadcast import normalize_e164
 
 
@@ -62,19 +63,21 @@ def create_show(
     window_end: Optional[datetime],
     deliver_as: str,
     event_category: str = "other",
+    event_timezone: Optional[str] = None,
 ) -> int:
     c = _conn()
     if not c:
         raise RuntimeError("No database")
     ec = _normalize_event_category(event_category)
+    etz = normalize_event_timezone(event_timezone or "America/New_York")
     try:
         with c:
             with c.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO live_shows
-                      (name, keyword, use_keyword_only, window_start, window_end, deliver_as, status, event_category)
-                    VALUES (%s, %s, %s, %s, %s, %s, 'draft', %s)
+                      (name, keyword, use_keyword_only, window_start, window_end, deliver_as, status, event_category, event_timezone)
+                    VALUES (%s, %s, %s, %s, %s, %s, 'draft', %s, %s)
                     RETURNING id
                     """,
                     (
@@ -85,9 +88,35 @@ def create_show(
                         window_end,
                         deliver_as,
                         ec,
+                        etz,
                     ),
                 )
                 return cur.fetchone()[0]
+    finally:
+        c.close()
+
+
+def update_show_schedule(
+    show_id: int,
+    window_start: Optional[datetime],
+    window_end: Optional[datetime],
+    event_timezone: str,
+) -> None:
+    c = _conn()
+    if not c:
+        return
+    etz = normalize_event_timezone(event_timezone)
+    try:
+        with c:
+            with c.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE live_shows
+                    SET window_start = %s, window_end = %s, event_timezone = %s, updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (window_start, window_end, etz, show_id),
+                )
     finally:
         c.close()
 
