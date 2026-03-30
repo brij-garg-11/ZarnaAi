@@ -661,6 +661,25 @@ def admin():
     range_pills = _range_links(chart_days)
     health_note = f'<span class="health-pill">{mh} fan msg in last hour</span>'
 
+    from app.ops_metrics import snapshot as ops_snapshot
+
+    ops = ops_snapshot()
+    deploy_ref = (os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT") or "").strip()[:12]
+    deploy_disp = deploy_ref if deploy_ref else "—"
+    ops_signals_html = f"""
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-title">Service signals (this worker · resets on deploy)</div>
+      <p style="color:#94a3b8;font-size:13px;margin-bottom:10px">Deploy ref: <code style="color:#e2e8f0">{_esc(deploy_disp)}</code>
+        · Active AI replies: <strong>{ops.get("active_ai_replies", 0)}</strong></p>
+      <ul style="color:#cbd5e1;font-size:13px;line-height:1.75;list-style:none;padding:0;margin:0">
+        <li>SlickText webhook 401: {ops.get("slicktext_webhook_401", 0)}</li>
+        <li>Twilio signature fail: {ops.get("twilio_signature_fail", 0)}</li>
+        <li>AI / brain errors: {ops.get("ai_reply_error", 0)}</li>
+        <li>Dropped (at capacity): {ops.get("ai_reply_capacity_reject", 0)}</li>
+      </ul>
+      <p style="color:#64748b;font-size:12px;margin-top:10px">Set <code>AI_REPLY_MAX_CONCURRENT</code> (default 16) to tune load.</p>
+    </div>"""
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -841,6 +860,7 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
   {filter_banner}
 
   <div class="tab-content {'active' if tab == 'overview' else ''}" id="tab-overview">
+    {ops_signals_html}
 
     <div class="stats-grid">
       <div class="stat-card">

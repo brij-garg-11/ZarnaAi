@@ -23,18 +23,36 @@ from app.messaging.slicktext_adapter import create_slicktext_adapter
 from app.messaging.twilio_adapter import create_twilio_adapter
 from app.admin import admin_bp
 from app.live_shows.blueprint import live_shows_bp
-from app.live_shows.signup import try_live_show_signup
+from app.live_shows.signup import LiveShowSignupResult, try_live_show_signup
+from app.ops_metrics import ai_reply_enter, ai_reply_leave, bump as ops_bump
 
 logging.basicConfig(level=logging.INFO)
 
 
-def _safe_try_live_show_signup(phone_number: str, message_text: str, channel: str) -> bool:
-    """Never let live-show DB logic break inbound webhooks. True = skip AI (keyword-only join)."""
+def _safe_try_live_show_signup(phone_number: str, message_text: str, channel: str) -> LiveShowSignupResult:
+    """Never let live-show DB logic break inbound webhooks."""
     try:
         return try_live_show_signup(phone_number, message_text, channel)
     except Exception:
         logging.exception("Live show signup failed; continuing with reply pipeline")
-        return False
+        return LiveShowSignupResult()
+
+
+def _send_join_confirmation_async(phone: str, channel: str, body: str) -> None:
+    """Fire-and-forget SMS so webhook stays fast."""
+
+    def run():
+        try:
+            ch = (channel or "").lower()
+            if ch == "slicktext":
+                slicktext.send_reply(phone, body)
+            else:
+                twilio.send_reply(phone, body)
+        except Exception as e:
+            logging.error("Join confirmation SMS failed (...%s): %s", phone[-4:] if phone else "?", e)
+
+    threading.Thread(target=run, daemon=True).start()
+
 
 app = Flask(__name__)
 app.register_blueprint(admin_bp)
@@ -53,7 +71,6 @@ if running_in_production() and not slicktext_webhook_secret_configured():
 
 # ---------------------------------------------------------------------------
 # Deduplication: last 200 message IDs (SlickText + Twilio)
-# Prevents double-replies when either platform retries a webhook we already handled
 # ---------------------------------------------------------------------------
 
 _seen_message_ids: OrderedDict = OrderedDict()
@@ -74,14 +91,13 @@ def _already_processed(message_id: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Per-phone rate limiting — max 3 messages per 60 seconds per number
-# Protects against runaway loops and abuse during high-volume events
+# Per-phone rate limiting — AI path only (keyword-only joins skip this)
 # ---------------------------------------------------------------------------
 
-_rate_data: dict = {}   # phone -> [timestamp, ...]
+_rate_data: dict = {}
 _rate_lock = threading.Lock()
-_RATE_WINDOW = 60       # seconds
-_RATE_MAX    = 3        # messages per window
+_RATE_WINDOW = 60
+_RATE_MAX    = 3
 
 
 def _is_rate_limited(phone_number: str) -> bool:
@@ -97,19 +113,10 @@ def _is_rate_limited(phone_number: str) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# Health check
-# ---------------------------------------------------------------------------
-
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "service": "zarna-ai"})
 
-
-# ---------------------------------------------------------------------------
-# Provider-agnostic endpoint (useful for testing without SlickText)
-# POST JSON: { "phone_number": "...", "message": "..." }
-# ---------------------------------------------------------------------------
 
 _API_SECRET = (os.getenv("API_SECRET_KEY") or "").strip()
 
@@ -129,54 +136,65 @@ def message():
         if not timing_safe_equal(_API_SECRET, got):
             return jsonify({"error": "Unauthorized"}), 403
 
-    # IP-based rate limiting — max 3 requests per 60 seconds
     client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
     if _is_rate_limited(client_ip):
         return jsonify({"error": "Rate limit exceeded"}), 429
 
     data = request.get_json(silent=True)
-
     if not data:
         return jsonify({"error": "Request body must be JSON"}), 400
 
     phone_number = data.get("phone_number", "").strip()
     message_text = data.get("message", "").strip()
-
     if not phone_number:
         return jsonify({"error": "phone_number is required"}), 400
     if not message_text:
         return jsonify({"error": "message is required"}), 400
 
-    reply = brain.handle_incoming_message(phone_number, message_text)
+    if not ai_reply_enter():
+        ops_bump("ai_reply_capacity_reject")
+        return jsonify({"error": "Server busy", "detail": "Try again in a moment."}), 503
+    try:
+        reply = brain.handle_incoming_message(phone_number, message_text)
+    except Exception as e:
+        ops_bump("ai_reply_error")
+        logging.exception("Brain error on /message: %s", e)
+        return jsonify({"error": "Internal error"}), 500
+    finally:
+        ai_reply_leave()
+
     return jsonify({"reply": reply, "skipped": not (reply or "").strip()})
 
 
 # ---------------------------------------------------------------------------
 # SlickText webhook
-#
-# Dashboard → API & Webhooks → Webhook URL → https://yourdomain.com/slicktext/webhook
-# Event: "Inbox Chat Message Received" (or equivalent for your account).
-#
-# If SLICKTEXT_WEBHOOK_SECRET is set in the environment, SlickText must also send header:
-#   X-Zarna-Webhook-Secret: <same value>
-# (Only when their product allows custom webhook headers; otherwise leave secret unset until it does.)
 # ---------------------------------------------------------------------------
 
+
 def _process_slicktext_message(phone_number: str, message_text: str) -> None:
-    """Run brain + reply in a background thread so the webhook returns instantly."""
+    if not ai_reply_enter():
+        ops_bump("ai_reply_capacity_reject")
+        logging.warning("AI at capacity — SlickText message dropped (...%s)", phone_number[-4:])
+        return
     try:
-        reply = brain.handle_incoming_message(phone_number, message_text)
+        try:
+            reply = brain.handle_incoming_message(phone_number, message_text)
+        except Exception as e:
+            ops_bump("ai_reply_error")
+            logging.error("Error processing SlickText message from %s: %s", phone_number, e)
+            return
         if not (reply or "").strip():
             logging.info("No reply for ...%s (conversation ender or empty)", phone_number[-4:])
             return
         slicktext.send_reply(phone_number, reply)
-    except Exception as e:
-        logging.error("Error processing SlickText message from %s: %s", phone_number, e)
+    finally:
+        ai_reply_leave()
 
 
 @app.route("/slicktext/webhook", methods=["POST"])
 def slicktext_webhook():
     if not verify_slicktext_webhook_secret():
+        ops_bump("slicktext_webhook_401")
         logging.warning("SlickText webhook rejected: bad or missing X-Zarna-Webhook-Secret")
         return jsonify({"error": "Unauthorized"}), 401
 
@@ -186,7 +204,6 @@ def slicktext_webhook():
 
     slicktext_webhook_log_line(payload)
 
-    # Deduplicate using ChatMessageId (guards against SlickText retries)
     try:
         raw_data = _json.loads(payload.get("data", "{}")) if isinstance(payload.get("data"), str) else payload
         message_id = str(raw_data.get("ChatMessage", {}).get("ChatMessageId", ""))
@@ -198,13 +215,20 @@ def slicktext_webhook():
         return jsonify({"status": "duplicate"}), 200
 
     raw_phone, raw_body = slicktext.peek_inbound(payload)
-    suppress_ai = False
+    signup_res = LiveShowSignupResult()
     if raw_phone and raw_body:
-        suppress_ai = _safe_try_live_show_signup(raw_phone, raw_body, "slicktext")
+        signup_res = _safe_try_live_show_signup(raw_phone, raw_body, "slicktext")
+
+    if signup_res.join_confirmation_sms and signup_res.confirmation_phone:
+        _send_join_confirmation_async(
+            signup_res.confirmation_phone,
+            signup_res.confirmation_channel or "slicktext",
+            signup_res.join_confirmation_sms,
+        )
 
     phone_number, message_text = slicktext.filter_inbound_for_ai(raw_phone, raw_body)
 
-    if suppress_ai:
+    if signup_res.suppress_ai:
         logging.info(
             "SlickText webhook: live show keyword-only join — no AI reply (...%s)",
             raw_phone[-4:] if raw_phone else "?",
@@ -230,22 +254,27 @@ def slicktext_webhook():
 
 # ---------------------------------------------------------------------------
 # Twilio webhook
-#
-# Configure in Twilio Console:
-#   Phone Numbers → Active Numbers → your number
-#   Messaging → A message comes in → Webhook → HTTP POST
-#   URL: https://web-production-ec3da.up.railway.app/twilio/webhook
 # ---------------------------------------------------------------------------
 
+
 def _process_twilio_message(phone_number: str, message_text: str) -> None:
+    if not ai_reply_enter():
+        ops_bump("ai_reply_capacity_reject")
+        logging.warning("AI at capacity — Twilio message dropped (...%s)", phone_number[-4:])
+        return
     try:
-        reply = brain.handle_incoming_message(phone_number, message_text)
+        try:
+            reply = brain.handle_incoming_message(phone_number, message_text)
+        except Exception as e:
+            ops_bump("ai_reply_error")
+            logging.error("Error processing Twilio message from %s: %s", phone_number, e)
+            return
         if not (reply or "").strip():
             logging.info("No Twilio reply for ...%s (conversation ender or empty)", phone_number[-4:])
             return
         twilio.send_reply(phone_number, reply)
-    except Exception as e:
-        logging.error("Error processing Twilio message from %s: %s", phone_number, e)
+    finally:
+        ai_reply_leave()
 
 
 @app.route("/twilio/webhook", methods=["POST"])
@@ -266,9 +295,6 @@ def twilio_webhook():
             len(str(_body)),
         )
 
-    # Signature validation — rejects spoofed requests in production.
-    # Behind Railway's proxy, request.url is http:// but Twilio signs the https:// URL,
-    # so we reconstruct the correct URL using the X-Forwarded-Proto header.
     if os.getenv("TWILIO_VALIDATE_SIGNATURE", "true").lower() == "true":
         sig = request.headers.get("X-Twilio-Signature", "")
         forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
@@ -276,25 +302,32 @@ def twilio_webhook():
         if forwarded_proto == "https" and url.startswith("http://"):
             url = "https://" + url[len("http://"):]
         if not twilio.validate_signature(url, form_data, sig):
+            ops_bump("twilio_signature_fail")
             _sig_from = form_data.get("From", "")
             logging.warning("Invalid Twilio signature from ...%s", _sig_from[-4:] if _sig_from else "?")
             return ("Forbidden", 403)
 
-    # Deduplicate using MessageSid
     message_sid = form_data.get("MessageSid", "")
     if _already_processed(message_sid):
         logging.info("Duplicate Twilio webhook ignored (MessageSid=%s)", message_sid)
         return ("", 204)
 
     raw_from, raw_body = twilio.peek_inbound(form_data)
-    suppress_ai = False
+    signup_res = LiveShowSignupResult()
     if raw_from and raw_body:
         _tw_ch = "twilio_whatsapp" if raw_from.lower().startswith("whatsapp:") else "twilio"
-        suppress_ai = _safe_try_live_show_signup(raw_from, raw_body, _tw_ch)
+        signup_res = _safe_try_live_show_signup(raw_from, raw_body, _tw_ch)
+
+    if signup_res.join_confirmation_sms and signup_res.confirmation_phone:
+        _send_join_confirmation_async(
+            signup_res.confirmation_phone,
+            signup_res.confirmation_channel or "twilio",
+            signup_res.join_confirmation_sms,
+        )
 
     phone_number, message_text = twilio.filter_inbound_for_ai(raw_from, raw_body)
 
-    if suppress_ai:
+    if signup_res.suppress_ai:
         logging.info(
             "Twilio webhook: live show keyword-only join — no AI reply (...%s)",
             raw_from[-4:] if raw_from else "?",

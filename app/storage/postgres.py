@@ -96,6 +96,28 @@ _LIVE_SHOW_MIGRATIONS = (
     """,
 )
 
+# Idempotent alters + audit log (runs after base live_shows DDL).
+_LIVE_SHOW_ADDITIVE_MIGRATIONS = (
+    """
+    ALTER TABLE live_shows ADD COLUMN IF NOT EXISTS event_category TEXT NOT NULL DEFAULT 'other';
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS admin_audit_log (
+        id BIGSERIAL PRIMARY KEY,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        action TEXT NOT NULL,
+        detail TEXT NOT NULL DEFAULT '',
+        show_id INT REFERENCES live_shows(id) ON DELETE SET NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_show ON admin_audit_log(show_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC)
+    """,
+)
+
 
 class PostgresStorage(BaseStorage):
     """Thread-safe Postgres storage using a connection pool."""
@@ -123,6 +145,8 @@ class PostgresStorage(BaseStorage):
                     cur.execute(_DDL)
                     cur.execute(_MIGRATIONS)
                     for sql in _LIVE_SHOW_MIGRATIONS:
+                        cur.execute(sql)
+                    for sql in _LIVE_SHOW_ADDITIVE_MIGRATIONS:
                         cur.execute(sql)
         except psycopg2.errors.UniqueViolation:
             # Race condition: two workers started simultaneously and both tried

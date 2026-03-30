@@ -28,10 +28,43 @@ from app.admin_auth import (
 )
 from app.live_shows import repository as repo
 from app.live_shows.broadcast_worker import start_broadcast_thread
+from app.messaging.broadcast import normalize_e164, resolve_broadcast_provider
+from app.messaging.slicktext_adapter import create_slicktext_adapter
+from app.messaging.twilio_adapter import create_twilio_adapter
 
 logger = logging.getLogger(__name__)
 
 live_shows_bp = Blueprint("live_shows", __name__)
+
+# One-click broadcast starters (message body only; operator edits before send).
+BROADCAST_BODY_TEMPLATES = {
+    "doors": "Doors are open — come on in, find your seat, and get ready to laugh. So excited you're here!",
+    "thanks": "Thank you for being here tonight — you brought the energy. Means the world. More fun coming!",
+    "merch": "Merch table is open after the show — come say hi if you want a souvenir from tonight!",
+    "link": "Here's the link I promised — let me know if it doesn't work. Can't wait to hear what you think!",
+    "rain": "If you're running late or stuck in weather, no stress — we've got you. Text me if you need anything.",
+}
+
+
+def _mask_phone_display(phone: str) -> str:
+    digits = "".join(c for c in (phone or "") if c.isdigit())
+    if len(digits) <= 4:
+        return "****"
+    return f"+{'·' * (len(digits) - 4)}{digits[-4:]}"
+
+
+def _send_one_outbound(phone_raw: str, body: str, deliver_as: str, provider_override: str | None) -> bool:
+    """Single test SMS/WhatsApp for operator verification."""
+    prov = provider_override if provider_override in ("slicktext", "twilio") else resolve_broadcast_provider()
+    wa = (deliver_as or "sms").lower() == "whatsapp"
+    if prov == "slicktext" and wa:
+        return False
+    if prov == "slicktext":
+        st = create_slicktext_adapter()
+        to = normalize_e164(phone_raw)
+        return bool(to) and st.send_reply(to, body[:1600])
+    tw = create_twilio_adapter()
+    return tw.send_reply(phone_raw, body[:1600])
 
 
 def _e(s: str) -> str:
@@ -132,14 +165,14 @@ th {{ color:#6b7280; font-size:11px; text-transform:uppercase; }}
 
 @live_shows_bp.before_request
 def _before():
-    g = _auth_gate()
-    if g is not None:
-        return g
+    gate = _auth_gate()
+    if gate is not None:
+        return gate
 
 
 def _show_table_rows(show_list: list, empty_msg: str) -> str:
     if not show_list:
-        return f'<tr><td colspan="5" style="color:#6b7280">{_e(empty_msg)}</td></tr>'
+        return f'<tr><td colspan="6" style="color:#6b7280">{_e(empty_msg)}</td></tr>'
     rows = ""
     for s in show_list:
         st = (s.get("status") or "draft").lower()
@@ -147,10 +180,13 @@ def _show_table_rows(show_list: list, empty_msg: str) -> str:
         kw = _e((s.get("keyword") or "") or "—")
         sid = s["id"]
         n = s.get("signup_count", 0)
+        ec = (s.get("event_category") or "other").lower()
+        et = "Comedy" if ec == "comedy" else "Other"
         exp = f'<a class="btn btn-secondary" style="padding:6px 12px;font-size:12px;margin:0" href="/admin/live-shows/{sid}/export">CSV</a>'
         rows += f"""<tr>
           <td><a href="/admin/live-shows/{sid}" style="color:#a78bfa;font-weight:500">{_e(s['name'])}</a></td>
           <td><span class="badge {badge}">{st}</span></td>
+          <td>{_e(et)}</td>
           <td><strong>{n}</strong></td>
           <td class="mono">{kw}</td>
           <td>{exp}</td>
@@ -174,18 +210,18 @@ def list_shows():
 <p><a class="btn" href="/admin/live-shows/new">+ New live show</a></p>
 <div class="card">
   <h2 style="margin-top:0;font-size:16px">Live now</h2>
-  <table><thead><tr><th>Name</th><th>Status</th><th>Signups</th><th>Keyword</th><th>Export</th></tr></thead>
+  <table><thead><tr><th>Name</th><th>Status</th><th>Type</th><th>Signups</th><th>Keyword</th><th>Export</th></tr></thead>
   <tbody>{_show_table_rows(live_s, "No live show — start one from a draft.")}</tbody></table>
 </div>
 <div class="card">
   <h2 style="margin-top:0;font-size:16px">Drafts</h2>
-  <table><thead><tr><th>Name</th><th>Status</th><th>Signups</th><th>Keyword</th><th>Export</th></tr></thead>
+  <table><thead><tr><th>Name</th><th>Status</th><th>Type</th><th>Signups</th><th>Keyword</th><th>Export</th></tr></thead>
   <tbody>{_show_table_rows(draft_s, "No drafts.")}</tbody></table>
 </div>
 <div class="card">
   <h2 style="margin-top:0;font-size:16px">Past events</h2>
   <p style="color:#64748b;font-size:13px;margin:0 0 8px 0">Ended shows — audience is saved. Click the name for the full list.</p>
-  <table><thead><tr><th>Name</th><th>Status</th><th>Signups</th><th>Keyword</th><th>Export</th></tr></thead>
+  <table><thead><tr><th>Name</th><th>Status</th><th>Type</th><th>Signups</th><th>Keyword</th><th>Export</th></tr></thead>
   <tbody>{_show_table_rows(ended_s, "No ended shows yet.")}</tbody></table>
 </div>"""
     return _shell("Live shows", body)
@@ -203,6 +239,9 @@ def new_show():
         deliver = (request.form.get("deliver_as") or "sms").strip().lower()
         if deliver not in ("sms", "whatsapp"):
             deliver = "sms"
+        event_cat = (request.form.get("event_category") or "other").strip().lower()
+        if event_cat not in ("comedy", "other"):
+            event_cat = "other"
         if not name:
             return _shell("New live show", '<div class="card"><p style="color:#f87171">Name required.</p></div>')
         if use_kw and not keyword:
@@ -213,7 +252,7 @@ def new_show():
                 '<div class="card"><p style="color:#f87171">Window start and end required for time-window mode.</p></div>',
             )
         try:
-            sid = repo.create_show(name, keyword, use_kw, ws, we, deliver)
+            sid = repo.create_show(name, keyword, use_kw, ws, we, deliver, event_cat)
         except Exception as e:
             logger.exception("create_show")
             return _shell("New live show", f'<div class="card"><p style="color:#f87171">{_e(str(e))}</p></div>')
@@ -231,7 +270,7 @@ def new_show():
   </select>
   <label>Keyword (keyword mode)</label>
   <input type="text" name="keyword" placeholder="e.g. CHICAGO">
-  <small class="hint">Case-insensitive; minor typos allowed for keywords 3+ characters. A message that is only the keyword does not get an AI reply (join is silent).</small>
+  <small class="hint">Case-insensitive; minor typos allowed for 3+ character keywords. Keyword-only messages skip the AI; comedy events also send a fun confirmation SMS.</small>
   <label>Window start (UTC, optional filter)</label>
   <input type="datetime-local" name="window_start">
   <label>Window end (UTC, optional filter)</label>
@@ -242,6 +281,12 @@ def new_show():
     <option value="sms">SMS (Twilio SMS / SlickText SMS)</option>
     <option value="whatsapp">WhatsApp (Twilio only — templates may apply outside 24h session)</option>
   </select>
+  <label>Event type</label>
+  <select name="event_category">
+    <option value="comedy" selected>Comedy show — fans get a fun confirmation SMS when they text the keyword (keyword-only join)</option>
+    <option value="other">Other — keyword join stays silent (no auto confirmation)</option>
+  </select>
+  <small class="hint">Comedy confirmations are positive, in Zarna's voice, and invite them to text with questions.</small>
   <p><button type="submit" class="btn">Create draft</button>
   <a class="btn btn-secondary" href="/admin/live-shows">Cancel</a></p>
 </form>
@@ -254,13 +299,21 @@ def show_detail(show_id: int):
     show = repo.get_show(show_id)
     if not show:
         return _shell("Live show", '<div class="card"><p>Show not found.</p></div>'), 404
+    tpl_key = request.args.get("template", "").strip()
+    body_prefill = BROADCAST_BODY_TEMPLATES.get(tpl_key, "")
     err_banner = ""
     err = request.args.get("err", "")
     if err == "campaign_sms":
         err_banner = '<div class="callout" style="border-color:#f87171;color:#fecaca">Campaign mode is SMS-only. Change “Broadcast channel” to SMS or use one-by-one with Twilio.</div>'
     elif err == "campaign_slicktext":
         err_banner = '<div class="callout" style="border-color:#f87171;color:#fecaca">Campaign mode needs SlickText (not Twilio). Set provider to SlickText or Auto with v2 keys.</div>'
+    elif err == "test_bad_phone":
+        err_banner = '<div class="callout" style="border-color:#f87171;color:#fecaca">Test send failed — check the phone number format and provider (SMS vs WhatsApp).</div>'
+    ok_banner = ""
+    if request.args.get("test") == "sent":
+        ok_banner = '<div class="callout" style="border-color:#065f46;color:#6ee7b7">Test message sent — check that phone.</div>'
     signups = repo.signups_for_show(show_id)
+    audit_log = repo.recent_audit_for_show(show_id)
     job = repo.latest_job_for_show(show_id)
     st = show["status"]
     status_btns = ""
@@ -305,12 +358,27 @@ def show_detail(show_id: int):
     if created:
         created_line = f'<p style="color:#64748b;font-size:12px;margin:8px 0 0 0">Created: {created}</p>'
 
+    ec = (show.get("event_category") or "other").lower()
+    type_lbl = "Comedy" if ec == "comedy" else "Other"
     stats_block = f"""
 <div class="stats-grid">
   <div class="stat-box"><div class="num">{show.get("signup_count", 0)}</div><div class="lbl">Signups</div></div>
   <div class="stat-box"><div class="num" style="font-size:17px;line-height:1.25;word-break:break-word">{_e(show.get("keyword") or "—")}</div><div class="lbl">Keyword</div></div>
   <div class="stat-box"><div class="num" style="font-size:15px">{_e(show.get("deliver_as") or "sms")}</div><div class="lbl">Channel</div></div>
+  <div class="stat-box"><div class="num" style="font-size:15px">{_e(type_lbl)}</div><div class="lbl">Event type</div></div>
 </div>"""
+
+    sample_lines = [_mask_phone_display(u["phone_number"]) for u in signups[:10]]
+    sample_html = ", ".join(_e(s) for s in sample_lines) if sample_lines else "— (no signups yet)"
+    tmpl_links = " · ".join(
+        f'<a href="/admin/live-shows/{show_id}?template={_e(k)}" style="color:#a78bfa">{_e(k)}</a>'
+        for k in BROADCAST_BODY_TEMPLATES
+    )
+    audit_rows = ""
+    for row in audit_log:
+        audit_rows += f'<tr><td style="color:#94a3b8;font-size:12px">{row["created_at"]}</td><td>{_e(row.get("action") or "")}</td><td>{_e((row.get("detail") or "")[:120])}</td></tr>'
+    if not audit_rows:
+        audit_rows = '<tr><td colspan="3" style="color:#6b7280">No actions logged yet.</td></tr>'
 
     signups_card = f"""
 <div class="card">
@@ -322,9 +390,16 @@ def show_detail(show_id: int):
     broadcast_form = f"""
 <div class="card">
   <h3 style="margin-top:0">Broadcast to this list</h3>
+  <div class="callout" style="margin-bottom:14px;border-color:#4f46e5">
+    <strong>Before you send</strong><br>
+    Recipients: <strong>{show.get("signup_count", 0)}</strong> numbers on this show.<br>
+    Sample (masked): {sample_html}<br>
+    <small style="color:#94a3b8">Use “Send test” below to verify copy on your own phone first.</small>
+  </div>
+  <p style="font-size:13px;margin:0 0 10px 0">Message starters: {tmpl_links}</p>
   <form method="post" action="/admin/live-shows/{show_id}/broadcast">
     <label>Message</label>
-    <textarea name="body" required placeholder="Your text to everyone signed up…"></textarea>
+    <textarea name="body" required placeholder="Your text to everyone signed up…">{_e(body_prefill)}</textarea>
     <label>SlickText delivery (when using SlickText v2)</label>
     <select name="slicktext_delivery">
       <option value="loop" selected>One-by-one — each text via Messages API (v1 + v2)</option>
@@ -338,11 +413,33 @@ def show_detail(show_id: int):
       <option value="slicktext">SlickText</option>
       <option value="twilio">Twilio</option>
     </select>
-    <label><input type="checkbox" name="confirm" value="1" required> I confirm sending to {show.get("signup_count",0)} numbers</label>
+    <label><input type="checkbox" name="confirm" value="1" required> I confirm sending to <strong>{show.get("signup_count",0)}</strong> numbers</label>
+    <label><input type="checkbox" name="confirm_review" value="1" required> I verified the count matches this show’s audience list above</label>
     <button type="submit" class="btn">Queue send</button>
   </form>
   <small class="hint">Runs in the background; refresh for job status. WhatsApp blasts: use Twilio + one-by-one.</small>
   {job_html}
+</div>
+<div class="card">
+  <h3 style="margin-top:0">Send test (one number)</h3>
+  <form method="post" action="/admin/live-shows/{show_id}/broadcast-test">
+    <label>Your phone (E.164, e.g. +15551234567)</label>
+    <input type="text" name="test_phone" placeholder="+15551234567" required>
+    <label>Test message (same copy you plan to blast)</label>
+    <textarea name="body" required placeholder="Paste the broadcast message here…">{_e(body_prefill)}</textarea>
+    <label>Provider override</label>
+    <select name="provider">
+      <option value="">Auto</option>
+      <option value="slicktext">SlickText</option>
+      <option value="twilio">Twilio</option>
+    </select>
+    <button type="submit" class="btn btn-secondary">Send one test SMS</button>
+  </form>
+  <small class="hint">Uses the same routing as bulk send (respects show “Deliver as” for SMS vs WhatsApp).</small>
+</div>
+<div class="card">
+  <h3 style="margin-top:0">Recent actions (audit)</h3>
+  <table><thead><tr><th>When</th><th>Action</th><th>Detail</th></tr></thead><tbody>{audit_rows}</tbody></table>
 </div>"""
 
     header_card = f"""
@@ -354,7 +451,7 @@ def show_detail(show_id: int):
 </div>"""
 
     body = f"""
-{err_banner}
+{err_banner}{ok_banner}
 <div class="breadcrumb"><a href="/admin/live-shows">Live shows</a> · {_e(show["name"])}</div>
 {ended_banner}
 <p style="margin-bottom:16px">{status_btns}
@@ -372,7 +469,26 @@ def show_status(show_id: int):
     if new_st not in ("live", "ended", "draft"):
         return redirect(url_for("live_shows.show_detail", show_id=show_id))
     repo.update_show_status(show_id, new_st)
+    repo.log_audit("show_status", f"status → {new_st}", show_id)
     return redirect(url_for("live_shows.show_detail", show_id=show_id))
+
+
+@live_shows_bp.route("/admin/live-shows/<int:show_id>/broadcast-test", methods=["POST"])
+def broadcast_test(show_id: int):
+    show = repo.get_show(show_id)
+    if not show:
+        return redirect("/admin/live-shows")
+    phone = (request.form.get("test_phone") or "").strip()
+    body = (request.form.get("body") or "").strip()
+    prov = request.form.get("provider", "").strip().lower()
+    p_choice = prov if prov in ("slicktext", "twilio") else None
+    if not phone or not body:
+        return redirect(url_for("live_shows.show_detail", show_id=show_id))
+    ok = _send_one_outbound(phone, body, show.get("deliver_as") or "sms", p_choice)
+    if ok:
+        repo.log_audit("broadcast_test", f"1 msg to ...{phone[-4:]}", show_id)
+        return redirect(url_for("live_shows.show_detail", show_id=show_id) + "?test=sent")
+    return redirect(url_for("live_shows.show_detail", show_id=show_id, err="test_bad_phone"))
 
 
 @live_shows_bp.route("/admin/live-shows/<int:show_id>/broadcast", methods=["POST"])
@@ -381,14 +497,13 @@ def show_broadcast(show_id: int):
     if not show:
         return redirect("/admin/live-shows")
     body = request.form.get("body", "").strip()
-    if not body or request.form.get("confirm") != "1":
+    if not body or request.form.get("confirm") != "1" or request.form.get("confirm_review") != "1":
         return redirect(url_for("live_shows.show_detail", show_id=show_id))
     prov = request.form.get("provider", "").strip().lower()
     if prov not in ("", "slicktext", "twilio"):
         prov = ""
     p_choice = prov if prov in ("slicktext", "twilio") else None
-    resolve = __import__("app.messaging.broadcast", fromlist=["resolve_broadcast_provider"]).resolve_broadcast_provider
-    resolved = p_choice or resolve()
+    resolved = p_choice or resolve_broadcast_provider()
     delivery = request.form.get("slicktext_delivery", "loop").strip().lower()
     if delivery not in ("loop", "slicktext_campaign"):
         delivery = "loop"
@@ -411,6 +526,8 @@ def show_broadcast(show_id: int):
     except Exception as e:
         logger.exception("create_broadcast_job")
         return _shell("Error", f'<div class="card"><p>{_e(str(e))}</p></div>')
+    n = int(show.get("signup_count") or 0)
+    repo.log_audit("broadcast_queued", f"job #{jid} → {n} recipients ({job_provider})", show_id)
     start_broadcast_thread(jid, show_id, body, p_choice, show.get("deliver_as") or "sms", delivery)
     return redirect(url_for("live_shows.show_detail", show_id=show_id) + "?broadcast=queued")
 

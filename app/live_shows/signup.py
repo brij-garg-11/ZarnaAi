@@ -3,12 +3,30 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Optional
 
 from app.live_shows import repository as repo
+from app.live_shows.join_confirmations import (
+    random_comedy_confirmation_new,
+    random_comedy_confirmation_repeat,
+)
 from app.live_shows.keyword_match import body_matches_keyword, is_keyword_only_join
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LiveShowSignupResult:
+    """Result of try_live_show_signup for webhook routing."""
+
+    suppress_ai: bool = False
+    """If True, skip Gemini reply (keyword-only path)."""
+    join_confirmation_sms: Optional[str] = None
+    """If set, send this one SMS to the fan (comedy show join copy)."""
+    confirmation_phone: Optional[str] = None
+    confirmation_channel: Optional[str] = None
 
 
 def _now_utc() -> datetime:
@@ -36,23 +54,29 @@ def _in_time_window(show: dict, now: datetime) -> bool:
     return True
 
 
-def try_live_show_signup(phone_number: str, message_text: str, channel: str) -> bool:
+def _event_category(show: dict) -> str:
+    raw = (show.get("event_category") or "other") or "other"
+    return str(raw).strip().lower()
+
+
+def try_live_show_signup(phone_number: str, message_text: str, channel: str) -> LiveShowSignupResult:
     """
     Record signup when a live show's rules match.
 
-    Returns True if the AI should not reply (keyword-only join for a matching live show).
+    Comedy + keyword-only: sends a random confirmation SMS on new signup;
+    shorter message if they're already on the list.
     """
+    out = LiveShowSignupResult()
     if not phone_number or not message_text:
-        return False
-    suppress_ai = False
+        return out
     try:
         try:
             shows = repo.active_live_shows()
         except Exception as e:
             logger.warning("live show signup: could not load active shows: %s", e)
-            return False
+            return out
         if not shows:
-            return False
+            return out
 
         now = _now_utc()
         for show in shows:
@@ -67,7 +91,7 @@ def try_live_show_signup(phone_number: str, message_text: str, channel: str) -> 
                 if not _in_time_window(show, now):
                     continue
                 if is_keyword_only_join(message_text, show_kw):
-                    suppress_ai = True
+                    out.suppress_ai = True
             else:
                 if show.get("window_start") is None or show.get("window_end") is None:
                     continue
@@ -75,7 +99,8 @@ def try_live_show_signup(phone_number: str, message_text: str, channel: str) -> 
                     continue
 
             sid = show["id"]
-            if repo.add_signup(sid, phone_number, channel):
+            inserted = repo.add_signup(sid, phone_number, channel)
+            if inserted:
                 logger.info(
                     "Live show signup: show_id=%s phone=...%s channel=%s",
                     sid,
@@ -87,7 +112,18 @@ def try_live_show_signup(phone_number: str, message_text: str, channel: str) -> 
                     "live show signup: no row inserted (duplicate or bad phone) show_id=%s",
                     sid,
                 )
+
+            cat = _event_category(show)
+            if use_kw and is_keyword_only_join(message_text, show_kw) and cat == "comedy":
+                if inserted:
+                    out.join_confirmation_sms = random_comedy_confirmation_new()
+                else:
+                    out.join_confirmation_sms = random_comedy_confirmation_repeat()
+                out.confirmation_phone = phone_number
+                out.confirmation_channel = channel
+
+            break
     except Exception:
         logger.exception("live show signup failed")
-        return False
-    return suppress_ai
+        return LiveShowSignupResult()
+    return out

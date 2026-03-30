@@ -43,6 +43,7 @@ SLICKTEXT_BRAND_ID = os.getenv("SLICKTEXT_BRAND_ID", "")
 #   X-Zarna-Webhook-Secret: <same value>   (use a long random string; store only in Railway/env)
 # API_SECRET_KEY — required in production for POST /message (X-Api-Key header).
 # LOG_SENSITIVE_WEBHOOK_DATA — if true, log full SlickText payloads and Twilio bodies (default off).
+# AI_REPLY_MAX_CONCURRENT — max simultaneous AI reply jobs per worker (default 16); extra inbound gets 503.
 
 # --- Twilio ---
 # console.twilio.com → Account Dashboard → Account SID + Auth Token

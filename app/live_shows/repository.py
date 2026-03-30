@@ -49,6 +49,11 @@ def get_show(show_id: int) -> Optional[Dict[str, Any]]:
         c.close()
 
 
+def _normalize_event_category(raw: Optional[str]) -> str:
+    v = (raw or "other").strip().lower()
+    return v if v in ("comedy", "other") else "other"
+
+
 def create_show(
     name: str,
     keyword: str,
@@ -56,21 +61,31 @@ def create_show(
     window_start: Optional[datetime],
     window_end: Optional[datetime],
     deliver_as: str,
+    event_category: str = "other",
 ) -> int:
     c = _conn()
     if not c:
         raise RuntimeError("No database")
+    ec = _normalize_event_category(event_category)
     try:
         with c:
             with c.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO live_shows
-                      (name, keyword, use_keyword_only, window_start, window_end, deliver_as, status)
-                    VALUES (%s, %s, %s, %s, %s, %s, 'draft')
+                      (name, keyword, use_keyword_only, window_start, window_end, deliver_as, status, event_category)
+                    VALUES (%s, %s, %s, %s, %s, %s, 'draft', %s)
                     RETURNING id
                     """,
-                    (name.strip(), keyword.strip().lower() if keyword else "", use_keyword_only, window_start, window_end, deliver_as),
+                    (
+                        name.strip(),
+                        keyword.strip().lower() if keyword else "",
+                        use_keyword_only,
+                        window_start,
+                        window_end,
+                        deliver_as,
+                        ec,
+                    ),
                 )
                 return cur.fetchone()[0]
     finally:
@@ -286,3 +301,42 @@ def latest_job_for_show(show_id: int) -> Optional[Dict[str, Any]]:
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def log_audit(action: str, detail: str = "", show_id: Optional[int] = None) -> None:
+    c = _conn()
+    if not c:
+        return
+    try:
+        with c:
+            with c.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO admin_audit_log (action, detail, show_id)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (action[:120], (detail or "")[:2000], show_id),
+                )
+    finally:
+        c.close()
+
+
+def recent_audit_for_show(show_id: int, limit: int = 15) -> List[Dict[str, Any]]:
+    c = _conn()
+    if not c:
+        return []
+    try:
+        with c.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """
+                SELECT created_at, action, detail
+                FROM admin_audit_log
+                WHERE show_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (show_id, limit),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    finally:
+        c.close()

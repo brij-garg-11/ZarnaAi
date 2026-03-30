@@ -17,13 +17,18 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from app.messaging.slicktext_adapter import SlickTextAdapter
 
 
+def _v2_adapter(**kwargs):
+    """Force v2 mode even when real v1 keys exist in the environment."""
+    return SlickTextAdapter(public_key="", private_key="", **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Inbound parsing
 # ---------------------------------------------------------------------------
 
 def test_parse_valid_payload():
     """v2 inbox_message_received payload — contact lookup is mocked."""
-    adapter = SlickTextAdapter(api_key="testkey", brand_id="99999")
+    adapter = _v2_adapter(api_key="testkey", brand_id="99999")
 
     payload = {
         "name": "inbox_message_received",
@@ -49,7 +54,7 @@ def test_parse_valid_payload():
 
 def test_parse_outgoing_message_ignored():
     """Outgoing messages (our replies) should not trigger a response loop."""
-    adapter = SlickTextAdapter(api_key="testkey", brand_id="99999")
+    adapter = _v2_adapter(api_key="testkey", brand_id="99999")
 
     payload = {
         "name": "inbox_message_received",
@@ -66,7 +71,7 @@ def test_parse_outgoing_message_ignored():
 
 
 def test_parse_empty_payload():
-    adapter = SlickTextAdapter(api_key="testkey", brand_id="99999")
+    adapter = _v2_adapter(api_key="testkey", brand_id="99999")
     phone, message = adapter.parse_inbound({})
     assert phone is None
     assert message is None
@@ -75,7 +80,7 @@ def test_parse_empty_payload():
 
 def test_parse_contact_lookup_fails():
     """If contact lookup returns non-200, phone should be None."""
-    adapter = SlickTextAdapter(api_key="testkey", brand_id="99999")
+    adapter = _v2_adapter(api_key="testkey", brand_id="99999")
 
     payload = {
         "name": "inbox_message_received",
@@ -101,7 +106,7 @@ def test_parse_contact_lookup_fails():
 
 def test_send_reply_unconfigured():
     """send_reply returns False gracefully when keys not configured."""
-    adapter = SlickTextAdapter(api_key="", brand_id="")
+    adapter = _v2_adapter(api_key="", brand_id="")
     result = adapter.send_reply("+15554449998", "test")
     assert result is False
     print("✓ send_reply: returns False when credentials missing")
@@ -109,7 +114,7 @@ def test_send_reply_unconfigured():
 
 def test_send_reply_success():
     """send_reply POSTs to /brands/{brand_id}/messages with mobile_number + body."""
-    adapter = SlickTextAdapter(api_key="testkey", brand_id="99999")
+    adapter = _v2_adapter(api_key="testkey", brand_id="99999")
 
     with patch("app.messaging.slicktext_adapter.requests.post") as mock_post:
         mock_post.return_value = MagicMock(status_code=200)
@@ -124,7 +129,7 @@ def test_send_reply_success():
 
 def test_send_reply_api_failure():
     """Paid plan required — test account returns 409, should return False."""
-    adapter = SlickTextAdapter(api_key="testkey", brand_id="99999")
+    adapter = _v2_adapter(api_key="testkey", brand_id="99999")
 
     with patch("app.messaging.slicktext_adapter.requests.post") as mock_post:
         mock_post.return_value = MagicMock(
@@ -146,16 +151,18 @@ def test_slicktext_webhook_endpoint():
     POST a v2 inbox_message_received payload to /slicktext/webhook.
     Contact lookup is mocked. Should return 200 + {status: ok}.
     """
-    with patch("app.messaging.slicktext_adapter.requests.get") as mock_get:
+    import main as app_module
+
+    with patch("app.messaging.slicktext_adapter.requests.get") as mock_get, patch.object(
+        app_module,
+        "_process_slicktext_message",
+    ):
         mock_get.return_value = MagicMock(
             status_code=200,
             json=lambda: {"mobile_number": "+15559876543"}
         )
 
-        import main as app_module
-        from app.messaging.slicktext_adapter import SlickTextAdapter
-
-        app_module.slicktext = SlickTextAdapter(api_key="test-api-key", brand_id="99999")
+        app_module.slicktext = _v2_adapter(api_key="test-api-key", brand_id="99999")
         client = app_module.app.test_client()
 
         payload = {
@@ -183,9 +190,8 @@ def test_slicktext_webhook_endpoint():
 def test_slicktext_webhook_bad_payload():
     """Missing contact_id / message → parse_inbound returns None; webhook responds 200 ignored."""
     import main as app_module
-    from app.messaging.slicktext_adapter import SlickTextAdapter
 
-    app_module.slicktext = SlickTextAdapter(api_key="test-api-key", brand_id="99999")
+    app_module.slicktext = _v2_adapter(api_key="test-api-key", brand_id="99999")
     client = app_module.app.test_client()
 
     response = client.post(

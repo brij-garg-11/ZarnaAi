@@ -48,11 +48,53 @@ def test_try_live_show_signup_returns_suppress_when_keyword_only():
         "use_keyword_only": True,
         "window_start": None,
         "window_end": None,
+        "event_category": "other",
     }
     with patch.object(ls.repo, "active_live_shows", return_value=[show]), patch.object(
         ls.repo, "add_signup", return_value=True
     ):
-        assert ls.try_live_show_signup("+15551234567", "chicago", "slicktext") is True
+        r = ls.try_live_show_signup("+15551234567", "chicago", "slicktext")
+        assert r.suppress_ai is True
+        assert r.join_confirmation_sms is None
+
+
+def test_comedy_sends_confirmation_on_new_signup():
+    show = {
+        "id": 1,
+        "keyword": "chicago",
+        "use_keyword_only": True,
+        "window_start": None,
+        "window_end": None,
+        "event_category": "comedy",
+    }
+    with patch.object(ls.repo, "active_live_shows", return_value=[show]), patch.object(
+        ls.repo, "add_signup", return_value=True
+    ):
+        r = ls.try_live_show_signup("+15551234567", "chicago", "slicktext")
+        assert r.suppress_ai is True
+        assert r.join_confirmation_sms
+        assert len(r.join_confirmation_sms) > 20
+        assert r.confirmation_phone == "+15551234567"
+        assert r.confirmation_channel == "slicktext"
+
+
+def test_comedy_repeat_still_gets_short_confirmation():
+    show = {
+        "id": 1,
+        "keyword": "chicago",
+        "use_keyword_only": True,
+        "window_start": None,
+        "window_end": None,
+        "event_category": "comedy",
+    }
+    with patch.object(ls.repo, "active_live_shows", return_value=[show]), patch.object(
+        ls.repo, "add_signup", return_value=False
+    ):
+        r = ls.try_live_show_signup("+15551234567", "chicago", "slicktext")
+        assert r.suppress_ai is True
+        assert r.join_confirmation_sms
+        low = r.join_confirmation_sms.lower()
+        assert "list" in low or "still" in low or "already" in low or "got" in low
 
 
 def test_try_live_show_signup_no_suppress_when_extra_words():
@@ -62,13 +104,16 @@ def test_try_live_show_signup_no_suppress_when_extra_words():
         "use_keyword_only": True,
         "window_start": None,
         "window_end": None,
+        "event_category": "other",
     }
     with patch.object(ls.repo, "active_live_shows", return_value=[show]), patch.object(
         ls.repo, "add_signup", return_value=True
     ):
-        assert ls.try_live_show_signup("+15551234567", "chicago what time", "slicktext") is False
+        r = ls.try_live_show_signup("+15551234567", "chicago what time", "slicktext")
+        assert r.suppress_ai is False
 
 
 def test_try_live_show_signup_no_shows():
     with patch.object(ls.repo, "active_live_shows", return_value=[]):
-        assert ls.try_live_show_signup("+15551234567", "blue", "slicktext") is False
+        r = ls.try_live_show_signup("+15551234567", "blue", "slicktext")
+        assert r.suppress_ai is False
