@@ -19,12 +19,13 @@ from app.live_shows.signup import try_live_show_signup
 logging.basicConfig(level=logging.INFO)
 
 
-def _safe_try_live_show_signup(phone_number: str, message_text: str, channel: str) -> None:
-    """Never let live-show DB logic break inbound webhooks."""
+def _safe_try_live_show_signup(phone_number: str, message_text: str, channel: str) -> bool:
+    """Never let live-show DB logic break inbound webhooks. True = skip AI (keyword-only join)."""
     try:
-        try_live_show_signup(phone_number, message_text, channel)
+        return try_live_show_signup(phone_number, message_text, channel)
     except Exception:
         logging.exception("Live show signup failed; continuing with reply pipeline")
+        return False
 
 app = Flask(__name__)
 app.register_blueprint(admin_bp)
@@ -165,10 +166,18 @@ def slicktext_webhook():
         return jsonify({"status": "duplicate"}), 200
 
     raw_phone, raw_body = slicktext.peek_inbound(payload)
+    suppress_ai = False
     if raw_phone and raw_body:
-        _safe_try_live_show_signup(raw_phone, raw_body, "slicktext")
+        suppress_ai = _safe_try_live_show_signup(raw_phone, raw_body, "slicktext")
 
     phone_number, message_text = slicktext.filter_inbound_for_ai(raw_phone, raw_body)
+
+    if suppress_ai:
+        logging.info(
+            "SlickText webhook: live show keyword-only join — no AI reply (...%s)",
+            raw_phone[-4:] if raw_phone else "?",
+        )
+        return jsonify({"status": "ok", "live_show": "join_no_reply"}), 200
 
     if not phone_number or not message_text:
         logging.info("SlickText webhook: message filtered or unparseable. Payload: %s", payload)
@@ -238,11 +247,19 @@ def twilio_webhook():
         return ("", 204)
 
     raw_from, raw_body = twilio.peek_inbound(form_data)
+    suppress_ai = False
     if raw_from and raw_body:
         _tw_ch = "twilio_whatsapp" if raw_from.lower().startswith("whatsapp:") else "twilio"
-        _safe_try_live_show_signup(raw_from, raw_body, _tw_ch)
+        suppress_ai = _safe_try_live_show_signup(raw_from, raw_body, _tw_ch)
 
     phone_number, message_text = twilio.filter_inbound_for_ai(raw_from, raw_body)
+
+    if suppress_ai:
+        logging.info(
+            "Twilio webhook: live show keyword-only join — no AI reply (...%s)",
+            raw_from[-4:] if raw_from else "?",
+        )
+        return ("", 204)
 
     if not phone_number or not message_text:
         logging.info("Twilio webhook: message filtered or unparseable.")

@@ -4,24 +4,15 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+
 from app.live_shows import repository as repo
+from app.live_shows.keyword_match import body_matches_keyword, is_keyword_only_join
 
 logger = logging.getLogger(__name__)
 
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _body_matches_keyword(body: str, keyword: str) -> bool:
-    body = (body or "").strip().lower()
-    kw = (keyword or "").strip().lower()
-    if not kw:
-        return True
-    if body == kw:
-        return True
-    parts = body.split()
-    return bool(parts) and parts[0] == kw
 
 
 def _as_utc_aware(dt: datetime | None) -> datetime | None:
@@ -45,21 +36,23 @@ def _in_time_window(show: dict, now: datetime) -> bool:
     return True
 
 
-def try_live_show_signup(phone_number: str, message_text: str, channel: str) -> None:
+def try_live_show_signup(phone_number: str, message_text: str, channel: str) -> bool:
     """
-    If a show is live and the message matches its rules, record a signup.
-    Safe to call on every inbound; logs and swallows errors (DB optional in dev).
+    Record signup when a live show's rules match.
+
+    Returns True if the AI should not reply (keyword-only join for a matching live show).
     """
     if not phone_number or not message_text:
-        return
+        return False
+    suppress_ai = False
     try:
         try:
             shows = repo.active_live_shows()
         except Exception as e:
             logger.warning("live show signup: could not load active shows: %s", e)
-            return
+            return False
         if not shows:
-            return
+            return False
 
         now = _now_utc()
         for show in shows:
@@ -69,10 +62,12 @@ def try_live_show_signup(phone_number: str, message_text: str, channel: str) -> 
                 show_kw = (show.get("keyword") or "").strip()
                 if not show_kw:
                     continue
-                if not _body_matches_keyword(message_text, show_kw):
+                if not body_matches_keyword(message_text, show_kw):
                     continue
                 if not _in_time_window(show, now):
                     continue
+                if is_keyword_only_join(message_text, show_kw):
+                    suppress_ai = True
             else:
                 if show.get("window_start") is None or show.get("window_end") is None:
                     continue
@@ -94,3 +89,5 @@ def try_live_show_signup(phone_number: str, message_text: str, channel: str) -> 
                 )
     except Exception:
         logger.exception("live show signup failed")
+        return False
+    return suppress_ai

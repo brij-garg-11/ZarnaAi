@@ -106,6 +106,18 @@ th {{ color:#6b7280; font-size:11px; text-transform:uppercase; }}
 .callout {{ background:#1e3a5f; border:1px solid #2563eb; border-radius:8px; padding:14px;
   font-size:13px; color:#93c5fd; margin-bottom:20px; line-height:1.5; }}
 .mono {{ font-family:ui-monospace,monospace; }}
+.section-title {{ font-size:13px; font-weight:600; color:#94a3b8; text-transform:uppercase;
+  letter-spacing:0.08em; margin:28px 0 10px 0; }}
+.section-title:first-of-type {{ margin-top:0; }}
+.stats-grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:12px; margin-top:14px; }}
+.stat-box {{ background:#1f2937; border:1px solid #374151; border-radius:10px; padding:14px 16px; }}
+.stat-box .num {{ font-size:26px; font-weight:700; color:#e2e8f0; line-height:1.1; }}
+.stat-box .lbl {{ font-size:11px; color:#64748b; margin-top:4px; text-transform:uppercase; letter-spacing:0.05em; }}
+.breadcrumb {{ font-size:13px; color:#64748b; margin-bottom:16px; }}
+.breadcrumb a {{ color:#a78bfa; text-decoration:none; }}
+.breadcrumb a:hover {{ text-decoration:underline; }}
+.ended-banner {{ background:#312e81; border:1px solid #4c1d95; border-radius:10px; padding:12px 16px;
+  color:#c4b5fd; font-size:14px; margin-bottom:16px; }}
 </style></head><body>
 <div class="header"><h1>Zarna AI — {_e(title)}</h1></div>
 <nav class="nav">
@@ -125,36 +137,56 @@ def _before():
         return g
 
 
-@live_shows_bp.route("/admin/live-shows")
-def list_shows():
-    shows = repo.list_shows()
+def _show_table_rows(show_list: list, empty_msg: str) -> str:
+    if not show_list:
+        return f'<tr><td colspan="5" style="color:#6b7280">{_e(empty_msg)}</td></tr>'
     rows = ""
-    for s in shows:
+    for s in show_list:
         st = (s.get("status") or "draft").lower()
         badge = f"badge-{st}" if st in ("live", "draft", "ended") else "badge-draft"
         kw = _e((s.get("keyword") or "") or "—")
+        sid = s["id"]
+        n = s.get("signup_count", 0)
+        exp = f'<a class="btn btn-secondary" style="padding:6px 12px;font-size:12px;margin:0" href="/admin/live-shows/{sid}/export">CSV</a>'
         rows += f"""<tr>
-          <td><a href="/admin/live-shows/{s['id']}" style="color:#a78bfa">{_e(s['name'])}</a></td>
+          <td><a href="/admin/live-shows/{sid}" style="color:#a78bfa;font-weight:500">{_e(s['name'])}</a></td>
           <td><span class="badge {badge}">{st}</span></td>
-          <td>{s.get('signup_count', 0)}</td>
+          <td><strong>{n}</strong></td>
           <td class="mono">{kw}</td>
+          <td>{exp}</td>
         </tr>"""
-    if not rows:
-        rows = '<tr><td colspan="4" style="color:#6b7280">No shows yet.</td></tr>'
+    return rows
+
+
+@live_shows_bp.route("/admin/live-shows")
+def list_shows():
+    shows = repo.list_shows()
+    live_s = [s for s in shows if (s.get("status") or "").lower() == "live"]
+    draft_s = [s for s in shows if (s.get("status") or "").lower() == "draft"]
+    ended_s = [s for s in shows if (s.get("status") or "").lower() == "ended"]
+
     body = f"""
 <div class="callout">
-  <strong>Live mode</strong> — Only one show can be <code>live</code> at a time. Clicking <strong>Go live</strong> automatically ends any other live show so signups match the right keyword.<br><br>
-  <strong>How bulk send works</strong><br>
-  • <strong>Twilio:</strong> one <code>messages.create</code> per number (optional <code>TWILIO_MESSAGING_SERVICE_SID</code>).<br>
-  • <strong>SlickText one-by-one:</strong> same API as chat; works on v1 and v2.<br>
-  • <strong>SlickText campaign:</strong> v2 only — temp list + sync contacts + one Campaign send. Choose it on the show page. SMS only.<br>
-  • <code>LIVE_SHOW_BROADCAST_PROVIDER</code> = <code>slicktext</code> | <code>twilio</code> | <code>auto</code>.
+  <strong>Live mode</strong> — Only one show can be <code>live</code> at a time. <strong>Go live</strong> ends any other live show.<br>
+  <strong>Past events</strong> keep their signup list; open a show to see numbers or download CSV.<br><br>
+  <strong>Bulk send</strong> — Twilio one-per-number; SlickText one-by-one or v2 Campaign. <code>LIVE_SHOW_BROADCAST_PROVIDER</code> = <code>slicktext</code> | <code>twilio</code> | <code>auto</code>.
 </div>
 <p><a class="btn" href="/admin/live-shows/new">+ New live show</a></p>
 <div class="card">
-  <h2 style="margin-top:0;font-size:16px">All shows</h2>
-  <table><thead><tr><th>Name</th><th>Status</th><th>Signups</th><th>Keyword</th></tr></thead>
-  <tbody>{rows}</tbody></table>
+  <h2 style="margin-top:0;font-size:16px">Live now</h2>
+  <table><thead><tr><th>Name</th><th>Status</th><th>Signups</th><th>Keyword</th><th>Export</th></tr></thead>
+  <tbody>{_show_table_rows(live_s, "No live show — start one from a draft.")}</tbody></table>
+</div>
+<div class="card">
+  <h2 style="margin-top:0;font-size:16px">Drafts</h2>
+  <table><thead><tr><th>Name</th><th>Status</th><th>Signups</th><th>Keyword</th><th>Export</th></tr></thead>
+  <tbody>{_show_table_rows(draft_s, "No drafts.")}</tbody></table>
+</div>
+<div class="card">
+  <h2 style="margin-top:0;font-size:16px">Past events</h2>
+  <p style="color:#64748b;font-size:13px;margin:0 0 8px 0">Ended shows — audience is saved. Click the name for the full list.</p>
+  <table><thead><tr><th>Name</th><th>Status</th><th>Signups</th><th>Keyword</th><th>Export</th></tr></thead>
+  <tbody>{_show_table_rows(ended_s, "No ended shows yet.")}</tbody></table>
 </div>"""
     return _shell("Live shows", body)
 
@@ -199,7 +231,7 @@ def new_show():
   </select>
   <label>Keyword (keyword mode)</label>
   <input type="text" name="keyword" placeholder="e.g. CHICAGO">
-  <small class="hint">Leave blank only if using time-window-only mode (then keyword ignored).</small>
+  <small class="hint">Case-insensitive; minor typos allowed for keywords 3+ characters. A message that is only the keyword does not get an AI reply (join is silent).</small>
   <label>Window start (UTC, optional filter)</label>
   <input type="datetime-local" name="window_start">
   <label>Window end (UTC, optional filter)</label>
@@ -263,6 +295,30 @@ def show_detail(show_id: int):
     if not sig_rows:
         sig_rows = '<tr><td colspan="4" style="color:#6b7280">No signups yet.</td></tr>'
 
+    st_lower = (st or "").lower()
+    ended_banner = ""
+    if st_lower == "ended":
+        ended_banner = """<div class="ended-banner">This event has ended — fans are no longer added via keyword. The audience list below is saved; use Export CSV for a spreadsheet.</div>"""
+
+    created = show.get("created_at")
+    created_line = ""
+    if created:
+        created_line = f'<p style="color:#64748b;font-size:12px;margin:8px 0 0 0">Created: {created}</p>'
+
+    stats_block = f"""
+<div class="stats-grid">
+  <div class="stat-box"><div class="num">{show.get("signup_count", 0)}</div><div class="lbl">Signups</div></div>
+  <div class="stat-box"><div class="num" style="font-size:17px;line-height:1.25;word-break:break-word">{_e(show.get("keyword") or "—")}</div><div class="lbl">Keyword</div></div>
+  <div class="stat-box"><div class="num" style="font-size:15px">{_e(show.get("deliver_as") or "sms")}</div><div class="lbl">Channel</div></div>
+</div>"""
+
+    signups_card = f"""
+<div class="card">
+  <h3 style="margin-top:0">Audience ({len(signups)} on this page)</h3>
+  <p style="margin:0 0 12px 0"><a class="btn btn-secondary" href="/admin/live-shows/{show_id}/export">Download all as CSV</a></p>
+  <table><thead><tr><th>Phone</th><th>Channel</th><th>Signed up</th><th></th></tr></thead><tbody>{sig_rows}</tbody></table>
+</div>"""
+
     broadcast_form = f"""
 <div class="card">
   <h3 style="margin-top:0">Broadcast to this list</h3>
@@ -289,21 +345,24 @@ def show_detail(show_id: int):
   {job_html}
 </div>"""
 
-    body = f"""
-{err_banner}
-<p>{status_btns}
-<a class="btn btn-secondary" href="/admin/live-shows/{show_id}/export">Export CSV</a>
-<a class="btn btn-secondary" href="/admin/live-shows">All shows</a></p>
+    header_card = f"""
 <div class="card">
   <h2 style="margin-top:0">{_e(show["name"])}</h2>
-  <p>Status: <strong>{st}</strong> · Keyword: <code>{_e(show.get("keyword") or "")}</code>
-  · Deliver as: <strong>{_e(show.get("deliver_as") or "sms")}</strong></p>
-  <p style="color:#94a3b8;font-size:13px">Signups: {show.get("signup_count", 0)}</p>
-</div>
-{broadcast_form}
-<div class="card"><h3>Signups</h3>
-<table><thead><tr><th>Phone</th><th>Channel</th><th>Signed up</th><th></th></tr></thead><tbody>{sig_rows}</tbody></table>
+  <p style="margin:0">Status: <span class="badge badge-{st_lower if st_lower in ('live','draft','ended') else 'draft'}">{st}</span></p>
+  {created_line}
+  {stats_block}
 </div>"""
+
+    body = f"""
+{err_banner}
+<div class="breadcrumb"><a href="/admin/live-shows">Live shows</a> · {_e(show["name"])}</div>
+{ended_banner}
+<p style="margin-bottom:16px">{status_btns}
+<a class="btn btn-secondary" href="/admin/live-shows/{show_id}/export">Export CSV</a>
+<a class="btn btn-secondary" href="/admin/live-shows">All shows</a></p>
+{header_card}
+{signups_card}
+{broadcast_form}"""
     return _shell(show["name"], body)
 
 
