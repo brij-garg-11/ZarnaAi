@@ -11,7 +11,6 @@ Tabs:
 """
 
 import csv
-import hmac
 import io
 import os
 from collections import Counter
@@ -20,9 +19,15 @@ from urllib.parse import quote, urlencode
 
 from flask import Blueprint, Response, request
 
-admin_bp = Blueprint("admin", __name__)
+from app.admin_auth import (
+    admin_password_configured,
+    check_admin_auth,
+    get_db_connection,
+    no_admin_password_response,
+    require_admin_auth_response,
+)
 
-_ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+admin_bp = Blueprint("admin", __name__)
 
 INBOX_PAGE_SIZE = 60
 THREAD_PAGE_SIZE = 120
@@ -48,39 +53,19 @@ def _esc(s: str) -> str:
 
 
 def _check_auth():
-    if not _ADMIN_PASSWORD:
-        return False
-    auth = request.authorization
-    if not auth or not auth.password:
-        return False
-    return hmac.compare_digest(auth.password, _ADMIN_PASSWORD)
+    return check_admin_auth()
 
 
 def _require_auth():
-    return Response(
-        "Authentication required.",
-        401,
-        {"WWW-Authenticate": 'Basic realm="Zarna AI Admin"'},
-    )
+    return require_admin_auth_response()
 
 
 def _no_password_configured():
-    return Response(
-        "<h2 style='font-family:sans-serif;padding:40px;color:#dc2626'>"
-        "Admin access is disabled: ADMIN_PASSWORD environment variable is not set.<br>"
-        "<small style='color:#6b7280'>Set it in Railway → Variables to enable the dashboard.</small>"
-        "</h2>",
-        503,
-    )
+    return no_admin_password_response()
 
 
 def _get_db():
-    database_url = os.getenv("DATABASE_URL", "")
-    if not database_url:
-        return None
-    import psycopg2
-    dsn = database_url.replace("postgres://", "postgresql://", 1)
-    return psycopg2.connect(dsn)
+    return get_db_connection()
 
 
 def _fetch_export(tag_filter="", location_filter=""):
@@ -124,7 +109,7 @@ def _fetch_export(tag_filter="", location_filter=""):
 
 @admin_bp.route("/admin/export")
 def admin_export():
-    if not _ADMIN_PASSWORD:
+    if not admin_password_configured():
         return _no_password_configured()
     if not _check_auth():
         return _require_auth()
@@ -165,7 +150,7 @@ def admin_export():
 
 @admin_bp.route("/admin/export/thread")
 def admin_export_thread():
-    if not _ADMIN_PASSWORD:
+    if not admin_password_configured():
         return _no_password_configured()
     if not _check_auth():
         return _require_auth()
@@ -462,7 +447,7 @@ def _range_links(active: int) -> str:
 
 @admin_bp.route("/admin")
 def admin():
-    if not _ADMIN_PASSWORD:
+    if not admin_password_configured():
         return _no_password_configured()
     if not _check_auth():
         return _require_auth()
@@ -848,6 +833,7 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
   <a href="/admin?tab=overview&amp;range={chart_days}" class="nav-tab {'active' if tab == 'overview' else ''}">📊 Overview</a>
   <a href="/admin?tab=audience" class="nav-tab {'active' if tab == 'audience' else ''}">👥 Audience</a>
   <a href="/admin?tab=convos" class="nav-tab {'active' if tab == 'convos' else ''}">💬 Conversations</a>
+  <a href="/admin/live-shows" class="nav-tab">🎤 Live shows</a>
 </nav>
 
 <div class="container">

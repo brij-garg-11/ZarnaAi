@@ -44,3 +44,10 @@ SLICKTEXT_BRAND_ID = os.getenv("SLICKTEXT_BRAND_ID", "")
 TWILIO_ACCOUNT_SID  = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN   = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
+
+# --- Live show broadcasts (optional) ---
+# LIVE_SHOW_BROADCAST_PROVIDER = slicktext | twilio | auto (default: auto)
+# LIVE_SHOW_BROADCAST_DELAY_MS — ms between each outbound API call in loop mode (default 350)
+# TWILIO_MESSAGING_SERVICE_SID — if set, Twilio bulk uses MessagingServiceSid instead of From number
+# SLICKTEXT_CAMPAIGN_DELETE_TEMP_LIST — true to DELETE the temp list after queuing a campaign (default false;
+#   deleting too early may break sends; only enable if SlickText confirms it is safe for your account)

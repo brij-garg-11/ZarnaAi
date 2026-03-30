@@ -13,11 +13,14 @@ from app.brain.handler import create_brain
 from app.messaging.slicktext_adapter import create_slicktext_adapter
 from app.messaging.twilio_adapter import create_twilio_adapter
 from app.admin import admin_bp
+from app.live_shows.blueprint import live_shows_bp
+from app.live_shows.signup import try_live_show_signup
 
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 app.register_blueprint(admin_bp)
+app.register_blueprint(live_shows_bp)
 
 brain     = create_brain()
 slicktext = create_slicktext_adapter()
@@ -159,6 +162,8 @@ def slicktext_webhook():
         logging.info("SlickText webhook: message filtered or unparseable. Payload: %s", payload)
         return jsonify({"status": "ignored"}), 200
 
+    try_live_show_signup(phone_number, message_text, "slicktext")
+
     if _is_rate_limited(phone_number):
         logging.warning("Rate limit hit for ...%s — dropping message", phone_number[-4:] if phone_number else "?")
         return jsonify({"status": "rate_limited"}), 200
@@ -227,6 +232,9 @@ def twilio_webhook():
     if not phone_number or not message_text:
         logging.info("Twilio webhook: message filtered or unparseable.")
         return ("", 204)
+
+    _tw_ch = "twilio_whatsapp" if phone_number.lower().startswith("whatsapp:") else "twilio"
+    try_live_show_signup(phone_number, message_text, _tw_ch)
 
     if _is_rate_limited(phone_number):
         logging.warning("Rate limit hit for Twilio ...%s — dropping message", phone_number[-4:] if phone_number else "?")

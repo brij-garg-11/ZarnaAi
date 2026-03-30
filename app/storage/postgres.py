@@ -46,6 +46,56 @@ ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_tags     TEXT[]  DEFAULT '{}';
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_location TEXT    DEFAULT '';
 """
 
+# One statement per execute — psycopg2 limitation.
+_LIVE_SHOW_MIGRATIONS = (
+    """
+    CREATE TABLE IF NOT EXISTS live_shows (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        keyword TEXT NOT NULL DEFAULT '',
+        use_keyword_only BOOLEAN NOT NULL DEFAULT TRUE,
+        window_start TIMESTAMPTZ,
+        window_end TIMESTAMPTZ,
+        deliver_as TEXT NOT NULL DEFAULT 'sms',
+        status TEXT NOT NULL DEFAULT 'draft',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS live_show_signups (
+        show_id INT NOT NULL REFERENCES live_shows(id) ON DELETE CASCADE,
+        phone_number TEXT NOT NULL,
+        channel TEXT NOT NULL DEFAULT '',
+        signed_up_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (show_id, phone_number)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_live_show_signups_show
+        ON live_show_signups(show_id)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS live_broadcast_jobs (
+        id SERIAL PRIMARY KEY,
+        show_id INT NOT NULL REFERENCES live_shows(id) ON DELETE CASCADE,
+        body TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'queued',
+        total_recipients INT DEFAULT 0,
+        sent_count INT DEFAULT 0,
+        failed_count INT DEFAULT 0,
+        last_error TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_live_broadcast_jobs_show
+        ON live_broadcast_jobs(show_id)
+    """,
+)
+
 
 class PostgresStorage(BaseStorage):
     """Thread-safe Postgres storage using a connection pool."""
@@ -72,6 +122,8 @@ class PostgresStorage(BaseStorage):
                 with conn.cursor() as cur:
                     cur.execute(_DDL)
                     cur.execute(_MIGRATIONS)
+                    for sql in _LIVE_SHOW_MIGRATIONS:
+                        cur.execute(sql)
         except psycopg2.errors.UniqueViolation:
             # Race condition: two workers started simultaneously and both tried
             # to CREATE TABLE at the same moment. The other worker already
