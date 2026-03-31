@@ -13,6 +13,7 @@ from app.config import (
     GEMINI_API_KEY,
     EMBEDDING_MODEL,
     EMBEDDINGS_PATH,
+    MONDAY_MOTIVATION_MODE,
     PODCAST_TRANSCRIPTS_MODE,
     TOP_K_CHUNKS,
 )
@@ -37,6 +38,7 @@ class EmbeddingRetriever(BaseRetriever):
         self._client = genai.Client(api_key=GEMINI_API_KEY)
         self._podcast_transcript_sources: set[str] = set()
         self._podcast_transcripts_mode = PODCAST_TRANSCRIPTS_MODE
+        self._monday_motivation_mode = MONDAY_MOTIVATION_MODE
         self._load_podcast_transcript_sources()
         self._load()  # eager load at startup
 
@@ -45,17 +47,25 @@ class EmbeddingRetriever(BaseRetriever):
         open_fn = gzip.open if self._path.endswith(".gz") else open
         with open_fn(self._path, "rt", encoding="utf-8") as f:
             loaded = json.load(f)
+        filtered = loaded
         if self._podcast_transcripts_mode == "exclude":
             filtered = [
-                c for c in loaded if not self._is_podcast_transcript_source(str(c.get("source", "")))
+                c for c in filtered if not self._is_podcast_transcript_source(str(c.get("source", "")))
             ]
             logger.info(
                 "Filtered out %d podcast transcript chunks (mode=exclude)",
                 len(loaded) - len(filtered),
             )
-            self._chunks = filtered
-        else:
-            self._chunks = loaded
+        if self._monday_motivation_mode == "exclude":
+            before = len(filtered)
+            filtered = [
+                c for c in filtered if str(c.get("source", "")).lower() != "monday_motivations.json"
+            ]
+            logger.info(
+                "Filtered out %d monday motivation chunks (mode=exclude)",
+                before - len(filtered),
+            )
+        self._chunks = filtered
         logger.info("Embeddings loaded: %d chunks", len(self._chunks))
 
     def _load_podcast_transcript_sources(self) -> None:
@@ -96,8 +106,12 @@ class EmbeddingRetriever(BaseRetriever):
         if src.endswith(".pdf"):
             # Book chunks (memoir) are a strong source of first-person facts.
             return 1.18
-        if src in ("one_in_a_billion.json", "practical_people_win.json"):
+        if src in ("one_in_a_billion.json", "practical_people_win.json", "nervous_in_new_york.json"):
             return 1.22
+        if src == "monday_motivations.json":
+            # Advice/motivation content — present but deferential to comedy and facts.
+            # Surfaces naturally when fans ask advice questions; won't beat humor chunks for joke queries.
+            return 0.82
         if src == "podcast_episodes":
             # Episode blurbs are useful for podcast intent, but can be noisy for general replies.
             return 0.90

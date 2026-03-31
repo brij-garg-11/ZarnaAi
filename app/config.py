@@ -33,6 +33,11 @@ CONVERSATION_HISTORY_LIMIT = 8
 # - include: no penalty beyond general scoring
 PODCAST_TRANSCRIPTS_MODE = os.getenv("PODCAST_TRANSCRIPTS_MODE", "exclude").strip().lower()
 
+# monday motivation handling for retrieval:
+# - include: present in retrieval pool with a moderate weight penalty (default)
+# - exclude: never surface motivation chunks
+MONDAY_MOTIVATION_MODE = os.getenv("MONDAY_MOTIVATION_MODE", "include").strip().lower()
+
 # --- Routing fast path (skip Flash router API when safe) ---
 ROUTER_SKIP_MAX_CHARS = int(os.getenv("ROUTER_SKIP_MAX_CHARS", "88"))
 ROUTER_SKIP_MAX_WORDS = int(os.getenv("ROUTER_SKIP_MAX_WORDS", "12"))

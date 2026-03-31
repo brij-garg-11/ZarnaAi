@@ -4,6 +4,7 @@ import json
 TRANSCRIPT_DIRS = [
     "Transcripts/youtube",
     "Transcripts/specials",
+    "Transcripts/motivation",
 ]
 OUTPUT_PATH = "training_data/zarna_chunks.json"
 
