@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -22,6 +23,16 @@ _logger = logging.getLogger(__name__)
 # Routing uses Gemini-only for these; parallel router work is skipped when fast intent matches.
 _STRUCTURED_ROUTE_INTENTS = frozenset(
     {Intent.CLIP, Intent.SHOW, Intent.BOOK, Intent.PODCAST},
+)
+
+_ROAST_FAMILY_HINTS = re.compile(
+    r"\b(shalabh|husband|mother[- ]in[- ]law|mil|baba\s*ramdev)\b",
+    re.IGNORECASE,
+)
+_VULNERABLE_HINTS = re.compile(
+    r"\b(sad|anxious|anxiety|depress|grief|grieving|panic|hurt|heartbroken|"
+    r"loss|cancer|illness|scared|not okay|not okay)\b",
+    re.IGNORECASE,
 )
 
 
@@ -88,11 +99,18 @@ class ZarnaBrain:
         # 7. Route complexity for GENERAL/JOKE; structured intents stay Gemini-only.
         t_route = time.perf_counter()
         route_source = "structured"
+        family_roast_override = bool(_ROAST_FAMILY_HINTS.search(message_text)) and not bool(
+            _VULNERABLE_HINTS.search(message_text)
+        )
         if intent in _STRUCTURED_ROUTE_INTENTS:
             routing_tier = None
             if future_route is not None:
                 future_route.result()  # drain parallel work we don't need
             route_ms = (time.perf_counter() - t_route) * 1000
+        elif family_roast_override:
+            routing_tier = "low"
+            route_source = "family_roast_force_low"
+            route_ms = 0.0
         elif skip_router_api:
             routing_tier = "low"
             route_source = "skip"

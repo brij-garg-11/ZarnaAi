@@ -175,3 +175,4 @@ def test_prompt_includes_hard_fact_guardrails(mock_gemini):
     assert "What are your thoughts on Shalabh?" in prompt
     assert "How do you deal with your mother-in-law?" in prompt
     assert "Do you like Baba Ramdev?" in prompt
+    assert "Exception: if topic is Shalabh / husband / mother-in-law / Baba Ramdev" in prompt

@@ -56,3 +56,25 @@ def test_show_intent_skips_classifier(mock_intent, mock_route, mock_gen, _mem):
     mock_route.assert_not_called()
     call_kw = mock_gen.call_args[1]
     assert call_kw.get("routing_tier") is None
+
+
+@patch("app.brain.handler.extract_memory", return_value=("", [], "", False))
+@patch("app.brain.handler.generate_zarna_reply")
+@patch("app.brain.handler.classify_routing_tier")
+@patch("app.brain.handler.classify_intent")
+def test_shalabh_question_forces_low_roast_lane(mock_intent, mock_route, mock_gen, _mem):
+    Intent = __import__("app.brain.intent", fromlist=["Intent"]).Intent
+    mock_intent.return_value = Intent.GENERAL
+    mock_route.return_value = "medium"
+    mock_gen.return_value = "reply"
+
+    from app.brain.handler import ZarnaBrain
+    from app.storage.memory import InMemoryStorage
+
+    retriever = MagicMock()
+    retriever.get_relevant_chunks.return_value = []
+    brain = ZarnaBrain(storage=InMemoryStorage(), retriever=retriever)
+
+    brain.handle_incoming_message("+15550003", "What are your thoughts on Shalabh?")
+    call_kw = mock_gen.call_args[1]
+    assert call_kw.get("routing_tier") == "low"
