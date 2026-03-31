@@ -150,3 +150,23 @@ def test_multi_disabled_always_gemini(mock_gemini, _mc):
     )
     mock_gemini.assert_called_once()
     assert "Only Gemini" in out
+
+
+@patch("app.brain.generator._generate_gemini_raw")
+def test_prompt_includes_hard_fact_guardrails(mock_gemini):
+    mock_gemini.return_value = "ok"
+    from app.brain.generator import generate_zarna_reply
+
+    generate_zarna_reply(
+        Intent.GENERAL,
+        "tell me about your family",
+        ["some context chunk"],
+        [],
+        "",
+        routing_tier="low",
+    )
+
+    prompt = mock_gemini.call_args[0][0]
+    assert "Immediate family in current context: husband Shalabh and kids Zoya, Brij, Veer." in prompt
+    assert "Do NOT imply living parents or grandparents." in prompt
+    assert "Shalabh likes him; Zarna is skeptical/critical." in prompt

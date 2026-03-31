@@ -2,6 +2,8 @@ import gzip
 import json
 import logging
 import math
+import os
+import re
 from functools import lru_cache
 from typing import List
 
@@ -27,7 +29,9 @@ class EmbeddingRetriever(BaseRetriever):
         self._path = embeddings_path
         self._chunks: list = []
         self._client = genai.Client(api_key=GEMINI_API_KEY)
+        self._podcast_transcript_sources: set[str] = set()
         self._load()  # eager load at startup
+        self._load_podcast_transcript_sources()
 
     def _load(self):
         logger.info("Loading embeddings from %s …", self._path)
@@ -35,6 +39,54 @@ class EmbeddingRetriever(BaseRetriever):
         with open_fn(self._path, "rt", encoding="utf-8") as f:
             self._chunks = json.load(f)
         logger.info("Embeddings loaded: %d chunks", len(self._chunks))
+
+    def _load_podcast_transcript_sources(self) -> None:
+        """
+        Build a set of transcript source names that are known podcast episodes.
+        This lets us down-rank multi-speaker transcript chunks that often cause
+        factual bleed into Zarna-only replies.
+        """
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        metadata_path = os.path.join(base_dir, "Processed", "youtube", "video_metadata.json")
+        if not os.path.exists(metadata_path):
+            return
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                videos = json.load(f)
+            for v in videos:
+                title = str(v.get("title", "")).lower()
+                vid = str(v.get("video_id", "")).strip()
+                if not vid:
+                    continue
+                if "zarna garg family podcast" in title:
+                    self._podcast_transcript_sources.add(f"{vid}_transcript.json")
+            logger.info(
+                "Loaded %d podcast transcript source IDs for retrieval weighting",
+                len(self._podcast_transcript_sources),
+            )
+        except Exception as exc:
+            logger.warning("Could not load podcast source metadata: %s", exc)
+
+    def _source_weight(self, source: str) -> float:
+        src = (source or "").strip().lower()
+        if not src:
+            return 1.0
+        if src == "zarna_facts":
+            return 1.35
+        if src.endswith(".pdf"):
+            # Book chunks (memoir) are a strong source of first-person facts.
+            return 1.18
+        if src in ("one_in_a_billion.json", "practical_people_win.json"):
+            return 1.22
+        if src == "podcast_episodes":
+            # Episode blurbs are useful for podcast intent, but can be noisy for general replies.
+            return 0.90
+        if src in self._podcast_transcript_sources:
+            return 0.74
+        if re.match(r"^[a-z0-9_-]{8,}_transcript\.json$", src):
+            # Unknown transcript files get a mild discount by default.
+            return 0.92
+        return 1.0
 
     def _embed(self, text: str) -> List[float]:
         result = self._client.models.embed_content(
@@ -62,9 +114,10 @@ class EmbeddingRetriever(BaseRetriever):
         different people during a show) only hit the Gemini embedding API once.
         """
         query_embedding = self._embed(query)
-        scored = [
-            (self._cosine_similarity(query_embedding, c["embedding"]), c["text"])
-            for c in self._chunks
-        ]
+        scored = []
+        for c in self._chunks:
+            base_score = self._cosine_similarity(query_embedding, c["embedding"])
+            weighted = base_score * self._source_weight(str(c.get("source", "")))
+            scored.append((weighted, c["text"]))
         scored.sort(reverse=True)
         return [text for _, text in scored[:k]]
