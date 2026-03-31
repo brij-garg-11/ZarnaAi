@@ -176,3 +176,22 @@ def test_prompt_includes_hard_fact_guardrails(mock_gemini):
     assert "How do you deal with your mother-in-law?" in prompt
     assert "Do you like Baba Ramdev?" in prompt
     assert "Exception: if topic is Shalabh / husband / mother-in-law / Baba Ramdev" in prompt
+    assert "Primary tone mode:" not in prompt
+
+
+@patch("app.brain.generator._generate_gemini_raw")
+def test_prompt_includes_selected_tone_mode_guidance(mock_gemini):
+    mock_gemini.return_value = "ok"
+    from app.brain.generator import generate_zarna_reply
+
+    generate_zarna_reply(
+        Intent.GENERAL,
+        "What do you think of Shalabh?",
+        ["some context chunk"],
+        [],
+        "",
+        routing_tier="low",
+        tone_mode="roast_playful",
+    )
+    prompt = mock_gemini.call_args[0][0]
+    assert "Primary tone mode: roast_playful." in prompt

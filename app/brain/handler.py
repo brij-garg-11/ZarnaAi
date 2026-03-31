@@ -10,6 +10,7 @@ from app.brain.generator import generate_zarna_reply, infer_reply_provider
 from app.brain.intent import Intent, _fast_classify, classify_intent
 from app.brain.memory import extract_memory
 from app.brain.routing import classify_routing_tier, try_router_skip_safe
+from app.brain.tone import classify_tone_mode
 from app.config import CONVERSATION_HISTORY_LIMIT, LOG_REPLY_METRICS
 from app.retrieval.base import BaseRetriever
 from app.storage.base import BaseStorage
@@ -125,6 +126,7 @@ class ZarnaBrain:
             route_ms = (time.perf_counter() - t_route) * 1000
 
         t_gen = time.perf_counter()
+        tone_mode = classify_tone_mode(message_text, intent, history)
         reply = generate_zarna_reply(
             intent=intent,
             user_message=message_text,
@@ -133,6 +135,7 @@ class ZarnaBrain:
             fan_memory=fan_memory,
             emphasis_suppress_all=emphasis_suppress_all,
             routing_tier=routing_tier,
+            tone_mode=tone_mode,
         )
         gen_ms = (time.perf_counter() - t_gen) * 1000
 
@@ -140,11 +143,12 @@ class ZarnaBrain:
             provider = infer_reply_provider(intent, routing_tier)
             _logger.info(
                 "reply_metrics intent=%s tier=%s route_src=%s provider=%s "
-                "intent_chunks_ms=%.1f route_ms=%.1f gen_ms=%.1f phone_last4=%s",
+                "tone=%s intent_chunks_ms=%.1f route_ms=%.1f gen_ms=%.1f phone_last4=%s",
                 intent.value,
                 routing_tier if routing_tier is not None else "none",
                 route_source,
                 provider,
+                tone_mode,
                 intent_chunks_ms,
                 route_ms,
                 gen_ms,

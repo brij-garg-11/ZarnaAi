@@ -247,10 +247,23 @@ def _build_prompt(
     chunks: List[str],
     history: List[dict],
     fan_memory: str = "",
+    tone_mode: Optional[str] = None,
 ) -> str:
     context = "\n\n".join(_filter_chunks(chunks, intent)) if chunks else ""
     history_text = _format_history(history)
     memory_text = _format_memory(fan_memory)
+    tone_guidance = ""
+    if tone_mode:
+        tone_map = {
+            "roast_playful": "Primary tone mode: roast_playful. Lead with playful bite and confidence; keep affection underneath the joke.",
+            "warm_supportive": "Primary tone mode: warm_supportive. Be kind and human first; add light humor only if it feels natural.",
+            "direct_answer": "Primary tone mode: direct_answer. Give a clear answer first, then add one line of flavor if earned.",
+            "celebratory": "Primary tone mode: celebratory. High-energy appreciation first, then a punchy funny tag.",
+            "sensitive_care": "Primary tone mode: sensitive_care. Gentle empathy first; avoid snark in the first line.",
+        }
+        tone_guidance = tone_map.get(
+            tone_mode, "Primary tone mode: direct_answer. Keep it clear, sharp, and natural."
+        )
 
     if intent == Intent.JOKE:
         return f"""You are writing as an AI comedy assistant inspired by Zarna Garg's public comedic voice.
@@ -260,6 +273,7 @@ Background knowledge about Zarna (use to make jokes richer and more specific —
 
 {_HARD_FACT_GUARDRAILS}
 {_VOICE_LOCK_RULES}
+{tone_guidance}
 {memory_text}{history_text}Request: {user_message}
 {_STYLE_RULES}
 If the user asks for a joke, deliver one punchy one-liner or a two-line bit. That's it."""
@@ -274,6 +288,7 @@ Request: {user_message}
 
 {_HARD_FACT_GUARDRAILS}
 {_VOICE_LOCK_RULES}
+{tone_guidance}
 Respond in Zarna's sharp, high-energy voice. Mention a specific topic or theme from her YouTube channel that matches what they're looking for, in 1 sentence. Then on a new line include EXACTLY this link with no changes: https://www.youtube.com/@ZarnaGarg
 Do not make up video titles. Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
@@ -284,6 +299,7 @@ The user is asking about shows or tour dates: {user_message}
 
 {_HARD_FACT_GUARDRAILS}
 {_VOICE_LOCK_RULES}
+{tone_guidance}
 Respond in Zarna's voice — sharp, funny, 1 sentence max. Then on a new line, include EXACTLY this link with no changes: https://zarnagarg.com/tickets/
 Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
@@ -294,6 +310,7 @@ The user is asking about Zarna's book "This American Woman": {user_message}
 
 {_HARD_FACT_GUARDRAILS}
 {_VOICE_LOCK_RULES}
+{tone_guidance}
 Respond in Zarna's voice — sharp, warm, excited about the book, 1 sentence max. Then on a new line, include EXACTLY this link with no changes: https://www.amazon.com/dp/0593975022
 Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
@@ -307,6 +324,7 @@ The fan asked: {user_message}
 
 {_HARD_FACT_GUARDRAILS}
 {_VOICE_LOCK_RULES}
+{tone_guidance}
 Respond in Zarna's warm, sharp voice. If one of the episodes above is a strong match, recommend it by name in one excited sentence — like you're telling a friend "oh we literally talked about this!" Then on a new line include the "Watch/listen at:" link exactly as it appears in the episode context above.
 If no episode above is a strong match, tell them to check out the podcast in one short sentence, then include this link on a new line: https://www.youtube.com/@ZarnaGarg
 Never use the word "honey" or "darling". No profanity. No homophobic language. Keep the text to 1-2 sentences max before the link."""
@@ -319,6 +337,7 @@ Background knowledge about Zarna (use to make responses richer and more specific
 
 {_HARD_FACT_GUARDRAILS}
 {_VOICE_LOCK_RULES}
+{tone_guidance}
 {_TONE_EXAMPLES}
 {memory_text}{history_text}Message: {user_message}
 {_STYLE_RULES}"""
@@ -498,12 +517,20 @@ def generate_zarna_reply(
     fan_memory: str = "",
     emphasis_suppress_all: bool = False,
     routing_tier: Optional[str] = None,
+    tone_mode: Optional[str] = None,
 ) -> str:
     """
     Generate reply. For GENERAL/JOKE with multi-model enabled, pass routing_tier
     from classify_routing_tier(). Structured intents (clip/show/book/podcast) always use Gemini.
     """
-    prompt = _build_prompt(intent, user_message, chunks, history or [], fan_memory)
+    prompt = _build_prompt(
+        intent,
+        user_message,
+        chunks,
+        history or [],
+        fan_memory,
+        tone_mode=tone_mode,
+    )
 
     raw = _produce_raw_text(intent, prompt, routing_tier)
     if not (raw or "").strip():

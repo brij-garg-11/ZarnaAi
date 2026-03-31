@@ -78,3 +78,4 @@ def test_shalabh_question_forces_low_roast_lane(mock_intent, mock_route, mock_ge
     brain.handle_incoming_message("+15550003", "What are your thoughts on Shalabh?")
     call_kw = mock_gen.call_args[1]
     assert call_kw.get("routing_tier") == "low"
+    assert call_kw.get("tone_mode") == "roast_playful"
