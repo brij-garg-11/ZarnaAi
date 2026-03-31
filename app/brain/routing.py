@@ -14,7 +14,12 @@ from typing import Any, Dict, List, Literal
 
 from google import genai
 
-from app.config import GEMINI_API_KEY, ROUTER_MODEL
+from app.config import (
+    GEMINI_API_KEY,
+    ROUTER_MODEL,
+    ROUTER_SKIP_MAX_CHARS,
+    ROUTER_SKIP_MAX_WORDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +38,7 @@ _SENSITIVE_HINTS = re.compile(
 def _heuristic_floor(message: str) -> RoutingTier | None:
     t = message.strip()
     if not t:
-        return "low"
+        return None
     if len(t) > 900 or t.count("\n") > 8:
         return "high"
     if len(t) > 420 or t.count("?") >= 3 or t.count("\n") > 3:
@@ -41,6 +46,30 @@ def _heuristic_floor(message: str) -> RoutingTier | None:
     if _SENSITIVE_HINTS.search(t):
         return "high"
     return None
+
+
+def try_router_skip_safe(message: str) -> bool:
+    """
+    True when we can treat the message as routing tier *low* without calling
+    the router model. Conservative: any heuristic medium/high floor, question
+    mark, long text, or multi-line chat blocks the skip.
+    """
+    h = _heuristic_floor(message)
+    if h is not None:
+        return False
+    t = message.strip()
+    if not t:
+        return True
+    if "?" in t:
+        return False
+    if len(t) > ROUTER_SKIP_MAX_CHARS:
+        return False
+    if t.count("\n") > 1:
+        return False
+    words = t.split()
+    if len(words) > ROUTER_SKIP_MAX_WORDS:
+        return False
+    return True
 
 
 def _router_prompt(message: str, history: List[dict], fan_memory: str) -> str:
@@ -90,6 +119,8 @@ def classify_routing_tier(
     h = _heuristic_floor(message)
     if h == "high":
         return "high"
+    if try_router_skip_safe(message):
+        return "low"
 
     prompt = _router_prompt(message, history, fan_memory)
 

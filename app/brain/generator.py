@@ -26,6 +26,26 @@ _STRUCTURED_INTENTS = frozenset(
 )
 
 
+def infer_reply_provider(intent: Intent, routing_tier: Optional[str]) -> str:
+    """Best-effort label for ops metrics (matches _produce_raw_text when keys are set)."""
+    if intent in _STRUCTURED_INTENTS or not _multi_model_enabled():
+        return "gemini"
+    if routing_tier is None:
+        return "gemini"
+    tier = (routing_tier or "medium").lower()
+    if tier not in ("low", "medium", "high"):
+        tier = "medium"
+    if tier == "low":
+        return "gemini"
+    if tier == "medium":
+        return "openai" if (OPENAI_API_KEY or "").strip() else "gemini"
+    if (ANTHROPIC_API_KEY or "").strip():
+        return "anthropic"
+    if (OPENAI_API_KEY or "").strip():
+        return "openai"
+    return "gemini"
+
+
 def _multi_model_enabled() -> bool:
     if MULTI_MODEL_REPLY in ("0", "false", "off"):
         return False

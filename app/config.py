@@ -25,8 +25,19 @@ CHUNKS_PATH = os.path.join(_BASE_DIR, "training_data", "zarna_chunks.json")
 EMBEDDINGS_PATH = os.path.join(_BASE_DIR, "training_data", "zarna_embeddings.json.gz")
 
 # --- Retrieval / Generation ---
-TOP_K_CHUNKS = 7
+TOP_K_CHUNKS = int(os.getenv("TOP_K_CHUNKS", "7"))
 CONVERSATION_HISTORY_LIMIT = 8
+
+# --- Routing fast path (skip Flash router API when safe) ---
+ROUTER_SKIP_MAX_CHARS = int(os.getenv("ROUTER_SKIP_MAX_CHARS", "88"))
+ROUTER_SKIP_MAX_WORDS = int(os.getenv("ROUTER_SKIP_MAX_WORDS", "12"))
+
+# --- Ops logging (one line per reply when on) ---
+LOG_REPLY_METRICS = os.getenv("LOG_REPLY_METRICS", "on").strip().lower() not in (
+    "0",
+    "false",
+    "off",
+)
 
 # --- SlickText ---
 # The adapter auto-detects which API version to use based on which keys are present:

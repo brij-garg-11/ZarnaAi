@@ -1,13 +1,15 @@
+import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from app.brain.conversation_end import is_conversation_ender
 from app.brain.emphasis import should_suppress_all_emphasis
-from app.brain.generator import generate_zarna_reply
-from app.brain.intent import Intent, classify_intent
+from app.brain.generator import generate_zarna_reply, infer_reply_provider
+from app.brain.intent import Intent, _fast_classify, classify_intent
 from app.brain.memory import extract_memory
-from app.brain.routing import classify_routing_tier
-from app.config import CONVERSATION_HISTORY_LIMIT
+from app.brain.routing import classify_routing_tier, try_router_skip_safe
+from app.config import CONVERSATION_HISTORY_LIMIT, LOG_REPLY_METRICS
 from app.retrieval.base import BaseRetriever
 from app.storage.base import BaseStorage
 
@@ -15,6 +17,12 @@ from app.storage.base import BaseStorage
 # cost on every message. 32 threads handles 100+ simultaneous AI calls
 # without queuing (each call is mostly I/O-bound waiting on Gemini).
 _executor = ThreadPoolExecutor(max_workers=32)
+_logger = logging.getLogger(__name__)
+
+# Routing uses Gemini-only for these; parallel router work is skipped when fast intent matches.
+_STRUCTURED_ROUTE_INTENTS = frozenset(
+    {Intent.CLIP, Intent.SHOW, Intent.BOOK, Intent.PODCAST},
+)
 
 
 class ZarnaBrain:
@@ -48,12 +56,25 @@ class ZarnaBrain:
         # 4. Load existing fan memory for personalization
         fan_memory = self.storage.get_memory(phone_number)
 
-        # 5 + 6. Classify intent AND retrieve chunks in parallel.
+        # 5 + 6. Classify intent AND retrieve chunks in parallel; start routing in parallel
+        # when safe (no wasted router call for structured fast-path intents or skip-low).
+        skip_router_api = try_router_skip_safe(message_text)
+        fast_intent = _fast_classify(message_text)
+        structured_fast = fast_intent in _STRUCTURED_ROUTE_INTENTS if fast_intent else False
+        start_route_parallel = not skip_router_api and not structured_fast
+
+        t_parallel = time.perf_counter()
         future_intent = _executor.submit(classify_intent, message_text)
         future_chunks = _executor.submit(self.retriever.get_relevant_chunks, message_text)
+        future_route = None
+        if start_route_parallel:
+            future_route = _executor.submit(
+                classify_routing_tier, message_text, history, fan_memory
+            )
 
         intent = future_intent.result()
         chunks = future_chunks.result()
+        intent_chunks_ms = (time.perf_counter() - t_parallel) * 1000
 
         # Recent assistant bodies for *emphasis* throttle (exclude this turn)
         history_for_emphasis = self.storage.get_conversation_history(
@@ -64,12 +85,28 @@ class ZarnaBrain:
             message_text, intent, assistant_texts
         )
 
-        # 7. Route complexity (Gemini Flash) for GENERAL/JOKE; structured intents stay Gemini-only.
-        if intent in (Intent.CLIP, Intent.SHOW, Intent.BOOK, Intent.PODCAST):
+        # 7. Route complexity for GENERAL/JOKE; structured intents stay Gemini-only.
+        t_route = time.perf_counter()
+        route_source = "structured"
+        if intent in _STRUCTURED_ROUTE_INTENTS:
             routing_tier = None
+            if future_route is not None:
+                future_route.result()  # drain parallel work we don't need
+            route_ms = (time.perf_counter() - t_route) * 1000
+        elif skip_router_api:
+            routing_tier = "low"
+            route_source = "skip"
+            route_ms = 0.0
         else:
-            routing_tier = classify_routing_tier(message_text, history, fan_memory)
+            if future_route is not None:
+                routing_tier = future_route.result()
+                route_source = "parallel"
+            else:
+                routing_tier = classify_routing_tier(message_text, history, fan_memory)
+                route_source = "sync"
+            route_ms = (time.perf_counter() - t_route) * 1000
 
+        t_gen = time.perf_counter()
         reply = generate_zarna_reply(
             intent=intent,
             user_message=message_text,
@@ -79,6 +116,22 @@ class ZarnaBrain:
             emphasis_suppress_all=emphasis_suppress_all,
             routing_tier=routing_tier,
         )
+        gen_ms = (time.perf_counter() - t_gen) * 1000
+
+        if LOG_REPLY_METRICS:
+            provider = infer_reply_provider(intent, routing_tier)
+            _logger.info(
+                "reply_metrics intent=%s tier=%s route_src=%s provider=%s "
+                "intent_chunks_ms=%.1f route_ms=%.1f gen_ms=%.1f phone_last4=%s",
+                intent.value,
+                routing_tier if routing_tier is not None else "none",
+                route_source,
+                provider,
+                intent_chunks_ms,
+                route_ms,
+                gen_ms,
+                phone_number[-4:] if len(phone_number) >= 4 else "****",
+            )
 
         # 8. Persist the assistant's reply
         self.storage.save_message(phone_number, "assistant", reply)

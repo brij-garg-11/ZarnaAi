@@ -23,7 +23,11 @@ def test_general_message_invokes_classifier(mock_intent, mock_route, mock_gen, _
     retriever.get_relevant_chunks.return_value = []
     brain = ZarnaBrain(storage=InMemoryStorage(), retriever=retriever)
 
-    out = brain.handle_incoming_message("+15550001", "Tell me about Zarna.")
+    # Must not hit router skip-fast-path (no ? / length heuristics) so routing is invoked.
+    out = brain.handle_incoming_message(
+        "+15550001",
+        "Tell me about Zarna — what got her into stand-up, honestly?",
+    )
     assert out == "reply"
     mock_route.assert_called_once()
     mock_gen.assert_called_once()
@@ -47,7 +51,8 @@ def test_show_intent_skips_classifier(mock_intent, mock_route, mock_gen, _mem):
     retriever.get_relevant_chunks.return_value = []
     brain = ZarnaBrain(storage=InMemoryStorage(), retriever=retriever)
 
-    brain.handle_incoming_message("+15550002", "When is the tour?")
+    # Fast intent SHOW without "?" so keyword path skips parallel router work.
+    brain.handle_incoming_message("+15550002", "When are you touring")
     mock_route.assert_not_called()
     call_kw = mock_gen.call_args[1]
     assert call_kw.get("routing_tier") is None
