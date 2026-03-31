@@ -5,6 +5,7 @@ TRANSCRIPT_DIRS = [
     "Transcripts/youtube",
     "Transcripts/specials",
     "Transcripts/motivation",
+    "Transcripts/skits",
 ]
 OUTPUT_PATH = "training_data/zarna_chunks.json"
 

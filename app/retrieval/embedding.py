@@ -95,6 +95,21 @@ class EmbeddingRetriever(BaseRetriever):
         except Exception as exc:
             logger.warning("Could not load podcast source metadata: %s", exc)
 
+    # Viral skits — confirmed high-engagement shorts that should surface readily.
+    # "HUGE" tier gets 1.18; strong viral gets 1.13; notable gets 1.08.
+    _VIRAL_SKIT_WEIGHTS: dict[str, float] = {
+        # HUGE — Texting My Son's Girlfriend
+        "mxaocinn3hc_transcript.json": 1.18,
+        # Strong viral
+        "jg7b9xctyhs_transcript.json": 1.13,   # Dating Advice
+        "rdkkeekl9icq_transcript.json": 1.13,   # Every New Year's Message (Dadhi)
+        "emfhjv6qw9y_transcript.json": 1.13,   # Relaxing Bedtime Story
+        "_7j8jfshce8_transcript.json": 1.13,   # The Perfect Date
+        # Notable viral
+        "fmtzk34eswY_transcript.json": 1.08,   # Hair Oil Vs Body Oil
+        "tnfzdxwhfam_transcript.json": 1.08,   # How to Leave the House
+    }
+
     def _source_weight(self, source: str) -> float:
         src = (source or "").strip().lower()
         if not src:
@@ -110,17 +125,19 @@ class EmbeddingRetriever(BaseRetriever):
             return 1.22
         if src == "monday_motivations.json":
             # Advice/motivation content — present but deferential to comedy and facts.
-            # Surfaces naturally when fans ask advice questions; won't beat humor chunks for joke queries.
             return 0.82
         if src == "podcast_episodes":
             # Episode blurbs are useful for podcast intent, but can be noisy for general replies.
             return 0.90
+        # Viral skits take priority over the generic transcript path below.
+        if src in self._VIRAL_SKIT_WEIGHTS:
+            return self._VIRAL_SKIT_WEIGHTS[src]
         if self._is_podcast_transcript_source(src):
             if self._podcast_transcripts_mode == "include":
                 return 1.0
             return 0.74
         if re.match(r"^[a-z0-9_-]{8,}_transcript\.json$", src):
-            # Unknown transcript files get a mild discount by default.
+            # Regular skit / youtube transcript — present but deferential to first-person sources.
             return 0.92
         return 1.0
 
@@ -130,11 +147,10 @@ class EmbeddingRetriever(BaseRetriever):
             return False
         if src.startswith("podcast_zarna_"):
             return False
-        if src in self._podcast_transcript_sources:
-            return True
-        # Fallback: uploaded YouTube transcript filenames are usually video-id based.
-        # In "exclude" mode we prefer facts/book/specials over generic transcript noise.
-        return bool(re.match(r"^[a-z0-9_-]{8,}_transcript\.json$", src))
+        # Only flag sources that are explicitly in the podcast metadata set.
+        # Previously this had a broad regex fallback that caught all *_transcript.json
+        # files — that incorrectly downweighted skit transcripts.
+        return src in self._podcast_transcript_sources
 
     def _embed(self, text: str) -> List[float]:
         result = self._client.models.embed_content(
