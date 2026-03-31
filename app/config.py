@@ -27,6 +27,11 @@ EMBEDDINGS_PATH = os.path.join(_BASE_DIR, "training_data", "zarna_embeddings.jso
 # --- Retrieval / Generation ---
 TOP_K_CHUNKS = int(os.getenv("TOP_K_CHUNKS", "7"))
 CONVERSATION_HISTORY_LIMIT = 8
+# podcast transcript handling for retrieval:
+# - exclude: ignore multi-speaker podcast transcript chunks
+# - downrank: include but apply heavy penalty (default prior behavior)
+# - include: no penalty beyond general scoring
+PODCAST_TRANSCRIPTS_MODE = os.getenv("PODCAST_TRANSCRIPTS_MODE", "exclude").strip().lower()
 
 # --- Routing fast path (skip Flash router API when safe) ---
 ROUTER_SKIP_MAX_CHARS = int(os.getenv("ROUTER_SKIP_MAX_CHARS", "88"))

@@ -9,7 +9,13 @@ from typing import List
 
 from google import genai
 
-from app.config import GEMINI_API_KEY, EMBEDDING_MODEL, EMBEDDINGS_PATH, TOP_K_CHUNKS
+from app.config import (
+    GEMINI_API_KEY,
+    EMBEDDING_MODEL,
+    EMBEDDINGS_PATH,
+    PODCAST_TRANSCRIPTS_MODE,
+    TOP_K_CHUNKS,
+)
 from app.retrieval.base import BaseRetriever
 
 logger = logging.getLogger(__name__)
@@ -30,14 +36,26 @@ class EmbeddingRetriever(BaseRetriever):
         self._chunks: list = []
         self._client = genai.Client(api_key=GEMINI_API_KEY)
         self._podcast_transcript_sources: set[str] = set()
-        self._load()  # eager load at startup
+        self._podcast_transcripts_mode = PODCAST_TRANSCRIPTS_MODE
         self._load_podcast_transcript_sources()
+        self._load()  # eager load at startup
 
     def _load(self):
         logger.info("Loading embeddings from %s …", self._path)
         open_fn = gzip.open if self._path.endswith(".gz") else open
         with open_fn(self._path, "rt", encoding="utf-8") as f:
-            self._chunks = json.load(f)
+            loaded = json.load(f)
+        if self._podcast_transcripts_mode == "exclude":
+            filtered = [
+                c for c in loaded if not self._is_podcast_transcript_source(str(c.get("source", "")))
+            ]
+            logger.info(
+                "Filtered out %d podcast transcript chunks (mode=exclude)",
+                len(loaded) - len(filtered),
+            )
+            self._chunks = filtered
+        else:
+            self._chunks = loaded
         logger.info("Embeddings loaded: %d chunks", len(self._chunks))
 
     def _load_podcast_transcript_sources(self) -> None:
@@ -59,7 +77,7 @@ class EmbeddingRetriever(BaseRetriever):
                 if not vid:
                     continue
                 if "zarna garg family podcast" in title:
-                    self._podcast_transcript_sources.add(f"{vid}_transcript.json")
+                    self._podcast_transcript_sources.add(f"{vid}_transcript.json".lower())
             logger.info(
                 "Loaded %d podcast transcript source IDs for retrieval weighting",
                 len(self._podcast_transcript_sources),
@@ -71,6 +89,8 @@ class EmbeddingRetriever(BaseRetriever):
         src = (source or "").strip().lower()
         if not src:
             return 1.0
+        if src.startswith("podcast_zarna_"):
+            return 1.24
         if src == "zarna_facts":
             return 1.35
         if src.endswith(".pdf"):
@@ -81,12 +101,26 @@ class EmbeddingRetriever(BaseRetriever):
         if src == "podcast_episodes":
             # Episode blurbs are useful for podcast intent, but can be noisy for general replies.
             return 0.90
-        if src in self._podcast_transcript_sources:
+        if self._is_podcast_transcript_source(src):
+            if self._podcast_transcripts_mode == "include":
+                return 1.0
             return 0.74
         if re.match(r"^[a-z0-9_-]{8,}_transcript\.json$", src):
             # Unknown transcript files get a mild discount by default.
             return 0.92
         return 1.0
+
+    def _is_podcast_transcript_source(self, source: str) -> bool:
+        src = (source or "").strip().lower()
+        if not src:
+            return False
+        if src.startswith("podcast_zarna_"):
+            return False
+        if src in self._podcast_transcript_sources:
+            return True
+        # Fallback: uploaded YouTube transcript filenames are usually video-id based.
+        # In "exclude" mode we prefer facts/book/specials over generic transcript noise.
+        return bool(re.match(r"^[a-z0-9_-]{8,}_transcript\.json$", src))
 
     def _embed(self, text: str) -> List[float]:
         result = self._client.models.embed_content(

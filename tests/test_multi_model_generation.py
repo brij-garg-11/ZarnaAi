@@ -170,3 +170,8 @@ def test_prompt_includes_hard_fact_guardrails(mock_gemini):
     assert "Immediate family in current context: husband Shalabh and kids Zoya, Brij, Veer." in prompt
     assert "Do NOT imply living parents or grandparents." in prompt
     assert "Shalabh likes him; Zarna is skeptical/critical." in prompt
+    assert "Do NOT describe Shalabh as \"my rock\"" in prompt
+    assert "Mother-in-law mentions: default to roast/chaos/comedic complaint lane." in prompt
+    assert "What are your thoughts on Shalabh?" in prompt
+    assert "How do you deal with your mother-in-law?" in prompt
+    assert "Do you like Baba Ramdev?" in prompt
