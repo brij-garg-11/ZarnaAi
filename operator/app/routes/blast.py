@@ -42,25 +42,38 @@ def blast_index():
 
 
 @blast_bp.route("/operator/blast/new")
+@login_required
+def blast_new():
+    """Auto-create a blank draft and open the compose form immediately."""
+    user = current_user()
+    new_id = save_blast_draft(
+        name="Untitled draft",
+        body="",
+        channel="twilio",
+        audience_type="all",
+        audience_filter="",
+        sample_pct=100,
+        created_by=user["email"] if user else "",
+    )
+    return redirect(url_for("blast.blast_compose", draft_id=new_id))
+
+
 @blast_bp.route("/operator/blast/<int:draft_id>")
 @login_required
-def blast_compose(draft_id: int | None = None):
+def blast_compose(draft_id: int):
     tags = get_all_tags()
     drafts = list_blast_drafts()
 
-    active_draft = None
-    audience_count = None
+    active_draft = get_blast_draft(draft_id)
+    if not active_draft:
+        flash("Draft not found.", "error")
+        return redirect(url_for("blast.blast_index"))
 
-    if draft_id:
-        active_draft = get_blast_draft(draft_id)
-        if not active_draft:
-            flash("Draft not found.", "error")
-            return redirect(url_for("blast.blast_index"))
-        audience_count = count_audience(
-            active_draft["audience_type"],
-            active_draft["audience_filter"] or "",
-            int(active_draft["audience_sample_pct"] or 100),
-        )
+    audience_count = count_audience(
+        active_draft["audience_type"],
+        active_draft["audience_filter"] or "",
+        int(active_draft["audience_sample_pct"] or 100),
+    )
 
     return render_template(
         "blast.html",
@@ -102,7 +115,7 @@ def save_draft():
 
     if not body:
         flash("Message body is required.", "error")
-        return redirect(url_for("blast.blast_compose", draft_id=draft_id) if draft_id else url_for("blast.blast_compose"))
+        return redirect(url_for("blast.blast_compose", draft_id=draft_id) if draft_id else url_for("blast.blast_index"))
 
     new_id = save_blast_draft(
         name=name,

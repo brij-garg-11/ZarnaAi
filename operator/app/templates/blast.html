@@ -13,9 +13,9 @@
   <div class="xl:col-span-2">
     <div class="section-label mb-3">Draft Board</div>
 
-    <a href="{{ url_for('blast.blast_compose') }}"
-       class="flex items-center gap-3 card-sm mb-3 hover:border-gold-700 transition-colors cursor-pointer"
-       style="text-decoration:none; border-color: {{ 'var(--pink)' if not active_draft else 'var(--border)' }}">
+    <a href="{{ url_for('blast.blast_new') }}"
+       class="flex items-center gap-3 card-sm mb-3 transition-colors cursor-pointer"
+       style="text-decoration:none; border-color: var(--pink); background: var(--pink-pale);">
       <div class="w-7 h-7 rounded-full flex items-center justify-center text-lg font-bold shrink-0"
            style="background:var(--pink);color:#0C0A08;">+</div>
       <span class="text-sm font-medium" style="color:var(--text);">New message</span>
@@ -286,7 +286,7 @@
       <p class="text-sm mb-6 max-w-xs" style="color:var(--text-muted);">
         Select a draft from the left, or start a new one. Your message goes out to the audience you choose — no phone numbers exposed.
       </p>
-      <a href="{{ url_for('blast.blast_compose') }}" class="btn-pink">+ New Message</a>
+      <a href="{{ url_for('blast.blast_new') }}" class="btn-pink">+ New Message</a>
     </div>
     {% endif %}
   </div>
