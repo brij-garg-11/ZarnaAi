@@ -7,6 +7,7 @@
     <h1 class="text-2xl font-bold mb-1" style="color:var(--text);">Live Shows</h1>
     <p class="text-sm" style="color:var(--text-muted);">Activate a show to start collecting signups via keyword text</p>
   </div>
+  <a href="{{ url_for('shows.new_show') }}" class="btn-gold">+ New Show</a>
 </div>
 
 <!-- Live now -->
@@ -113,7 +114,8 @@
 <div class="card text-center py-16">
   <div class="text-4xl mb-4">🎤</div>
   <p class="font-medium mb-2" style="color:var(--text);">No shows yet</p>
-  <p class="text-sm mb-6" style="color:var(--text-muted);">Create your first show from the Admin Dashboard → Live Shows, then come back here to manage it.</p>
+  <p class="text-sm mb-6" style="color:var(--text-muted);">Create your first show to start collecting fan signups via keyword text.</p>
+  <a href="{{ url_for('shows.new_show') }}" class="btn-gold">+ Create First Show</a>
 </div>
 {% endif %}
 {% endblock %}
