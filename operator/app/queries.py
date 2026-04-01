@@ -302,16 +302,17 @@ def list_shows() -> list[dict]:
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute("""
-                SELECT ls.id, ls.name, ls.status, ls.keyword, ls.deliver_as,
-                       ls.event_category, ls.window_start, ls.window_end,
-                       ls.event_timezone, ls.created_at,
-                       COUNT(lss.id) AS signup_count
-                FROM live_shows ls
-                LEFT JOIN live_show_signups lss ON lss.show_id = ls.id
-                GROUP BY ls.id ORDER BY ls.created_at DESC
+                SELECT s.id, s.name, s.status, s.keyword, s.deliver_as,
+                       s.event_category, s.window_start, s.window_end,
+                       s.event_timezone, s.created_at,
+                       (SELECT COUNT(*) FROM live_show_signups x WHERE x.show_id = s.id) AS signup_count
+                FROM live_shows s
+                ORDER BY s.created_at DESC
             """)
             return [dict(r) for r in cur.fetchall()]
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.warning("list_shows error: %s", e)
         return []
     finally:
         conn.close()
@@ -322,14 +323,18 @@ def get_show(show_id: int) -> dict | None:
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute("""
-                SELECT ls.*, COUNT(lss.id) AS signup_count
-                FROM live_shows ls
-                LEFT JOIN live_show_signups lss ON lss.show_id = ls.id
-                WHERE ls.id = %s GROUP BY ls.id
+                SELECT s.id, s.name, s.status, s.keyword, s.use_keyword_only,
+                       s.deliver_as, s.event_category, s.event_timezone,
+                       s.window_start, s.window_end, s.created_at,
+                       (SELECT COUNT(*) FROM live_show_signups x WHERE x.show_id = s.id) AS signup_count
+                FROM live_shows s
+                WHERE s.id = %s
             """, (show_id,))
             row = cur.fetchone()
             return dict(row) if row else None
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.warning("get_show error: %s", e)
         return None
     finally:
         conn.close()
