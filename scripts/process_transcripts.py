@@ -7,6 +7,7 @@ TRANSCRIPT_DIRS = [
     "Transcripts/motivation",
     "Transcripts/skits",
 ]
+FACTS_PATH = "training_data/zarna_facts.json"
 OUTPUT_PATH = "training_data/zarna_chunks.json"
 
 def chunk_text(text, max_words=80, overlap=20):
@@ -72,6 +73,23 @@ def process_all_transcripts():
     return all_chunks
 
 
+def load_facts() -> list:
+    """Load zarna_facts.json entries directly as chunks (already the right size)."""
+    if not os.path.exists(FACTS_PATH):
+        print(f"Warning: {FACTS_PATH} not found, skipping facts.")
+        return []
+    with open(FACTS_PATH, "r", encoding="utf-8") as f:
+        facts = json.load(f)
+    chunks = []
+    for entry in facts:
+        text = entry.get("text", "").strip()
+        source = entry.get("source", "zarna_facts")
+        if text and len(text.split()) >= 10:
+            chunks.append({"text": text, "source": source})
+    print(f"Loaded {len(chunks)} fact chunks from {FACTS_PATH}")
+    return chunks
+
+
 def save_chunks(chunks):
     with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
         json.dump(chunks, f, ensure_ascii=False, indent=2)
@@ -81,4 +99,5 @@ def save_chunks(chunks):
 
 if __name__ == "__main__":
     chunks = process_all_transcripts()
+    chunks += load_facts()
     save_chunks(chunks)
