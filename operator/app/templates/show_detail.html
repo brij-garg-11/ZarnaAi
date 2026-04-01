@@ -4,7 +4,7 @@
 {% block content %}
 <!-- Breadcrumb -->
 <div class="mb-6 flex items-center gap-2 text-sm" style="color:var(--text-muted);">
-  <a href="{{ url_for('shows.list_shows_view') }}" style="color:var(--gold);">Live Shows</a>
+  <a href="{{ url_for('shows.list_shows_view') }}" style="color:var(--pink);">Live Shows</a>
   <span>›</span>
   <span style="color:var(--text);">{{ show.name }}</span>
 </div>
@@ -30,7 +30,7 @@
         <span class="text-xs" style="color:var(--text-dim);">{{ show.signup_count }} signups</span>
         {% if show.keyword %}
         <span class="text-xs" style="color:var(--text-muted);">
-          Keyword: <span class="font-mono font-semibold" style="color:var(--gold);">{{ show.keyword }}</span>
+          Keyword: <span class="font-mono font-semibold" style="color:var(--pink);">{{ show.keyword }}</span>
         </span>
         {% endif %}
         <span class="text-xs" style="color:var(--text-dim);">{{ (show.event_category or "other").title() }}</span>
@@ -41,7 +41,7 @@
     <div class="flex items-center gap-2 flex-wrap">
       {% if st == "draft" %}
       <form method="post" action="{{ url_for('shows.activate', show_id=show.id) }}">
-        <button type="submit" class="btn-gold" onclick="return confirm('Go live now? This will end any currently live show.')">
+        <button type="submit" class="btn-pink" onclick="return confirm('Go live now? This will end any currently live show.')">
           🟢 Go Live
         </button>
       </form>
@@ -56,7 +56,7 @@
   <!-- Stats row -->
   <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6">
     <div class="card-sm">
-      <div class="text-2xl font-bold" style="color:var(--gold);">{{ show.signup_count }}</div>
+      <div class="text-2xl font-bold" style="color:var(--pink);">{{ show.signup_count }}</div>
       <div class="text-xs mt-1" style="color:var(--text-dim);">Signups</div>
     </div>
     <div class="card-sm">
@@ -76,12 +76,12 @@
 
 <!-- Blast this audience (send from blast tool) -->
 <div class="card mb-6">
-  <div class="stat-label mb-3">Send a message to this audience</div>
+  <div class="section-label mb-3">Send a message to this audience</div>
   <p class="text-sm mb-4" style="color:var(--text-muted);">
-    Go to the Blast Tool and choose <strong style="color:var(--gold);">Live Show: {{ show.name }}</strong> as your audience — the broadcast will go out via the Admin Dashboard's Live Show broadcast feature, which handles queuing and SlickText/Twilio routing.
+    Go to the Blast Tool and choose <strong style="color:var(--pink);">Live Show: {{ show.name }}</strong> as your audience — the broadcast will go out via the Admin Dashboard's Live Show broadcast feature, which handles queuing and SlickText/Twilio routing.
   </p>
   <div class="flex gap-3 flex-wrap">
-    <a href="{{ url_for('blast.blast_index') }}" class="btn-gold btn-sm">Open Blast Tool →</a>
+    <a href="{{ url_for('blast.blast_index') }}" class="btn-pink btn-sm">Open Blast Tool →</a>
     <a href="/admin/live-shows/{{ show.id }}" class="btn-ghost btn-sm" target="_blank">Advanced broadcast (Admin) ↗</a>
   </div>
 </div>
@@ -89,7 +89,7 @@
 <!-- Audit log -->
 {% if audit %}
 <div class="card">
-  <div class="stat-label mb-4">Recent Activity</div>
+  <div class="section-label mb-4">Recent Activity</div>
   <div class="space-y-3">
     {% for entry in audit %}
     <div class="flex items-start gap-3 text-sm">

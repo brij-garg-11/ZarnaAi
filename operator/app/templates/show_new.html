@@ -3,7 +3,7 @@
 
 {% block content %}
 <div class="mb-6 flex items-center gap-2 text-sm" style="color:var(--text-muted);">
-  <a href="{{ url_for('shows.list_shows_view') }}" style="color:var(--gold);">Live Shows</a>
+  <a href="{{ url_for('shows.list_shows_view') }}" style="color:var(--pink);">Live Shows</a>
   <span>›</span>
   <span style="color:var(--text);">New Show</span>
 </div>
@@ -20,22 +20,22 @@
 
       <!-- Name -->
       <div>
-        <label class="stat-label mb-2 block">Show name</label>
-        <input type="text" name="name" class="gold-input" placeholder="e.g. Chicago Theatre — Apr 15" required autofocus>
+        <label class="section-label mb-2 block">Show name</label>
+        <input type="text" name="name" class="zarna-input" placeholder="e.g. Chicago Theatre — Apr 15" required autofocus>
       </div>
 
       <!-- Signup mode -->
       <div>
-        <label class="stat-label mb-2 block">How fans join</label>
+        <label class="section-label mb-2 block">How fans join</label>
         <div class="flex rounded-lg overflow-hidden border" style="border-color:var(--border);width:fit-content;">
           <label class="flex items-center gap-2 px-4 py-2.5 cursor-pointer text-sm font-medium transition-colors"
-                 :style="mode==='keyword' ? 'background:#3a2a0e;color:var(--gold);' : 'color:var(--text-muted);'">
+                 :style="mode==='keyword' ? 'background:#3a2a0e;color:var(--pink);' : 'color:var(--text-muted);'">
             <input type="radio" name="signup_mode" value="keyword" x-model="mode" class="sr-only" checked>
             🔑 Keyword
           </label>
           <label class="flex items-center gap-2 px-4 py-2.5 cursor-pointer text-sm font-medium border-l transition-colors"
                  style="border-color:var(--border);"
-                 :style="mode==='window' ? 'background:#3a2a0e;color:var(--gold);' : 'color:var(--text-muted);'">
+                 :style="mode==='window' ? 'background:#3a2a0e;color:var(--pink);' : 'color:var(--text-muted);'">
             <input type="radio" name="signup_mode" value="window" x-model="mode" class="sr-only">
             🕐 Time window
           </label>
@@ -48,16 +48,16 @@
 
       <!-- Keyword -->
       <div x-show="mode==='keyword'" x-transition>
-        <label class="stat-label mb-2 block">Keyword</label>
-        <input type="text" name="keyword" class="gold-input" placeholder="e.g. CHICAGO"
+        <label class="section-label mb-2 block">Keyword</label>
+        <input type="text" name="keyword" class="zarna-input" placeholder="e.g. CHICAGO"
                style="text-transform:uppercase;" maxlength="30">
         <p class="text-xs mt-1.5" style="color:var(--text-dim);">Case-insensitive. Keep it short and easy to type.</p>
       </div>
 
       <!-- Timezone -->
       <div>
-        <label class="stat-label mb-2 block">Event timezone</label>
-        <select name="event_timezone" class="gold-input">
+        <label class="section-label mb-2 block">Event timezone</label>
+        <select name="event_timezone" class="zarna-input">
           {% for tz, label in tz_choices %}
           <option value="{{ tz }}" {{ 'selected' if tz == 'America/New_York' else '' }}>{{ label }}</option>
           {% endfor %}
@@ -68,20 +68,20 @@
       <div x-show="mode==='window'" x-transition>
         <div class="grid grid-cols-2 gap-4">
           <div>
-            <label class="stat-label mb-2 block">Window start</label>
-            <input type="datetime-local" name="window_start" class="gold-input">
+            <label class="section-label mb-2 block">Window start</label>
+            <input type="datetime-local" name="window_start" class="zarna-input">
           </div>
           <div>
-            <label class="stat-label mb-2 block">Window end</label>
-            <input type="datetime-local" name="window_end" class="gold-input">
+            <label class="section-label mb-2 block">Window end</label>
+            <input type="datetime-local" name="window_end" class="zarna-input">
           </div>
         </div>
       </div>
 
       <!-- Event type -->
       <div>
-        <label class="stat-label mb-2 block">Event type</label>
-        <select name="event_category" class="gold-input">
+        <label class="section-label mb-2 block">Event type</label>
+        <select name="event_category" class="zarna-input">
           <option value="comedy" selected>Comedy show — sends a fun confirmation SMS to fans</option>
           <option value="live_stream">Live stream — confirmation themed for online event</option>
           <option value="other">Other — silent signup (no auto-confirmation)</option>
@@ -90,15 +90,15 @@
 
       <!-- Channel -->
       <div>
-        <label class="stat-label mb-2 block">Broadcast channel</label>
-        <select name="deliver_as" class="gold-input">
+        <label class="section-label mb-2 block">Broadcast channel</label>
+        <select name="deliver_as" class="zarna-input">
           <option value="sms" selected>SMS</option>
           <option value="whatsapp">WhatsApp (Twilio only)</option>
         </select>
       </div>
 
       <div class="flex gap-3 pt-2">
-        <button type="submit" class="btn-gold">Create Draft →</button>
+        <button type="submit" class="btn-pink">Create Draft →</button>
         <a href="{{ url_for('shows.list_shows_view') }}" class="btn-ghost">Cancel</a>
       </div>
 

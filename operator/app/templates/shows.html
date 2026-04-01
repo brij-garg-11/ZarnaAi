@@ -7,12 +7,12 @@
     <h1 class="text-2xl font-bold mb-1" style="color:var(--text);">Live Shows</h1>
     <p class="text-sm" style="color:var(--text-muted);">Activate a show to start collecting signups via keyword text</p>
   </div>
-  <a href="{{ url_for('shows.new_show') }}" class="btn-gold">+ New Show</a>
+  <a href="{{ url_for('shows.new_show') }}" class="btn-pink">+ New Show</a>
 </div>
 
 <!-- Live now -->
 <div class="mb-6">
-  <div class="stat-label mb-3">Live Now</div>
+  <div class="section-label mb-3">Live Now</div>
   {% if live_shows %}
     {% for show in live_shows %}
     <div class="card mb-3 border-green-900" style="border-color:#166534;">
@@ -24,7 +24,7 @@
             <div class="text-xs mt-1 space-x-3" style="color:var(--text-muted);">
               <span>{{ show.signup_count }} signups</span>
               <span>·</span>
-              <span>Keyword: <span class="font-mono font-semibold" style="color:var(--gold);">{{ show.keyword or "—" }}</span></span>
+              <span>Keyword: <span class="font-mono font-semibold" style="color:var(--pink);">{{ show.keyword or "—" }}</span></span>
               <span>·</span>
               <span>{{ (show.event_category or "other").title() }}</span>
             </div>
@@ -49,15 +49,15 @@
 <!-- Drafts -->
 {% if draft_shows %}
 <div class="mb-6">
-  <div class="stat-label mb-3">Drafts</div>
+  <div class="section-label mb-3">Drafts</div>
   <div class="card" style="padding:0;overflow:hidden;">
     <table class="w-full text-sm">
       <thead>
         <tr style="border-bottom:1px solid var(--border);">
-          <th class="text-left px-5 py-3 stat-label">Name</th>
-          <th class="text-left px-5 py-3 stat-label">Keyword</th>
+          <th class="text-left px-5 py-3 section-label">Name</th>
+          <th class="text-left px-5 py-3 section-label">Keyword</th>
           <th class="text-left px-5 py-3 stat-label hidden sm:table-cell">Type</th>
-          <th class="text-right px-5 py-3 stat-label"></th>
+          <th class="text-right px-5 py-3 section-label"></th>
         </tr>
       </thead>
       <tbody>
@@ -65,10 +65,10 @@
         <tr class="border-b last:border-0 hover:bg-opacity-50 transition-colors"
             style="border-color:var(--border);">
           <td class="px-5 py-3.5" style="color:var(--text);">{{ show.name }}</td>
-          <td class="px-5 py-3.5 font-mono text-xs" style="color:var(--gold);">{{ show.keyword or "—" }}</td>
+          <td class="px-5 py-3.5 font-mono text-xs" style="color:var(--pink);">{{ show.keyword or "—" }}</td>
           <td class="px-5 py-3.5 hidden sm:table-cell" style="color:var(--text-muted);">{{ (show.event_category or "other").title() }}</td>
           <td class="px-5 py-3.5 text-right">
-            <a href="{{ url_for('shows.show_detail', show_id=show.id) }}" class="btn-gold btn-sm">Open →</a>
+            <a href="{{ url_for('shows.show_detail', show_id=show.id) }}" class="btn-pink btn-sm">Open →</a>
           </td>
         </tr>
         {% endfor %}
@@ -81,15 +81,15 @@
 <!-- Past Events -->
 {% if ended_shows %}
 <div>
-  <div class="stat-label mb-3">Past Events</div>
+  <div class="section-label mb-3">Past Events</div>
   <div class="card" style="padding:0;overflow:hidden;">
     <table class="w-full text-sm">
       <thead>
         <tr style="border-bottom:1px solid var(--border);">
-          <th class="text-left px-5 py-3 stat-label">Name</th>
+          <th class="text-left px-5 py-3 section-label">Name</th>
           <th class="text-left px-5 py-3 stat-label text-right">Signups</th>
           <th class="text-left px-5 py-3 stat-label hidden sm:table-cell">Type</th>
-          <th class="text-right px-5 py-3 stat-label"></th>
+          <th class="text-right px-5 py-3 section-label"></th>
         </tr>
       </thead>
       <tbody>
@@ -97,7 +97,7 @@
         <tr class="border-b last:border-0 hover:bg-opacity-50 transition-colors"
             style="border-color:var(--border);">
           <td class="px-5 py-3.5" style="color:var(--text);">{{ show.name }}</td>
-          <td class="px-5 py-3.5 text-right font-semibold" style="color:var(--gold);">{{ show.signup_count }}</td>
+          <td class="px-5 py-3.5 text-right font-semibold" style="color:var(--pink);">{{ show.signup_count }}</td>
           <td class="px-5 py-3.5 hidden sm:table-cell" style="color:var(--text-muted);">{{ (show.event_category or "other").title() }}</td>
           <td class="px-5 py-3.5 text-right">
             <span class="badge-ended">Ended</span>
@@ -115,7 +115,7 @@
   <div class="text-4xl mb-4">🎤</div>
   <p class="font-medium mb-2" style="color:var(--text);">No shows yet</p>
   <p class="text-sm mb-6" style="color:var(--text-muted);">Create your first show to start collecting fan signups via keyword text.</p>
-  <a href="{{ url_for('shows.new_show') }}" class="btn-gold">+ Create First Show</a>
+  <a href="{{ url_for('shows.new_show') }}" class="btn-pink">+ Create First Show</a>
 </div>
 {% endif %}
 {% endblock %}
