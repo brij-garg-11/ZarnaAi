@@ -98,16 +98,18 @@ class EmbeddingRetriever(BaseRetriever):
     # Viral skits — confirmed high-engagement shorts that should surface readily.
     # "HUGE" tier gets 1.18; strong viral gets 1.13; notable gets 1.08.
     _VIRAL_SKIT_WEIGHTS: dict[str, float] = {
-        # HUGE — Texting My Son's Girlfriend
-        "mxaocinn3hc_transcript.json": 1.18,
+        # HUGE
+        "mxaocinn3hc_transcript.json": 1.18,   # Texting My Son's Girlfriend
+        "d_zg2sb7rhg_transcript.json": 1.18,   # Green juice / margarita (mega viral)
         # Strong viral
         "jg7b9xctyhs_transcript.json": 1.13,   # Dating Advice
         "rdkkeekl9icq_transcript.json": 1.13,   # Every New Year's Message (Dadhi)
         "emfhjv6qw9y_transcript.json": 1.13,   # Relaxing Bedtime Story
         "_7j8jfshce8_transcript.json": 1.13,   # The Perfect Date
         # Notable viral
-        "fmtzk34eswY_transcript.json": 1.08,   # Hair Oil Vs Body Oil
+        "fmtzk34eswy_transcript.json": 1.08,   # Hair Oil Vs Body Oil
         "tnfzdxwhfam_transcript.json": 1.08,   # How to Leave the House
+        "kwbmgntdirm_transcript.json": 1.13,   # My Son's Girlfriend (workout / Jan 1 skit — in new set)
     }
 
     def _source_weight(self, source: str) -> float:

@@ -13,8 +13,6 @@ import re
 import time
 from pathlib import Path
 
-import requests
-import browser_cookie3
 from youtube_transcript_api import YouTubeTranscriptApi as YTApi
 from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound
 
@@ -40,6 +38,8 @@ NAME_CORRECTIONS = [
     (re.compile(r'\bShab\b'), "Shalabh"),
     # Dadhi = Hindi for grandma / MIL
     (re.compile(r'\bDahi\b'), "Dadhi"),
+    # "shal up" = Shalabh (caption mishear of his name being called)
+    (re.compile(r'\bshal up\b', re.IGNORECASE), "Shalabh"),
     # NOTE: "Sham" is intentionally excluded — too common an English word.
     # Flag manually in review doc instead.
 ]
@@ -86,38 +86,24 @@ def already_fetched(video_id: str) -> bool:
     return (OUTPUT_DIR / f"{video_id}_transcript.json").exists()
 
 
-def _make_api() -> YTApi:
-    """Build a YTApi instance authenticated with local Chrome cookies (called once)."""
-    try:
-        cj = browser_cookie3.chrome(domain_name=".youtube.com")
-        session = requests.Session()
-        session.cookies = cj
-        print(f"  Loaded {sum(1 for _ in cj)} YouTube cookies from Chrome.")
-        return YTApi(http_client=session)
-    except Exception as e:
-        print(f"  Warning: could not load Chrome cookies ({e}). Falling back to unauthenticated.")
-        return YTApi()
+_API = YTApi()
 
 
-# Module-level singleton — load cookies once at import/startup
-_API: YTApi | None = None
-
-
-def get_api() -> YTApi:
-    global _API
-    if _API is None:
-        _API = _make_api()
-    return _API
+_IP_BLOCKED_PATTERN = re.compile(r"blocking requests|IP.*blocked|blocked.*IP|cloud provider", re.IGNORECASE)
 
 
 def fetch_transcript(video_id: str):
+    """Returns (transcript_or_None, was_ip_blocked)."""
     try:
-        return get_api().fetch(video_id)
+        return _API.fetch(video_id), False
     except (TranscriptsDisabled, NoTranscriptFound):
-        return None
+        return None, False
     except Exception as e:
-        print(f"  ⚠ Unexpected error for {video_id}: {e}")
-        return None
+        msg = str(e)
+        ip_blocked = bool(_IP_BLOCKED_PATTERN.search(msg))
+        if ip_blocked:
+            print(f"  ⚠ Unexpected error for {video_id}: {e}")
+        return None, ip_blocked
 
 
 def save_transcript(video_id: str, title: str, text: str, changes: list[str]):
@@ -209,7 +195,7 @@ def main():
             skipped += 1
             continue
 
-        raw = fetch_transcript(vid)
+        raw, ip_blocked = fetch_transcript(vid)
 
         if raw is None:
             print(f"[{i}/{len(skits)}] NO TRANSCRIPT: {title}")
@@ -235,8 +221,8 @@ def main():
             })
             fetched += 1
 
-        # Delay to avoid triggering YouTube rate limits
-        time.sleep(1.5)
+        # Adaptive delay: back off only on IP blocks; stay fast otherwise
+        time.sleep(3.0 if ip_blocked else 0.5)
 
     print(f"\n{'='*60}")
     print(f"Done. Fetched: {fetched} | Skipped (already saved): {skipped} | No transcript: {failed}")

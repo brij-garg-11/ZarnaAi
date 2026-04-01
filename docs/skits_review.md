@@ -431,7 +431,7 @@ Review each skit below. Mark corrections needed and reply so we can fix before e
 - [How to Find a Boyfriend | #shorts](https://youtube.com/shorts/T05WJ92sJ6c)
 - [Commencement Speech | #shorts](https://youtube.com/shorts/4vIAOtRQEq0)
 - [Weather Issues | #shorts](https://youtube.com/shorts/QwZIsgAnRmg)
-- [Dating Advice | #shortsyoutube](https://youtube.com/shorts/dNGNjxHZggg)
+- [Dating Advice | #shorts](https://youtube.com/shorts/dNGNjxHZggg)
 - [Regents | #shorts](https://youtube.com/shorts/C8pqvFm39GU)
 - [Waste of $$$ | #shorts](https://youtube.com/shorts/-pPt84UjLu0)
 - [My Husband is a Cook | #shorts](https://youtube.com/shorts/ZypBJMqLSW8)
@@ -1442,3 +1442,647 @@ Review each skit below. Mark corrections needed and reply so we can fix before e
 - [Are You A Carbohydrate Addict #shorts](https://youtube.com/shorts/RN0PTjVv18k)
 - [Diwali Must-Haves #shorts](https://youtube.com/shorts/EUMbz3SPrC0)
 - [The Story of Diwali Part I #shorts](https://youtube.com/shorts/mt63e3BCjZc)
+
+---
+
+## Batch 2 — 102 New Skits
+
+Fetched via VPN run. Starting at #40.
+
+> **Key:** ✅ Clean  |  ✏️ Name corrected  |  ⚠️ Needs check  |  ⛔ May not be a skit
+
+---
+
+### 40. ✏️ [12 Days of Top Hits - Day 10](https://youtube.com/shorts/IkM2MEnx2zU)
+> **Corrected:** shal up → Shalabh (1x)
+> **Note:** Skit — Zarna ordering lip balm for herself on Mother's Day while pretending not to care
+
+_hey hey shal up there's a package for you this just came in the mail today my L Li Bal I've been waiting for it for so long you ordered this winter doesn't end it's just like I'm so happy it's here wait you ordered a…_
+
+---
+
+### 41. ✅ [12 Days of Top Hits - Day 11 — Bitcoin Explained](https://youtube.com/shorts/hEhlTh4ZWBU)
+> **Note:** ✅ CONFIRMED SKIT — Zarna "explains" Bitcoin: "currency you buy from shady websites, doesn't really exist, brag about it until someone thinks it's valuable, then sell and buy Amazon." Classic confident-wrong-aunt energy.
+
+_mom what's Bitcoin okay listen up I'm going to explain the Bitcoin people make it sound so complicated and it's so simple Bitcoin is currency that you buy from Shady websites as far as I can tell it doesn't really exist…_
+
+---
+
+### 42. 🔥🔥🔥 [12 Days of Top Hits - Day 4](https://youtube.com/shorts/d_ZG2SB7Rhg)
+> **Note:** MEGA VIRAL — green juice skit. Zarna claims she's drinking green juice (cucumber + jalapeño). Kid says it's a margarita. "There's a little tequila — it's a garnish."
+
+_Mom what are you drinking this it's like a green juice it's like cucumber if you look inside there's like crushed up jalapenos it's like a green juice I'm like pretty sure that's a margarita that's what they call it in…_
+
+---
+
+### 43. ~~⛔ [2026 TOUR LIST!](https://youtube.com/shorts/15tY96I8i9I)~~ *(deleted — promo, not a skit)*
+> **Note:** ⛔ PROMO — tour list announcement, not a skit
+
+_2026 is my year of touring the world. I am coming to a city near you with my milliondoll excuses tour. There are situations we're all trying to get out of. There's school wants you to do certain things. Your job wants…_
+
+---
+
+### 44. ✅ [4th of July Plans](https://youtube.com/shorts/H4Xu1QMlIxw)
+
+_Oh my god, this is so nice to see you guys having so much fun. Aren't you glad we didn't go anywhere? You know that other people so dumb Fourth of July going adventure park and and thrilling and buning and isn't this so…_
+
+---
+
+### 45. ✏️ [Advice For Entrepreneurs](https://youtube.com/shorts/efHH1cAwbU0)
+> **Corrected:** Diva → Divya Gugnani (1x), He → She (caption gender error)
+> **Fact added:** Divya Gugnani added to zarna_facts.json as close friend and business mentor
+
+_I'm here with my friend and business mentor Diva Gugnani. He taught me to be relentless, to throw myself at every opportunity. And I want to hear from you. Your best advice for female entrepreneurs. The number one piece…_
+
+---
+
+### 46. ✅ [Are We A Family of Nepotism?](https://youtube.com/shorts/Z_Uk2tVct9c)
+
+_People get upset with the tag of nepotism when it feels like somebody just came in and took the top job >> cuz half the battle in most of these situations is getting the opportunity, right? People are fighting for the…_
+
+---
+
+### 47. ✅ [Back to School Grades](https://youtube.com/shorts/8z3hV2Wfy1w)
+
+_Mom. >> Yeah. What's up? >> I got my report card back. >> You did? >> Yeah. >> Yeah. And what? Of course. I know. You got all A's. What? You always get all A's. >> I got four A's and one B+. >> You got one B+. Do you…_
+
+---
+
+### 48. ✅ [Broken Sobriety](https://youtube.com/shorts/IvRSLZIn3rY)
+
+_mom second day in a row I thought you weren't drinking I came into the kitchen wanting to make ginger water you see my pot my Ginger my grater everything was ready then I saw you with this Hannibal leor mask on your…_
+
+---
+
+### 49. ✅ [Bunjee Jumping](https://youtube.com/shorts/3fauei79WW4)
+
+_Mom, can I go bungee jumping? >> No, absolutely not. Are you Have you lost your mind here? >> But Scott went and he said it was so much fun. >> No, Scott went. No, but why would Scott ever go? Whose parents allowed…_
+
+---
+
+### 50. ✅ [Class is in Session](https://youtube.com/shorts/MEDi8o5VHyw)
+
+_What is a shad shadi? Shadi shadi. Yeah. Shadi is a Indian wedding. It is a big party. Basically big party for the parents. Okay. You call all the people you know and you show them how rich you are. You put all the…_
+
+---
+
+### 51. ✏️ [Coding Before Bed](https://youtube.com/shorts/OdkpalqOMSY)
+> **Corrected:** Bridge → Brij (1x)
+
+_Brij it's 11:30 at night how much video games are you going to play in one day shut the thing off you need to sleep it's a school night Mom it's my coding homework we have to see how code is used in real life situations…_
+
+---
+
+### 52. ✅ [College Admissions](https://youtube.com/shorts/kJ3HCeR556w)
+
+_V what do you need from a therapist just tell me what your problem is I'm going to solve it right as forget I'm your mom since now that my brother's going to an IV lady and my sister is going the best college in the…_
+
+---
+
+### 53. ✅ [Communication](https://youtube.com/shorts/2O5lnuCqObE)
+
+_I just don't feel the way that we communicate is healthy because every single time you get upset with me you say that you want to just you know have me go be with other families or just leave the house or never speak to…_
+
+---
+
+### 54. ✏️ [Couples Therapy](https://youtube.com/shorts/ZnnaRtUQJBc)
+> **Corrected:** Shala → Shalabh (1x)
+
+_Shalabh, you don't need another therapist. Forget I'm your wife. Tell me what your problems are. I'm going to solve them for you right now. I think that, you know, my wife spends too much money and it's become a lot…_
+
+---
+
+### 55. ✅ [Dangerous Food Habits](https://youtube.com/shorts/bg7jcbIqUwc)
+
+_my whole life I went nuts feeding my kids the best foods pow baji CH Puri hot hot even the most amazing kitri and broccoli you can imagine with fresh ground Hy really fresh ground HEI from the healthy root I used to do…_
+
+---
+
+### 56. ✏️ [Dating Advice](https://youtube.com/shorts/dNGNjxHZggg)
+> **Note:** ✏️  TITLE FIXED — was "Dating Adviceyoutube" (YouTube metadata glitch), corrected to "Dating Advice." ALMOST THERAPIST SKIT — Zoya comes to Zarna's "practice" upset she didn't meet a boyfriend at Stanford. Zarna's advice: do your STEM degree "in the still of the night so nobody knows you're using your brain." Blames Zoya. "It's too late."
+
+_Zoya, you just graduated Stanford. Why are you so upset? What has brought you into my therapy practice? Tell me now quickly. Let me fix this. I didn't meet my husband when I was in college. Oh, that but you I told you I…_
+
+---
+
+### 57. ✅ [Diwali](https://youtube.com/shorts/03LExSnL4CE)
+
+_What is going on with Diwali in America? Everybody has suddenly discovered their love for Diwali. Everybody is in bridal hair and makeup bridal langas and twirling every day all day long. Happy Diwali every day. All day…_
+
+---
+
+### 58. ✅ [Do You Have a Valentine?](https://youtube.com/shorts/hevLsCXJQqI)
+
+_brid so tell me something I know Valentine's Day is coming up are you planning to Spring some surprises on me for Valentine's Day nope is do you have a girlfriend or a love interest no love interest you killed that…_
+
+---
+
+### 59. ✅ [Erewhon Review](https://youtube.com/shorts/lpC0wNMCF3s)
+
+_hello Namaste I'm in Los Angeles checking out the very overhyped air wand and I got myself a h Beaver smoothie first of all we ordered it at 5:16 and received it at 540 so that's the kind of wait time but is good feels…_
+
+---
+
+### 60. ✅ [Exam Season](https://youtube.com/shorts/sGVxmJXg-SY)
+
+_Hello guys. Today we're doing trivia. First to three points wins. What is the process of a caterpillar turning into a butterfly? Metamorphosis. I I I was expecting Okay, next question. What is the capital of Australia?…_
+
+---
+
+### 61. ✏️ [Family Pet](https://youtube.com/shorts/wOeSZzRNY8M)
+> **Corrected:** Bridge → Brij (1x)
+
+_Mom, can I get a pet? >> Wait, how many times I said we don't do pet. Please, pet is a bad idea. Very bad idea. We don't need a pet in this house. Why are you even thinking about this kind of things? A lot of people I…_
+
+---
+
+### 62. ✅ [Feeding My Husband](https://youtube.com/shorts/IOGwq9Z_LtQ)
+
+_shelab have some watermelon looks so good I know you know one thing I've always wondered how come there no seeds in these watermelons there's not a single one I think the machines remove I don't know there's a magical…_
+
+---
+
+### 63. ✅ [Fine Dining](https://youtube.com/shorts/BqFUXROtF_w)
+
+_lunch was awesome right so I just want to point out to you that we ate the food was fine but you made me pay $17 for a apricot tart that was frozen it was straight out of a frozen container at the most expensive…_
+
+---
+
+### 64. ✅ [Get Serious](https://youtube.com/shorts/z8S4Ejh2-aU)
+
+_Mom, what is that outfit? What? That is my mob boss aesthetic. I don't know. Have you noticed there's a whole trend going around? Mob boss aesthetic. I don't know who these dumb people are who are doing this aesthetic…_
+
+---
+
+### 65. ✅ [Get that Bag](https://youtube.com/shorts/TtLtkRp2YH0)
+
+_I got asked at a conference today, what keeps me positive? What makes me believe in myself and how do I keep going in building my business? And I realized that I don't even consider the alternative. Like, why would I…_
+
+---
+
+### 66. ✅ [Getting Around the City](https://youtube.com/shorts/lOXk-7qdKac)
+
+_Mom. >> Mhm. >> Choosing a city bike is the easiest way to get around in New York City. >> I don't want to make it easier. It's stay complicated. Take the subway and take the bus everywhere. Can you please? >> It feels…_
+
+---
+
+### 67. ✅ [Gift Giving](https://youtube.com/shorts/El0iIEUVsrk)
+
+_Z what are you doing oh your mom's birthday is coming up right I'm going to I'm packing a gift for her I know you're going to see her next week look look how nicely I packed everything what is this some fruits bananas…_
+
+---
+
+### 68. ✏️ [Happy Fourth of July](https://youtube.com/shorts/e1cFl7Lxm0g)
+> **Corrected:** Bridge → Brij (1x)
+
+_Hello, namaste on occasion of 4th of July. Happy birthday, America. We are going to do something all American and we are going to launch the world's first auntie Za talk show. This is your global world exclusive…_
+
+---
+
+### 69. ✅ [Having Guests Over](https://youtube.com/shorts/RrXiBRhO7x8)
+
+_Hi. Welcome. It's so good to see you. So good to see you. Should I take off my shoes? No. No. We are We are very modern. You come, you bring all the dirt in. It's fine. Okay. You're comfortable, right? Your shoes. I I…_
+
+---
+
+### 70. ✅ [Health Advice](https://youtube.com/shorts/D1CCkGwVJlk)
+
+_Wait, you're going to drink this mix I'm going to make for you in hot water. It's going to taste so good. It's going to fix your stomach. You're going to feel amazing. Look, a little bit of ginger, a little bit of a…_
+
+---
+
+### 71. ✅ [Healthy Communication](https://youtube.com/shorts/E3-F-SLyyl8)
+
+_I just don't feel the way that we communicate is healthy because every single time you get upset with me. You say that you want to just, you know, have me go be with other families or just leave the house or never speak…_
+
+---
+
+### 72. ✅ [Holiday Party Invites](https://youtube.com/shorts/scVQKdtvyqQ)
+
+_Mom it's New Year's Eve and I just feel like such a failure I haven't been invited to a single holiday party what you probably are Mom you're supposed to be supportive and helpful I am I'm telling you the truth I…_
+
+---
+
+### 73. ✅ [Horrible Mom Gifts](https://youtube.com/shorts/LbwbsXPvWO8)
+
+_no more mom mugs find your bliss find your bliss how about my kids find medical school bath robes who is even living this Spa life in their own home why so many hand tows what is going on moist hand cream more hand…_
+
+---
+
+### 74. ✅ [How Big is Your House?](https://youtube.com/shorts/CNgfC0YstOk)
+
+_my whole life all I ever wanted was to live in Edison no because that is the that is the Indian Capital now okay you guys don't know this but for us entertainers Indian entertainers that is the world Capital Indian…_
+
+---
+
+### 75. ✅ [How Early Are You at the Airport](https://youtube.com/shorts/TfWz9MZpFrM)
+
+_Hey, hey, hey, very good. I'm leaving, I'm leaving for the airport. 3 hours before the flight you are It is supposed TO BE BE THERE 3 HOURS BEFORE. I DON'T KNOW WHAT SO WHAT IT IS NOT ALREADY CHECKED IN. I'M NOT GOING…_
+
+---
+
+### 76. ✅ [How Should You Eat](https://youtube.com/shorts/_gn6HHIxw24)
+
+_I so Z can you expand a little bit more on that especially for the U education of your you know mother uh as to why you think red meat is healthy many years and your mother I'm vegetarian what do you want me to do no no…_
+
+---
+
+### 77. ✅ [How to be Happy](https://youtube.com/shorts/ECXCyMff1Yk)
+
+_Okay, Mom. I think that you have a lot of pent up emotions that you have trouble getting out. So, I'm going to be your free therapist for today. In life, what are the things that make you happy? >> So many things make…_
+
+---
+
+### 78. ✅ [How to Celebrate or Commiserate](https://youtube.com/shorts/f-3qNf_WkbI)
+
+_election day and I am ready to either celebrate or commiserate I am prepared if the person I want to win wins I am ready with a an amazing chocolate chip double chocolate chip cookie cuz it's the reigning champion of…_
+
+---
+
+### 79. ✅ [I Pay My Kids](https://youtube.com/shorts/8_6wWDVeVSU)
+
+_V, I have a job for you to do this holiday, this spring break when you have. Will you do it for me, please? I'll pay you. It's a paid position. Uh, yeah, why not? Okay. What is it? I need you to clean up my Google…_
+
+---
+
+### 80. ✅ [Keep Yourself Distracted](https://youtube.com/shorts/-EkeFXWd30U)
+
+_mom let me help you carry all this stuff thank you li girl thank you you're carrying so much stuff yeah I'm just getting ready for Daddy she's coming in a few days you oh did you did you buy all this Gucci stuff for…_
+
+---
+
+### 81. ✅ [Kesar Pista Recipe](https://youtube.com/shorts/V7JcHyQXB8c)
+
+_Hi, namaste. Auntie Zara here. Now, if you're from India, you're probably familiar with a flavor called Queser Pista. It's like saffron and pistachio and all these nuts mixed together. And it's a flavoring you get in…_
+
+---
+
+### 82. ✅ [Lasting Marriage](https://youtube.com/shorts/l59mWAO75WQ)
+
+_My mother-in-law lives in India but comes to America for three months at a time, right? It's like she has her own season. Winter is coming. And the mother-in-law relationship in our culture is very is very interesting…_
+
+---
+
+### 83. ✅ [Lying Culture](https://youtube.com/shorts/u_zJ5gpe44g)
+
+_All right, Mom. Last week, I snuck a girl into the house. >> You did not. >> What are you talking about, V? >> What? >> Yeah, but if the mother is going to be absentee the way your mother is, that is what's going to…_
+
+---
+
+### 84. ✅ [Malala Gets Therapy](https://youtube.com/shorts/T-rnkaNQ4VQ)
+
+_So Malala, I'm the world's leading almost therapist. Whatever your problem is, I can solve it. Just tell me what it is. Let's go. >> When I was 15, I was shot by the Taliban in Pakistan. >> Okay, that happens. >> And…_
+
+---
+
+### 85. ✅ [Marriage Secret](https://youtube.com/shorts/__5lTvVTWiQ)
+
+_Shalab, 26 years we've been married together. What is your best advice to people who are trying to decide who to marry? Hold on, let me think. What I say matters to people. My best advice, marry your best friend. What…_
+
+---
+
+### 86. ✅ [Marriage Therapy](https://youtube.com/shorts/9a8d7HyZejA)
+
+_so shell today I'm going to give you a gift I'm going to be your therapist forget I'm your wife I forgot that 10 years ago okay we are not making jokes right now sh whatever is on your heart you say it with no fear I…_
+
+---
+
+### 87. ✅ [Married Life](https://youtube.com/shorts/mEib-8UkoDY)
+
+_shal why are you eating an egg in your th food like I don't understand your obsession with putting an egg in everything but it has protein it's a good thing to eat what's the problem with an egg who eats egg with th…_
+
+---
+
+### 88. ✅ [Marry Your Best Friend](https://youtube.com/shorts/UbSf9Ouke8o)
+
+_shab 26 years we've been married together what is your best advice to people who are trying to decide who to marry hold on let me think what I say matters to people my best advice marry your best friend what is your…_
+
+---
+
+### 89. ✅ [Missing My Flight](https://youtube.com/shorts/e4ChN9Ikwxg)
+
+_mom mom the security line was so long the traffic was so long we're coming we're coming please tell them to hold the gate please tell them to hold the gate no no take your time I leave too early BR mom the flight's…_
+
+---
+
+### 90. ✅ [Monday Wellness](https://youtube.com/shorts/FjIlG-MPlRc)
+
+_what are you drinking the doctor asked me to have lemon water but is there alcohol in [Music] there yes but also lemon and water_
+
+---
+
+### 91. ✅ [Moving In](https://youtube.com/shorts/M5WUQ1bD-As)
+
+_when I I graduate what what is happening what is happening between the two of you and why are you always when I graduate it is still my room to live in no of course of course wait no I haven't had the room in years he…_
+
+---
+
+### 92. ✏️ [Moving Out](https://youtube.com/shorts/q38Q8lhSyMY)
+> **Corrected:** Bridge → Brij (1x)
+
+_Brij, why are you stressed out constantly? I'm the world's leading almost therapist. I can fix whatever your problem is. Tell me right now. Go. >> Actually, I think I found a solution. After speaking to all my uncles,…_
+
+---
+
+### 93. ✅ [My Daughter is Struggling](https://youtube.com/shorts/jcGRt-oaxNM)
+
+_Okay, Zoya, forget that I'm your mother. I am extremely objective and a very solid advice giver and I'm going to solve whatever your problem is right now. I'm 21 and I just feel like I'm getting so old. Yeah, that's…_
+
+---
+
+### 94. ✏️ [My Husband Gets Therapy](https://youtube.com/shorts/Z5_x2m1BqwE)
+> **Corrected:** Bridge → Brij (1x)
+
+_So Shalam, today I'm going to give you a gift. I'm going to be your therapist. Forget I'm your wife. I forgot that 10 years ago. Okay, we are not making jokes right now. Shalom. Whatever is on your heart, you say it…_
+
+---
+
+### 95. ✏️ [My Kid’s Don’t Want to Work For Me](https://youtube.com/shorts/1JWQivmRMPE)
+> **Corrected:** Bridge → Brij (1x)
+
+_This is going to sound so bad because of how we perceive it, but it almost does feel like I'm working a corporate job in some in some ways. Not the same corporate that we're talking about when we talk to dad's Wall…_
+
+---
+
+### 96. 🔥 [My Son's Girlfriend](https://youtube.com/shorts/kwBMGnTdIRM)
+> **Note:** 🔥 VIRAL — featured in Zarna's new stand-up set. Son's white girlfriend makes her work out in December. "We're supposed to start Jan 1 — that's the law. Today is 1. She cannot do math." Bumped to strong viral weight.
+
+_my son's white girlfriend making me work out in December can you believe can you please we're supposed to start Jan one that's the law today is one she cannot do math oh my God_
+
+---
+
+### 97. ✅ [Never Visiting My MIL](https://youtube.com/shorts/FVolOh0CL5w)
+
+_Hey, how was the trip to my mom's house? >> It was good. Of course, your mom being your mom, she asked me how much money I make. >> Wow. And >> And what? >> And what did you tell her? >> I said it's none of your…_
+
+---
+
+### 98. ✅ [New Bag Alert](https://youtube.com/shorts/WauT492VTlI)
+
+_I'm sitting here doing [screaming] what? Who is throwing these things at me? Everywhere I sit now, things fall on me. Now, what is inside this box? What is inside this box? I don't know even know. Let's just find out.…_
+
+---
+
+### 99. ⛔ [New NYC Shows Upcoming](https://youtube.com/shorts/VwuKMuM2fuw)
+> **Note:** ⛔ PROMO — upcoming shows announcement, not a skit
+
+_are you hungry did you work up a little appetite Za how you feeling you hungry I always yeah me too do you like Italian food of course yeah okay I mean the Indians make it better don't even start with me see I knew we…_
+
+---
+
+### 100. ✅ [New Year Resolutions](https://youtube.com/shorts/r-BvMDCjoEM)
+
+_Mom it's January 2nd and I really think we should go to the gym today no why would we go to the gym you told me one of your resolutions was to work out more I do I do but I'm working my way to the working out okay but…_
+
+---
+
+### 101. ⛔ [Now That TikTok is Banned](https://youtube.com/shorts/zZ2OQlinpcE)
+> **Note:** ⛔ COMMENTARY — TikTok ban reaction, not a skit
+
+_things to do now the Tik Tok is banned number one now you have lots of time to study for the mcats number two take the bar exam for fun Kim Kardashian does it number three clean out your closet you know that's been…_
+
+---
+
+### 102. ⛔ [NY Times Bestseller!!!](https://youtube.com/shorts/AnfhtxKTc30)
+> **Note:** ⛔ PROMO — NY Times Bestseller announcement
+
+_Noa, why you crying? Why are you crying? We made it. We made it. New York Times bestseller list. Why are you like, can you Why did something happen? No. I'm just so happy. You can't fire me. Huh? No. Yeah, I can still…_
+
+---
+
+### 103. ✅ [Online Dating](https://youtube.com/shorts/tIWmT5mkzGM)
+
+_my husband he's a really smart guy he went to a great college has a good job he's what you would call a catch I know this because his mother reminds me every day and and I get asked a lot were you guys arranged we were…_
+
+---
+
+### 104. ✅ [Our Ten Days In India](https://youtube.com/shorts/Mit_xskeQFc)
+
+_I mean women have very few rights >> where he said you cannot work if you want to be a part of my life. >> This episode is about India which is what we're talking I have a question why are they honking? Everyone is…_
+
+---
+
+### 105. ✅ [Our Year End Goals](https://youtube.com/shorts/v7yLsHE_dFU)
+
+_This is how if anybody thinks how do you film a family episode, you're seeing it live right now. >> I have said many times that if he doesn't step up and starts getting either much more involved, we should hire a…_
+
+---
+
+### 106. ✅ [Parenting](https://youtube.com/shorts/VAKxXMc6yyg)
+
+_okay you don't need any other therapist I can fix whatever your problem is there's just so many times in our lives where you want to do something and our mom is just so controlling she doesn't let us play sports she…_
+
+---
+
+### 107. ✅ [Peeling Fruit](https://youtube.com/shorts/QUte7V4iiGI)
+
+_Mom, what? I'm completely shooken. Are you opening those lies for dad? Don't be so shooken. I overheard him talking to his mom and he's like, "Mom, liuches are in season and nobody's here to open them for me. Why don't…_
+
+---
+
+### 108. ✅ [Perfect Mother's Day Gift](https://youtube.com/shorts/pGybIfXHEMM)
+
+_Mom, every Mother's Day is stressful. I never know what to get you. We're all all looking for gifts for our moms. What should we get? You have to give them the gift of being inspired the way you did when you helped me…_
+
+---
+
+### 109. ✅ [Post Grad Life](https://youtube.com/shorts/aBICmIxY9jY)
+
+_So what is your guys's goal at the end of college? Cuz you're both in various stages of college life now. What do you want to do at the end? You want a corporate job. You want to be an entrepreneur. What do you want to…_
+
+---
+
+### 110. ✅ [Presidents Day](https://youtube.com/shorts/FtYwfdHbOBM)
+
+_Mom what are you wearing I need everybody to know I'm American that's why I'm going to wear this now everywhere I go and also a little protection from the sun it's not covering anything not from the Sun from Ice_
+
+---
+
+### 111. ✅ [Privacy](https://youtube.com/shorts/tyu8SeMVxSk)
+
+_Mom, what are you doing? >> What are you doing here? I left you guys all at home. Why you ruining my vibe? >> No one's heard from you since the morning. We were worried about you. >> I'm working. Bye. >> This is you…_
+
+---
+
+### 112. ✏️ [Privacy?](https://youtube.com/shorts/AoC7ZWMwT18)
+> **Corrected:** Bridge → Brij (1x)
+
+_Brij, what is happen? Can you not be angry? Can we not fight? Please, can you take a deep breath? Take a deep breath. Deep breath. Take a deep breath. Yes. What's the issue? Mom, I am extremely upset because there is no…_
+
+---
+
+### 113. ✅ [Pronouns](https://youtube.com/shorts/IlYTwFzGEDI)
+
+_My son, my 11-year-old in school was asked the other day to, you know, if he would like to declare his pronouns. He can do that now. So, he came home and he asked me, he said, "Mom, what should I say are my pronouns?" I…_
+
+---
+
+### 114. ✅ [Regular or Decaf?](https://youtube.com/shorts/fX32z8nVxzg)
+
+_Mom this is your third cup of coffee today so so what's the problem you know it's not really healthy all that caffeine and what what you do you a doctor now everybody's a doctor everybody's got an opinion there's…_
+
+---
+
+### 115. ✅ [Running Errands](https://youtube.com/shorts/8QCMZQTFhHg)
+
+_Can you get ready, please? >> Let's go. We need to go quickly. >> Wait, what are you doing? What? Hey. Hey. What are you do? You need to wear your shoes. You're not going in these bathroom chapels all over the city. >>…_
+
+---
+
+### 116. ✅ [Self Maintenance](https://youtube.com/shorts/lp2AHqEBPgQ)
+
+_zna you're back here again this is like the third day I told you we need it every 3 days my hair it grows so fast I have so much hair on my face why don't you just get laser hair removal laser is a longterm thing I'm…_
+
+---
+
+### 117. ✅ [Shopping Luxury](https://youtube.com/shorts/z0IRgCYT4DY)
+
+_so why is money such a scary topic the reason why people shop expensive Brands is not just because the quality at other places is not good it's because they don't want to waste time the reason why people will just trust…_
+
+---
+
+### 118. ✅ [Something Happened](https://youtube.com/shorts/u13zqBNqu_0)
+
+_All right. So, something happened and I want you to know that it's not my fault. I was just walking out in a new city. I'm here for a show tonight and I was trying to get some sun. You see this vitamin? I was just…_
+
+---
+
+### 119. ✅ [Starving My Husband](https://youtube.com/shorts/noU_-nqDBVI)
+
+_Oh my god. Shut up. Again, you're making protein shake. Why are you always drinking all these chemicals? >> I mean, >> I'm cooking all this food for you all day long. What is the point of it? >> What? >> My mom…_
+
+---
+
+### 120. ✅ [Stress Therapy](https://youtube.com/shorts/Ln4wjCRyfNQ)
+
+_Zoya I don't understand why you're always constantly so stressed out just tell me what's your problem I take care of you to the nth degree and yet there is problems tell me a problem I'm going to fix it right now so I…_
+
+---
+
+### 121. ✅ [Summer Job Search](https://youtube.com/shorts/NR6DBDNz0i4)
+
+_bridge I'm the world's leading almost therapist what's bothering you I'm G to fix it let's go well one of the things bother me right now is that all my friends are like trying to get a su summer internship or job and it…_
+
+---
+
+### 122. ✅ [Summer White GRWM](https://youtube.com/shorts/7cq5mpblVIQ)
+
+_Hello, namaste, Auntie Zarna here with the rules for summer whites and summer white dressing. As you can see, first of all, texture. It's all about getting the texture in. Get a little lace in. Get a little like here,…_
+
+---
+
+### 123. ✅ [Supportive Parents](https://youtube.com/shorts/aMXtIaKF-X0)
+
+_My kids always want to know why I'm telling them that as grownup kids, two of my kids are adults, I am not stepping in to fix their messes. >> Aren't you supposed to support us though, mom? Like >> that you're still our…_
+
+---
+
+### 124. ✅ [Tax Season](https://youtube.com/shorts/kFff-R-ZBuQ)
+
+_shelab did you congratulate Zoya on her summer internship of course I did I called her and what did she say she was really excited and I'm excited for her she's going to be making money for the first time she told me…_
+
+---
+
+### 125. ✅ [Terrible Gifts](https://youtube.com/shorts/JfKiU0FB1gg)
+
+_mom I bought you such beautiful flowers I got your favorite kind so why would you buy a flower that has already been bloomed mom I look at how many clothes buds there are look no but you have to buy one where every…_
+
+---
+
+### 126. ✅ [The Best Foot Products](https://youtube.com/shorts/zWUrW8IVvdg)
+
+_This is my first ever foot video. Wearing open toe shoes on stage and anywhere has been a problem because my feet kind of look crusty no matter how much goop I put on them. Like right now I've covered them in goop. Not…_
+
+---
+
+### 127. ✏️ [The Perfect Ring](https://youtube.com/shorts/j-67UG5abAU)
+> **Corrected:** Bridge → Brij (1x)
+
+_So, you're really going to propose, huh, Brij? It's good. It's good. Your sister may never get there. I don't know why Ganesh punishes me like this. But I'm happy you found your person. But please don't make a mistake.…_
+
+---
+
+### 128. ✅ [The Truth About Marriage](https://youtube.com/shorts/xK8K2Drgh1A)
+
+_even have to get married. >> No, because get get it out of your system. The women who are not married at all >> sometimes romanticize it to a point, but like married women look at them and you're like, "Oh my god, it is…_
+
+---
+
+### 129. ✏️ [Therapist for Poor Life Choices](https://youtube.com/shorts/50u4T7Ua1Kw)
+> **Corrected:** Bridge → Brij (1x)
+
+_Brij you don't need another therapist you just tell me what your problem is I'm sick and tired of doing math I've been doing math my whole life since I was born I was doing textbooks I'm sick and tired of it I'm bored…_
+
+---
+
+### 130. ✅ [Therapy in America](https://youtube.com/shorts/n2yA5o5bflM)
+
+_I know you don't believe in therapy, but I know I can help you. What's going on? My kids are forcing me to take therapy. Is that crazy? I think your kids probably really care about you and want to see you succeed. They…_
+
+---
+
+### 131. ✅ [Ultimate Test: Levain Vs Crumbl](https://youtube.com/shorts/jDfHLpcInvo)
+
+_hello Namaste almost Dr zag gar over here with my son and we are today doing something public service for the whole of America we have in front of us our two comparative patients one is the laen chocolate chip cookie…_
+
+---
+
+### 132. ✅ [Undecided Voters](https://youtube.com/shorts/fOHhp1m96BM)
+
+_so Brian you and I are undecided voters but we have to make a decision this is the week so what are we going to do what are you thinking I don't know the issues like uh immigration yeah immigration yeah that's an easy…_
+
+---
+
+### 133. ✅ [Vir Das Gets Therapy](https://youtube.com/shorts/aGGawHBowdc)
+
+_So, I am the world's leading almost therapist. I can solve whatever your problem is. Just tell me and let's go. >> My entire life is spent on animals and dogs. I'm spending all of my money on dogs. And I think we all…_
+
+---
+
+### 134. ✅ [Waste of $$$](https://youtube.com/shorts/-pPt84UjLu0)
+
+_Guys, we are spending way too much money on streaming services. I need to get one or two of them cut off. We cannot pay for every streaming services available. Okay, let's keep Disney Plus because that's my favorite.…_
+
+---
+
+### 135. ✅ [We Spent Diwali At Disney](https://youtube.com/shorts/gKZ3sjyVaoo)
+
+_What was it about this festival bridge that made you feel like Indian people were cool? >> The first of all the dancing. I mean we could have dance groups of like extremely long numbers. So certain groups or classes…_
+
+---
+
+### 136. ✅ [What I'm (Un)Grateful For](https://youtube.com/shorts/4JvK39szuOI)
+
+_Okay, Mom. I know you don't want to pay for therapy, so I'm going to be your therapist and we're going to do this exercise. Now, tell me what's on your mind. Uh, my kids are thankless. My life feels hopeless. All day…_
+
+---
+
+### 137. ✅ [What is Your Purpose?](https://youtube.com/shorts/bQNulBK00Ec)
+
+_Mom I just finished my internship and I still don't know what I want to do I don't know what my purpose is I know what your purpose is what is it it is to find happiness to find joy to find the meaning of life because…_
+
+---
+
+### 138. ✅ [When the Elevator is Broken](https://youtube.com/shorts/ZIF4GTCrLNQ)
+
+_Why? >> Right now. >> What happened? >> I have a workout. Elevator is gone. >> Get up. >> Right after her pistachio tiramisu at midnight. >> I would not have eaten so much carbs._
+
+---
+
+### 139. ✅ [Who's The Better Asian?](https://youtube.com/shorts/_MGgZHBfhj0)
+
+_Who's cheaper? >> Indians. >> Okay. I'm so glad she said it because then it would be >> Yeah. No, I know. Just Just say it. I know. Be racist. >> Who does math faster? >> Indians. We invented the number zero. >> I trust…_
+
+---
+
+### 140. ✅ [Working Women's Worst Enemy](https://youtube.com/shorts/LqZPbH_MWcM)
+
+_Women who don't need to work for a living. Women who have a lot of affluence and exposure to the world. Women who are protected by their husbands and brothers or dads or whatever their life circumstances. They feel free…_
+
+---
+
+### 141. ✅ [You're Invited - Zoom Party](https://youtube.com/shorts/-4syxKssZCc)
+
+_If you pre-ordered my book before April 28th, you are invited to a Zoom party where I am going to answer every question you've ever had about my book because we're selling so many thousands of copies. We're going to…_
+
+---
