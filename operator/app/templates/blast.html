@@ -255,6 +255,27 @@
         {% endif %}
       </form>
 
+      <!-- Send test section -->
+      {% if active_draft.status not in ("sending", "sent", "cancelled") %}
+      <div class="border-t pt-5 mb-5" style="border-color:var(--border);">
+        <div class="section-label mb-3">Send Test to a Phone</div>
+        <form method="post" action="{{ url_for('blast.send_test', draft_id=active_draft.id) }}"
+              class="flex items-end gap-3 flex-wrap">
+          <input type="hidden" name="body" :value="body">
+          <input type="hidden" name="channel" :value="channel">
+          <div class="flex-1">
+            <input type="tel" name="test_phone" class="zarna-input"
+                   placeholder="+1 212 555 0100 — sends [TEST] prefix, just to this number">
+          </div>
+          <button type="submit" class="btn-ghost shrink-0"
+                  :disabled="!body.trim()"
+                  :style="!body.trim() ? 'opacity:0.4;cursor:not-allowed;' : ''">
+            Send Test →
+          </button>
+        </form>
+      </div>
+      {% endif %}
+
       <!-- Send now section -->
       {% if active_draft.status not in ("sending", "sent", "cancelled") %}
       <div class="border-t pt-6" style="border-color:var(--border);">

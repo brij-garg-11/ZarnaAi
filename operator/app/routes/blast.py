@@ -226,6 +226,33 @@ def schedule(draft_id: int):
     return redirect(url_for("blast.blast_index"))
 
 
+@blast_bp.route("/operator/blast/<int:draft_id>/test", methods=["POST"])
+@login_required
+def send_test(draft_id: int):
+    """Send the current message body to a single test phone number."""
+    test_phone = (request.form.get("test_phone") or "").strip()
+    if not test_phone:
+        flash("Enter a phone number to send the test to.", "error")
+        return redirect(url_for("blast.blast_compose", draft_id=draft_id))
+
+    body = (request.form.get("body") or "").strip()
+    channel = request.form.get("channel", "twilio")
+    if channel not in ("twilio", "slicktext"):
+        channel = "twilio"
+
+    if not body:
+        flash("Add a message before sending a test.", "error")
+        return redirect(url_for("blast.blast_compose", draft_id=draft_id))
+
+    from ..blast_sender import _send_one
+    ok = _send_one(test_phone, f"[TEST] {body}", channel)
+    if ok:
+        flash(f"Test message sent to {test_phone[-4:].rjust(len(test_phone), '*')}.", "success")
+    else:
+        flash("Test send failed — check that your Twilio/SlickText credentials are set on Railway.", "error")
+    return redirect(url_for("blast.blast_compose", draft_id=draft_id))
+
+
 @blast_bp.route("/operator/blast/<int:draft_id>/cancel", methods=["POST"])
 @login_required
 def cancel_blast(draft_id: int):
