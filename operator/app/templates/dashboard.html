@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-2xl font-bold mb-1" style="color:var(--text);">Dashboard</h1>
+  <p class="text-sm" style="color:var(--text-muted);">Your audience at a glance — all times Eastern</p>
+</div>
+
+<!-- Stat cards -->
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+  <div class="stat-card">
+    <div class="stat-label">Total Subscribers</div>
+    <div class="stat-num" style="color:var(--gold);">{{ "{:,}".format(stats.get("total_subscribers", 0)) }}</div>
+    {% if sub_delta.pct is not none %}
+      <div class="mt-2 stat-delta-{{ sub_delta.dir }}">
+        {{ "▲" if sub_delta.dir == "up" else "▼" }} {{ sub_delta.pct }}% new this week
+      </div>
+    {% else %}
+      <div class="mt-2" style="color:var(--text-dim);font-size:12px;">unique fans</div>
+    {% endif %}
+  </div>
+
+  <div class="stat-card">
+    <div class="stat-label">Total Messages</div>
+    <div class="stat-num" style="color:#E8D5A3;">{{ "{:,}".format(stats.get("total_messages", 0)) }}</div>
+    <div class="mt-2" style="color:var(--text-dim);font-size:12px;">from fans, all time</div>
+  </div>
+
+  <div class="stat-card">
+    <div class="stat-label">Messages Today</div>
+    <div class="stat-num" style="color:#86efac;">{{ "{:,}".format(stats.get("messages_today", 0)) }}</div>
+    <div class="mt-2" style="color:var(--text-dim);font-size:12px;">last 24 hours</div>
+  </div>
+
+  <div class="stat-card">
+    <div class="stat-label">This Week</div>
+    <div class="stat-num" style="color:#93c5fd;">{{ "{:,}".format(stats.get("messages_week", 0)) }}</div>
+    {% if week_delta.pct is not none %}
+      <div class="mt-2 stat-delta-{{ week_delta.dir }}">
+        {{ "▲" if week_delta.dir == "up" else "▼" }} {{ week_delta.pct }}% vs last week
+      </div>
+    {% else %}
+      <div class="mt-2" style="color:var(--text-dim);font-size:12px;">last 7 days</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Charts row -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+  <div class="card">
+    <div class="stat-label mb-4">Messages per day — last 30 days</div>
+    <canvas id="dayChart" height="110"></canvas>
+  </div>
+  <div class="card">
+    <div class="stat-label mb-4">Activity by hour (Eastern)</div>
+    <canvas id="hourChart" height="110"></canvas>
+  </div>
+</div>
+
+<!-- Tags + Area Codes row -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+  <div class="card">
+    <div class="stat-label mb-4">Audience tags</div>
+    {% if stats.get("tag_breakdown") %}
+    <div class="flex flex-wrap gap-2">
+      {% for tag, cnt in stats.get("tag_breakdown", []) %}
+      <span class="tag-pill">{{ tag }} <span class="text-xs opacity-60">{{ cnt }}</span></span>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-sm" style="color:var(--text-dim);">Tags build as fans text in after shows.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="stat-label mb-4">Top area codes</div>
+    {% if stats.get("top_area_codes") %}
+    <div class="space-y-2">
+      {% for ac, cnt in stats.get("top_area_codes", []) %}
+      <div class="flex justify-between items-center">
+        <span class="text-sm font-mono" style="color:var(--text-muted);">({{ ac }})</span>
+        <div class="flex items-center gap-3 flex-1 mx-4">
+          {% set max_cnt = stats.top_area_codes[0][1] if stats.top_area_codes else 1 %}
+          <div class="h-1.5 rounded-full" style="background:var(--gold);opacity:0.4;width:{{ [cnt / max_cnt * 100, 100]|min|int }}%;min-width:4px;"></div>
+        </div>
+        <span class="text-sm font-semibold" style="color:var(--gold-light);">{{ cnt }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-sm" style="color:var(--text-dim);">No data yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Quick actions -->
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+  <a href="{{ url_for('shows.list_shows_view') }}"
+     class="card flex items-center gap-4 hover:border-gold-600 transition-colors cursor-pointer no-underline"
+     style="text-decoration:none;">
+    <div class="text-3xl">🎤</div>
+    <div>
+      <div class="font-semibold text-sm" style="color:var(--text);">Live Shows</div>
+      <div class="text-xs mt-0.5" style="color:var(--text-dim);">Activate or manage shows</div>
+    </div>
+  </a>
+  <a href="{{ url_for('blast.blast_index') }}"
+     class="card flex items-center gap-4 hover:border-gold-600 transition-colors cursor-pointer"
+     style="text-decoration:none;">
+    <div class="text-3xl">📢</div>
+    <div>
+      <div class="font-semibold text-sm" style="color:var(--text);">Blast Tool</div>
+      <div class="text-xs mt-0.5" style="color:var(--text-dim);">Send group texts to fans</div>
+    </div>
+  </a>
+  {% if user and user.is_owner %}
+  <a href="{{ url_for('team.team_index') }}"
+     class="card flex items-center gap-4 hover:border-gold-600 transition-colors cursor-pointer"
+     style="text-decoration:none;">
+    <div class="text-3xl">👥</div>
+    <div>
+      <div class="font-semibold text-sm" style="color:var(--text);">Team</div>
+      <div class="text-xs mt-0.5" style="color:var(--text-dim);">Manage who has access</div>
+    </div>
+  </a>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const chartDefaults = {
+  plugins: { legend: { display: false } },
+  scales: {
+    x: { ticks: { color:'#6A6058', font:{ size:10 } }, grid:{ color:'#2D2825' } },
+    y: { ticks: { color:'#6A6058', font:{ size:10 } }, grid:{ color:'#2D2825' } }
+  }
+};
+
+const dayLabels = {{ stats.get("messages_by_day", [])|map(attribute=0)|list|tojson }};
+const dayData   = {{ stats.get("messages_by_day", [])|map(attribute=1)|list|tojson }};
+const hourData  = {{ stats.get("messages_by_hour", [])|tojson }};
+
+new Chart(document.getElementById('dayChart'), {
+  type: 'bar',
+  data: { labels: dayLabels, datasets: [{ data: dayData, backgroundColor:'#C9A84C', borderRadius:4 }] },
+  options: chartDefaults
+});
+
+new Chart(document.getElementById('hourChart'), {
+  type: 'bar',
+  data: {
+    labels: Array.from({length:24}, (_,i) => i+'h'),
+    datasets: [{ data: hourData, backgroundColor:'#8A7035', borderRadius:4 }]
+  },
+  options: chartDefaults
+});
+</script>
+{% endblock %}

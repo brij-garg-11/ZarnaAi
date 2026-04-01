@@ -1,0 +1,345 @@
+{% extends "base.html" %}
+{% block title %}Blast Tool{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-2xl font-bold mb-1" style="color:var(--text);">Blast Tool</h1>
+  <p class="text-sm" style="color:var(--text-muted);">Send group texts to your audience — zero phone numbers ever shown</p>
+</div>
+
+<div class="grid grid-cols-1 xl:grid-cols-5 gap-6">
+
+  <!-- Draft board (left column) -->
+  <div class="xl:col-span-2">
+    <div class="stat-label mb-3">Draft Board</div>
+
+    <a href="{{ url_for('blast.blast_compose') }}"
+       class="flex items-center gap-3 card-sm mb-3 hover:border-gold-700 transition-colors cursor-pointer"
+       style="text-decoration:none; border-color: {{ 'var(--gold)' if not active_draft else 'var(--border)' }}">
+      <div class="w-7 h-7 rounded-full flex items-center justify-center text-lg font-bold shrink-0"
+           style="background:var(--gold);color:#0C0A08;">+</div>
+      <span class="text-sm font-medium" style="color:var(--text);">New message</span>
+    </a>
+
+    {% if drafts %}
+    <div class="space-y-2">
+      {% for d in drafts %}
+      <a href="{{ url_for('blast.blast_compose', draft_id=d.id) }}"
+         class="block card-sm transition-colors cursor-pointer"
+         style="text-decoration:none;
+                border-color:{{ 'var(--gold)' if active_draft and active_draft.id == d.id else 'var(--border)' }};
+                background:{{ '#1E1B18' if active_draft and active_draft.id == d.id else 'var(--bg-card)' }}">
+        <div class="flex items-start justify-between gap-2 mb-1.5">
+          <span class="text-sm font-medium truncate" style="color:var(--text);">{{ d.name or "Untitled" }}</span>
+          {% set ds = d.status or "draft" %}
+          <span class="badge-{{ ds }} shrink-0">{{ ds }}</span>
+        </div>
+        <p class="text-xs truncate mb-2" style="color:var(--text-muted);">
+          {{ d.body[:80] + "…" if d.body|length > 80 else d.body or "(empty)" }}
+        </p>
+        <div class="flex items-center gap-2 text-xs" style="color:var(--text-dim);">
+          <span>{{ d.channel }}</span>
+          <span>·</span>
+          <span>{{ d.audience_type }}</span>
+          {% if d.total_recipients and d.status == "sent" %}
+          <span>·</span>
+          <span style="color:#4ade80;">{{ d.sent_count }} sent</span>
+          {% elif d.scheduled_at and d.status == "scheduled" %}
+          <span>·</span>
+          <span style="color:#93c5fd;">{{ d.scheduled_at.strftime('%b %d %H:%M') }}</span>
+          {% endif %}
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="card text-center py-8" style="border-style:dashed;">
+      <p class="text-sm" style="color:var(--text-dim);">No drafts yet — start a new message</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Compose / detail (right column) -->
+  <div class="xl:col-span-3" x-data="blastCompose()">
+    {% if active_draft %}
+    <!-- Sent / Cancelled view (read-only) -->
+    {% if active_draft.status in ("sent", "cancelled") %}
+    <div class="card">
+      <div class="flex items-center gap-3 mb-6">
+        <span class="badge-{{ active_draft.status }}">{{ active_draft.status.upper() }}</span>
+        <h2 class="text-lg font-semibold" style="color:var(--text);">{{ active_draft.name }}</h2>
+      </div>
+      {% if active_draft.status == "sent" %}
+      <div class="grid grid-cols-3 gap-4 mb-6">
+        <div class="card-sm text-center">
+          <div class="text-2xl font-bold" style="color:var(--gold);">{{ active_draft.total_recipients }}</div>
+          <div class="text-xs mt-1" style="color:var(--text-dim);">Total</div>
+        </div>
+        <div class="card-sm text-center">
+          <div class="text-2xl font-bold" style="color:#4ade80;">{{ active_draft.sent_count }}</div>
+          <div class="text-xs mt-1" style="color:var(--text-dim);">Sent</div>
+        </div>
+        <div class="card-sm text-center">
+          <div class="text-2xl font-bold" style="color:#f87171;">{{ active_draft.failed_count }}</div>
+          <div class="text-xs mt-1" style="color:var(--text-dim);">Failed</div>
+        </div>
+      </div>
+      {% endif %}
+      <div class="card-sm mb-4">
+        <div class="stat-label mb-2">Message sent</div>
+        <p class="text-sm leading-relaxed" style="color:var(--text);">{{ active_draft.body }}</p>
+      </div>
+      <a href="{{ url_for('blast.blast_index') }}" class="btn-ghost btn-sm">← Back to drafts</a>
+    </div>
+
+    {% else %}
+    <!-- Compose / Edit / Schedule view -->
+    <div class="card">
+      <div class="stat-label mb-5">
+        {% if active_draft.status == "scheduled" %}Scheduled Blast{% elif active_draft.status == "sending" %}Sending…{% else %}Edit Draft{% endif %}
+      </div>
+
+      <form method="post" action="{{ url_for('blast.save_draft') }}" id="draftForm">
+        <input type="hidden" name="draft_id" value="{{ active_draft.id }}">
+
+        <!-- Name -->
+        <div class="mb-4">
+          <label class="stat-label mb-2 block">Draft name</label>
+          <input type="text" name="name" class="gold-input"
+                 placeholder="e.g. Phoenix show blast, April promo…"
+                 value="{{ active_draft.name or '' }}"
+                 {{ 'readonly' if active_draft.status == 'scheduled' else '' }}>
+        </div>
+
+        <!-- Channel toggle -->
+        <div class="mb-5">
+          <label class="stat-label mb-2 block">Channel</label>
+          <div class="flex rounded-lg overflow-hidden border" style="border-color:var(--border);width:fit-content;">
+            <label class="flex items-center gap-2 px-4 py-2.5 cursor-pointer transition-colors text-sm font-medium"
+                   :class="channel==='twilio' ? 'bg-gold-active' : ''"
+                   :style="channel==='twilio' ? 'background:#3a2a0e;color:var(--gold);' : 'color:var(--text-muted);'">
+              <input type="radio" name="channel" value="twilio" x-model="channel" class="sr-only"
+                     {{ 'checked' if active_draft.channel == 'twilio' else '' }}>
+              📱 Twilio SMS
+            </label>
+            <label class="flex items-center gap-2 px-4 py-2.5 cursor-pointer transition-colors text-sm font-medium border-l"
+                   style="border-color:var(--border);"
+                   :class="channel==='slicktext' ? 'bg-gold-active' : ''"
+                   :style="channel==='slicktext' ? 'background:#3a2a0e;color:var(--gold);' : 'color:var(--text-muted);'">
+              <input type="radio" name="channel" value="slicktext" x-model="channel" class="sr-only"
+                     {{ 'checked' if active_draft.channel == 'slicktext' else '' }}>
+              💬 SlickText
+            </label>
+          </div>
+          <p class="text-xs mt-2" style="color:var(--text-dim);">
+            <span x-show="channel==='twilio'">Twilio SMS — direct carrier delivery via your 212 number</span>
+            <span x-show="channel==='slicktext'">SlickText — uses your SlickText account API for delivery</span>
+          </p>
+        </div>
+
+        <!-- Audience -->
+        <div class="mb-5">
+          <label class="stat-label mb-2 block">Audience</label>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+            {% for val, lbl in [("all","Everyone"),("tag","By Tag"),("location","By Location"),("random","Random %")] %}
+            <label class="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg border cursor-pointer text-xs font-medium transition-colors"
+                   :style="audienceType==='{{ val }}' ? 'border-color:var(--gold);background:#3a2a0e;color:var(--gold);' : 'border-color:var(--border);color:var(--text-muted);'">
+              <input type="radio" name="audience_type" value="{{ val }}" x-model="audienceType" class="sr-only"
+                     {{ 'checked' if active_draft.audience_type == val else '' }}>
+              {{ lbl }}
+            </label>
+            {% endfor %}
+          </div>
+
+          <div x-show="audienceType==='tag'" x-transition>
+            <select name="audience_filter_tag" class="gold-input" x-model="audienceFilter"
+                    @change="updateCount()">
+              <option value="">— select a tag —</option>
+              {% for tag in tags %}
+              <option value="{{ tag }}" {{ 'selected' if active_draft.audience_filter == tag else '' }}>{{ tag }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div x-show="audienceType==='location'" x-transition>
+            <input type="text" name="audience_filter_location" class="gold-input"
+                   placeholder="e.g. Chicago, Phoenix, New York…"
+                   value="{{ active_draft.audience_filter or '' }}"
+                   x-model="audienceFilter"
+                   @input.debounce.500ms="updateCount()">
+          </div>
+          <div x-show="audienceType==='random'" x-transition>
+            <div class="flex items-center gap-4">
+              <input type="range" name="audience_sample_pct" min="1" max="100"
+                     x-model="samplePct" @input="updateCount()"
+                     value="{{ active_draft.audience_sample_pct or 50 }}"
+                     class="flex-1" style="accent-color:var(--gold);">
+              <span class="text-sm font-semibold w-12 text-right" style="color:var(--gold);" x-text="samplePct + '%'"></span>
+            </div>
+            <p class="text-xs mt-1" style="color:var(--text-dim);">Randomly selects this % of your total subscribers</p>
+          </div>
+
+          <!-- Hidden inputs to consolidate audience filter -->
+          <input type="hidden" name="audience_filter" :value="resolvedFilter">
+          <input type="hidden" name="audience_sample_pct" :value="samplePct">
+
+          <!-- Live count preview -->
+          <div class="mt-3 flex items-center gap-3">
+            <div class="px-4 py-2 rounded-lg text-sm font-semibold" style="background:#1A1714;border:1px solid var(--border);">
+              <span x-show="!countLoading" style="color:var(--gold);">
+                <span x-text="audienceCount.toLocaleString()"></span> recipients match
+              </span>
+              <span x-show="countLoading" style="color:var(--text-muted);">Counting…</span>
+            </div>
+            <button type="button" @click="updateCount()" class="btn-ghost btn-sm">Refresh</button>
+          </div>
+        </div>
+
+        <!-- Message body -->
+        <div class="mb-6">
+          <div class="flex items-center justify-between mb-2">
+            <label class="stat-label">Message</label>
+            <span class="text-xs" style="color:var(--text-dim);" x-text="body.length + ' / 1600 chars'"></span>
+          </div>
+          <textarea name="body" class="gold-input" placeholder="Type your message here…"
+                    maxlength="1600" x-model="body" rows="5"
+                    {{ 'readonly' if active_draft.status == 'scheduled' else '' }}>{{ active_draft.body or '' }}</textarea>
+          <p class="text-xs mt-2" style="color:var(--text-dim);">
+            Tip: keep messages warm and personal. Add STOP to stop at the end for compliance.
+          </p>
+        </div>
+
+        <!-- Save + schedule row -->
+        {% if active_draft.status not in ("sending",) %}
+        <div class="flex flex-wrap gap-3 mb-6">
+          {% if active_draft.status != "scheduled" %}
+          <button type="submit" class="btn-ghost">Save Draft</button>
+          {% endif %}
+          <button type="button" @click="showSchedule=!showSchedule" class="btn-ghost">
+            🕐 <span x-text="showSchedule ? 'Cancel' : 'Schedule Send'"></span>
+          </button>
+        </div>
+
+        <!-- Schedule panel -->
+        <div x-show="showSchedule" x-transition class="card-sm mb-6" style="background:#1A1714;">
+          <div class="stat-label mb-3">Schedule this blast</div>
+          <p class="text-xs mb-3" style="color:var(--text-muted);">Enter UTC time. The blast will send automatically.</p>
+          <form method="post" action="{{ url_for('blast.schedule', draft_id=active_draft.id) }}"
+                class="flex items-end gap-3 flex-wrap">
+            <div class="flex-1">
+              <label class="stat-label mb-1 block">Send at (UTC)</label>
+              <input type="datetime-local" name="send_at" class="gold-input" required>
+            </div>
+            <button type="submit" class="btn-gold">Schedule →</button>
+          </form>
+        </div>
+        {% endif %}
+      </form>
+
+      <!-- Send now section -->
+      {% if active_draft.status not in ("sending", "sent", "cancelled") %}
+      <div class="border-t pt-6" style="border-color:var(--border);">
+        <div class="stat-label mb-4">Send Now</div>
+        <div class="card-sm mb-4" style="background:#0F0D0B;">
+          <p class="text-sm" style="color:var(--text-muted);">
+            This will immediately send to
+            <strong style="color:var(--gold);" x-text="audienceCount.toLocaleString() + ' recipients'"></strong>
+            via <strong style="color:var(--text);" x-text="channel === 'twilio' ? 'Twilio SMS' : 'SlickText'"></strong>.
+            No phone numbers are shown — the system handles routing privately.
+          </p>
+        </div>
+        <form method="post" action="{{ url_for('blast.send_now', draft_id=active_draft.id) }}"
+              @submit.prevent="confirmSend($event)">
+          <label class="flex items-start gap-3 mb-4 cursor-pointer">
+            <input type="checkbox" name="confirm" value="1" class="mt-1 shrink-0"
+                   style="accent-color:var(--gold);" x-model="confirmed">
+            <span class="text-sm" style="color:var(--text-muted);">
+              I confirm I want to send this message to
+              <strong style="color:var(--gold);" x-text="audienceCount.toLocaleString()"></strong> fans.
+            </span>
+          </label>
+          <button type="submit" class="btn-gold"
+                  :disabled="!confirmed || !body.trim()"
+                  :style="(!confirmed || !body.trim()) ? 'opacity:0.4;cursor:not-allowed;' : ''">
+            📢 Send Now
+          </button>
+        </form>
+      </div>
+      {% endif %}
+
+      <!-- Cancel button -->
+      {% if active_draft.status == "scheduled" %}
+      <div class="border-t pt-6 mt-4" style="border-color:var(--border);">
+        <form method="post" action="{{ url_for('blast.cancel_blast', draft_id=active_draft.id) }}">
+          <button type="submit" class="btn-danger btn-sm"
+                  onclick="return confirm('Cancel this scheduled blast?')">Cancel Scheduled Blast</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% else %}
+    <!-- Empty state — no draft selected -->
+    <div class="card flex flex-col items-center justify-center py-20 text-center">
+      <div class="text-5xl mb-5">📢</div>
+      <h2 class="text-lg font-semibold mb-2" style="color:var(--text);">Compose a message</h2>
+      <p class="text-sm mb-6 max-w-xs" style="color:var(--text-muted);">
+        Select a draft from the left, or start a new one. Your message goes out to the audience you choose — no phone numbers exposed.
+      </p>
+      <a href="{{ url_for('blast.blast_compose') }}" class="btn-gold">+ New Message</a>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function blastCompose() {
+  return {
+    channel: '{{ active_draft.channel if active_draft else "twilio" }}',
+    audienceType: '{{ active_draft.audience_type if active_draft else "all" }}',
+    audienceFilter: '{{ active_draft.audience_filter if active_draft else "" }}',
+    samplePct: {{ active_draft.audience_sample_pct if active_draft else 100 }},
+    body: `{{ (active_draft.body or '')|replace('`', '\\`')|replace('\\', '\\\\')|safe if active_draft else '' }}`,
+    audienceCount: {{ audience_count or 0 }},
+    countLoading: false,
+    confirmed: false,
+    showSchedule: false,
+
+    get resolvedFilter() {
+      if (this.audienceType === 'tag') return this.audienceFilter;
+      if (this.audienceType === 'location') return this.audienceFilter;
+      return '';
+    },
+
+    async updateCount() {
+      this.countLoading = true;
+      try {
+        const fd = new FormData();
+        fd.append('audience_type', this.audienceType);
+        fd.append('audience_filter', this.resolvedFilter);
+        fd.append('audience_sample_pct', this.samplePct);
+        const resp = await fetch('/operator/blast/preview-count', { method: 'POST', body: fd });
+        const html = await resp.text();
+        const match = html.match(/([\d,]+) recipients/);
+        if (match) this.audienceCount = parseInt(match[1].replace(',', ''));
+      } catch(e) {}
+      this.countLoading = false;
+    },
+
+    confirmSend(e) {
+      if (!this.confirmed || !this.body.trim()) {
+        e.preventDefault();
+        return;
+      }
+      if (!confirm(`Send to ${this.audienceCount.toLocaleString()} fans via ${this.channel === 'twilio' ? 'Twilio SMS' : 'SlickText'}?`)) {
+        e.preventDefault();
+      } else {
+        e.target.submit();
+      }
+    }
+  }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Zarna Operator{% endblock %} — Zarna HQ</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            gold: {
+              50:  '#fdf8ec',
+              100: '#f9eec9',
+              200: '#f2d98f',
+              300: '#e8c05a',
+              400: '#d9a52e',
+              500: '#C9A84C',
+              600: '#a07830',
+              700: '#7d5a22',
+              800: '#5e4319',
+              900: '#3a2a0e',
+            },
+          },
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', 'sans-serif'],
+          },
+          backgroundImage: {
+            'gold-gradient': 'linear-gradient(135deg, #C9A84C 0%, #e8c05a 50%, #C9A84C 100%)',
+          },
+        }
+      }
+    }
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0C0A08;
+      --bg-card: #161412;
+      --bg-hover: #1E1B18;
+      --border: #2D2825;
+      --border-light: #3D3630;
+      --gold: #C9A84C;
+      --gold-light: #E8D5A3;
+      --gold-dim: #8A7035;
+      --text: #F0EAE0;
+      --text-muted: #9A9088;
+      --text-dim: #6A6058;
+    }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--gold-dim); }
+
+    /* Gold input focus */
+    .gold-input { background: #1A1714; border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 10px 14px; width: 100%; font-size: 14px; transition: border-color 0.15s; }
+    .gold-input:focus { outline: none; border-color: var(--gold); }
+    .gold-input::placeholder { color: var(--text-dim); }
+    textarea.gold-input { min-height: 120px; resize: vertical; }
+
+    /* Buttons */
+    .btn-gold { background: linear-gradient(135deg, #C9A84C 0%, #d9b850 100%); color: #0C0A08; font-weight: 600; border: none; border-radius: 8px; padding: 10px 20px; font-size: 14px; cursor: pointer; transition: opacity 0.15s, transform 0.1s; }
+    .btn-gold:hover { opacity: 0.9; transform: translateY(-1px); }
+    .btn-gold:active { transform: translateY(0); }
+    .btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid var(--border); border-radius: 8px; padding: 10px 20px; font-size: 14px; cursor: pointer; transition: border-color 0.15s, color 0.15s; }
+    .btn-ghost:hover { border-color: var(--gold); color: var(--gold-light); }
+    .btn-danger { background: #7f1d1d; color: #fca5a5; border: 1px solid #991b1b; border-radius: 8px; padding: 8px 16px; font-size: 13px; cursor: pointer; transition: background 0.15s; }
+    .btn-danger:hover { background: #991b1b; }
+    .btn-sm { padding: 6px 14px; font-size: 13px; }
+
+    /* Cards */
+    .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
+    .card-sm { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+
+    /* Select */
+    select.gold-input { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%239A9088' d='M1 1l5 5 5-5'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px; }
+
+    /* Flash messages */
+    .flash-success { background: #052e16; border: 1px solid #166534; color: #4ade80; border-radius: 8px; padding: 12px 16px; font-size: 14px; }
+    .flash-error { background: #450a0a; border: 1px solid #991b1b; color: #fca5a5; border-radius: 8px; padding: 12px 16px; font-size: 14px; }
+    .flash-info { background: #172554; border: 1px solid #1e40af; color: #93c5fd; border-radius: 8px; padding: 12px 16px; font-size: 14px; }
+
+    /* Stat cards */
+    .stat-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
+    .stat-num { font-size: 36px; font-weight: 800; line-height: 1; letter-spacing: -1px; }
+    .stat-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); margin-bottom: 10px; }
+    .stat-delta-up { color: #4ade80; font-size: 12px; }
+    .stat-delta-down { color: #f87171; font-size: 12px; }
+    .stat-delta-neutral { color: var(--text-dim); font-size: 12px; }
+
+    /* Tag pill */
+    .tag-pill { display: inline-flex; align-items: center; gap: 5px; background: #1A1714; color: var(--gold-light); border: 1px solid var(--gold-dim); padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+    .tag-pill-active { background: #3a2a0e; border-color: var(--gold); color: var(--gold); }
+
+    /* Badge */
+    .badge-live { background: #052e16; color: #4ade80; border: 1px solid #166534; padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .badge-draft { background: #1E1B18; color: #9A9088; border: 1px solid #3D3630; padding: 3px 10px; border-radius: 20px; font-size: 12px; }
+    .badge-ended { background: #1e1b4b; color: #a5b4fc; border: 1px solid #3730a3; padding: 3px 10px; border-radius: 20px; font-size: 12px; }
+    .badge-sent { background: #052e16; color: #4ade80; border: 1px solid #166534; padding: 3px 10px; border-radius: 20px; font-size: 12px; }
+    .badge-scheduled { background: #172554; color: #93c5fd; border: 1px solid #1e40af; padding: 3px 10px; border-radius: 20px; font-size: 12px; }
+    .badge-sending { background: #3a2a0e; color: var(--gold); border: 1px solid var(--gold-dim); padding: 3px 10px; border-radius: 20px; font-size: 12px; }
+    .badge-cancelled { background: #1c1917; color: #78716c; border: 1px solid #44403c; padding: 3px 10px; border-radius: 20px; font-size: 12px; }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body class="h-full">
+
+<!-- Sidebar + Content layout -->
+<div class="flex min-h-screen" x-data="{ mobileOpen: false }">
+
+  <!-- Sidebar -->
+  <aside class="hidden md:flex flex-col w-60 shrink-0 border-r"
+         style="background:#0F0D0B; border-color:var(--border);">
+
+    <!-- Logo -->
+    <div class="px-6 py-5 border-b" style="border-color:var(--border);">
+      <div class="flex items-center gap-2.5">
+        <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold" style="background:var(--gold);color:#0C0A08;">Z</div>
+        <div>
+          <div class="text-sm font-bold" style="color:var(--text);">Zarna HQ</div>
+          <div class="text-xs" style="color:var(--text-dim);">Operator Dashboard</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Nav -->
+    <nav class="flex-1 px-3 py-4 space-y-0.5">
+      {% set nav_items = [
+        ('dashboard.index', '/operator/dashboard', '📊', 'Dashboard'),
+        ('shows.list_shows_view', '/operator/shows', '🎤', 'Live Shows'),
+        ('blast.blast_index', '/operator/blast', '📢', 'Blast Tool'),
+        ('team.team_index', '/operator/team', '👥', 'Team'),
+      ] %}
+      {% for endpoint, path, icon, label in nav_items %}
+      <a href="{{ url_for(endpoint) }}"
+         class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors
+                {% if request.path.startswith(path) %}nav-active{% else %}nav-inactive{% endif %}">
+        <span class="text-base">{{ icon }}</span>
+        {{ label }}
+      </a>
+      {% endfor %}
+    </nav>
+
+    <!-- User -->
+    <div class="px-4 py-4 border-t" style="border-color:var(--border);">
+      {% if user %}
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+             style="background:var(--gold-dim); color:var(--gold-light);">
+          {{ user.name[0].upper() if user.name else '?' }}
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="text-sm font-medium truncate" style="color:var(--text);">{{ user.name }}</div>
+          <div class="text-xs truncate" style="color:var(--text-dim);">{{ user.email }}</div>
+        </div>
+        <a href="{{ url_for('auth.logout') }}" class="text-xs hover:text-red-400 transition-colors"
+           style="color:var(--text-dim);" title="Log out">↩</a>
+      </div>
+      {% endif %}
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <main class="flex-1 flex flex-col min-w-0">
+
+    <!-- Top bar (mobile) -->
+    <header class="flex md:hidden items-center gap-4 px-4 py-3 border-b sticky top-0 z-50"
+            style="background:#0F0D0B; border-color:var(--border);">
+      <button @click="mobileOpen=!mobileOpen" style="color:var(--text-muted);">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+      <div class="flex items-center gap-2">
+        <div class="w-6 h-6 rounded flex items-center justify-center text-xs font-bold"
+             style="background:var(--gold);color:#0C0A08;">Z</div>
+        <span class="text-sm font-semibold" style="color:var(--text);">Zarna HQ</span>
+      </div>
+    </header>
+
+    <!-- Mobile nav overlay -->
+    <div x-show="mobileOpen" x-transition:enter="transition ease-out duration-200"
+         x-transition:leave="transition ease-in duration-150"
+         class="fixed inset-0 z-50 md:hidden" @click.self="mobileOpen=false">
+      <div class="absolute inset-y-0 left-0 w-64 border-r" style="background:#0F0D0B; border-color:var(--border);">
+        <div class="px-6 py-5 border-b flex items-center justify-between" style="border-color:var(--border);">
+          <div class="flex items-center gap-2.5">
+            <div class="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold"
+                 style="background:var(--gold);color:#0C0A08;">Z</div>
+            <span class="text-sm font-bold" style="color:var(--text);">Zarna HQ</span>
+          </div>
+          <button @click="mobileOpen=false" style="color:var(--text-muted);">✕</button>
+        </div>
+        <nav class="px-3 py-4 space-y-0.5">
+          {% for endpoint, path, icon, label in nav_items %}
+          <a href="{{ url_for(endpoint) }}" @click="mobileOpen=false"
+             class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors
+                    {% if request.path.startswith(path) %}nav-active{% else %}nav-inactive{% endif %}">
+            <span class="text-base">{{ icon }}</span>
+            {{ label }}
+          </a>
+          {% endfor %}
+        </nav>
+      </div>
+    </div>
+
+    <!-- Page content -->
+    <div class="flex-1 p-6 md:p-8 overflow-auto">
+      <!-- Flash messages -->
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="mb-6 space-y-2">
+            {% for category, message in messages %}
+              <div class="flash-{{ 'success' if category == 'success' else 'error' if category == 'error' else 'info' }}">
+                {{ message }}
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+</div>
+
+<style>
+  .nav-active { background: #1E1B18; color: var(--gold); }
+  .nav-inactive { color: var(--text-muted); }
+  .nav-inactive:hover { background: #1A1714; color: var(--text); }
+</style>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

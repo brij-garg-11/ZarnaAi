@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Team{% endblock %}
+
+{% block content %}
+<div class="mb-8 flex items-start justify-between flex-wrap gap-4">
+  <div>
+    <h1 class="text-2xl font-bold mb-1" style="color:var(--text);">Team</h1>
+    <p class="text-sm" style="color:var(--text-muted);">Manage who has access to this operator dashboard</p>
+  </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-5 gap-6">
+
+  <!-- User list -->
+  <div class="lg:col-span-3">
+    <div class="stat-label mb-3">Operators ({{ users|length }})</div>
+    <div class="card" style="padding:0;overflow:hidden;">
+      {% for u in users %}
+      <div class="flex items-center gap-4 px-5 py-4 border-b last:border-0" style="border-color:var(--border);">
+        <div class="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0"
+             style="background:{{ '#3a2a0e' if u.is_owner else '#1E1B18' }};
+                    color:{{ 'var(--gold)' if u.is_owner else 'var(--text-muted)' }};">
+          {{ u.name[0].upper() if u.name else '?' }}
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="text-sm font-semibold" style="color:var(--text);">{{ u.name }}</span>
+            {% if u.is_owner %}
+            <span class="text-xs px-2 py-0.5 rounded-full" style="background:#3a2a0e;color:var(--gold);border:1px solid var(--gold-dim);">Owner</span>
+            {% endif %}
+            {% if not u.is_active %}
+            <span class="text-xs px-2 py-0.5 rounded-full" style="background:#1c1917;color:#78716c;border:1px solid #44403c;">Inactive</span>
+            {% endif %}
+          </div>
+          <div class="text-xs mt-0.5" style="color:var(--text-dim);">{{ u.email }}</div>
+          {% if u.last_login_at %}
+          <div class="text-xs mt-0.5" style="color:var(--text-dim);">
+            Last login: {{ u.last_login_at.strftime('%b %d, %Y') }}
+          </div>
+          {% endif %}
+        </div>
+        <div class="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+          <!-- Reset password modal trigger -->
+          <button type="button"
+                  onclick="document.getElementById('reset-{{ u.id }}').classList.toggle('hidden')"
+                  class="btn-ghost btn-sm text-xs">Reset PW</button>
+
+          <!-- Toggle active (don't allow deactivating yourself) -->
+          {% if user and user.id != u.id %}
+          <form method="post" action="{{ url_for('team.toggle_user', user_id=u.id) }}">
+            <button type="submit" class="btn-ghost btn-sm text-xs"
+                    onclick="return confirm('{{ 'Deactivate' if u.is_active else 'Reactivate' }} {{ u.name }}?')">
+              {{ "Deactivate" if u.is_active else "Reactivate" }}
+            </button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Inline reset password form -->
+      <div id="reset-{{ u.id }}" class="hidden px-5 py-4 border-b" style="border-color:var(--border);background:#1A1714;">
+        <form method="post" action="{{ url_for('team.reset_password', user_id=u.id) }}" class="flex items-end gap-3 flex-wrap">
+          <div class="flex-1">
+            <label class="stat-label mb-1 block">New password for {{ u.name }}</label>
+            <input type="password" name="new_password" class="gold-input" placeholder="Min 8 characters" required>
+          </div>
+          <button type="submit" class="btn-gold btn-sm" onclick="return confirm('Reset password for {{ u.name }}?')">Reset</button>
+          <button type="button" class="btn-ghost btn-sm"
+                  onclick="document.getElementById('reset-{{ u.id }}').classList.add('hidden')">Cancel</button>
+        </form>
+      </div>
+      {% else %}
+      <div class="px-5 py-10 text-center">
+        <p class="text-sm" style="color:var(--text-dim);">No team members yet.</p>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Add user -->
+  <div class="lg:col-span-2">
+    <div class="stat-label mb-3">Add New Operator</div>
+    <div class="card">
+      <form method="post" action="{{ url_for('team.add_user') }}" class="space-y-4">
+        <div>
+          <label class="stat-label mb-2 block">Full Name</label>
+          <input type="text" name="name" class="gold-input" placeholder="e.g. Zarna Garg" required>
+        </div>
+        <div>
+          <label class="stat-label mb-2 block">Email</label>
+          <input type="email" name="email" class="gold-input" placeholder="zarna@example.com" required>
+        </div>
+        <div>
+          <label class="stat-label mb-2 block">Temporary Password</label>
+          <input type="text" name="password" class="gold-input" placeholder="They can change it later" required>
+          <p class="text-xs mt-1.5" style="color:var(--text-dim);">Min 8 characters</p>
+        </div>
+        <div>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" name="is_owner" value="1" style="accent-color:var(--gold);">
+            <span class="text-sm" style="color:var(--text-muted);">
+              Owner access <span style="color:var(--text-dim);">(can manage team)</span>
+            </span>
+          </label>
+        </div>
+        <button type="submit" class="btn-gold w-full">Add to Team</button>
+      </form>
+    </div>
+
+    <div class="card mt-4" style="background:#0F0D0B;">
+      <div class="stat-label mb-2">About Access Levels</div>
+      <div class="space-y-2 text-xs" style="color:var(--text-muted);">
+        <div class="flex gap-2">
+          <span style="color:var(--gold);">Owner</span>
+          <span>— full access, can manage team members, reset passwords</span>
+        </div>
+        <div class="flex gap-2">
+          <span style="color:var(--text);">Operator</span>
+          <span>— can use blast, live shows, and view dashboard stats</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

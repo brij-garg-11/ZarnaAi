@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}{{ show.name }}{% endblock %}
+
+{% block content %}
+<!-- Breadcrumb -->
+<div class="mb-6 flex items-center gap-2 text-sm" style="color:var(--text-muted);">
+  <a href="{{ url_for('shows.list_shows_view') }}" style="color:var(--gold);">Live Shows</a>
+  <span>›</span>
+  <span style="color:var(--text);">{{ show.name }}</span>
+</div>
+
+<!-- Status banner messages -->
+{% if ok_msg == "show_live" %}
+<div class="flash-success mb-6">🟢 Show is now <strong>LIVE</strong> — fans can sign up by texting the keyword.</div>
+{% elif ok_msg == "show_ended" %}
+<div class="flash-info mb-6">Show ended. The audience list is saved.</div>
+{% endif %}
+{% if err_msg %}
+<div class="flash-error mb-6">Something went wrong. Please try again.</div>
+{% endif %}
+
+<!-- Header card -->
+<div class="card mb-6">
+  <div class="flex items-start justify-between flex-wrap gap-4">
+    <div>
+      <h1 class="text-xl font-bold mb-2" style="color:var(--text);">{{ show.name }}</h1>
+      <div class="flex items-center gap-3 flex-wrap">
+        {% set st = (show.status or "draft").lower() %}
+        <span class="badge-{{ st }}">{{ st.upper() }}</span>
+        <span class="text-xs" style="color:var(--text-dim);">{{ show.signup_count }} signups</span>
+        {% if show.keyword %}
+        <span class="text-xs" style="color:var(--text-muted);">
+          Keyword: <span class="font-mono font-semibold" style="color:var(--gold);">{{ show.keyword }}</span>
+        </span>
+        {% endif %}
+        <span class="text-xs" style="color:var(--text-dim);">{{ (show.event_category or "other").title() }}</span>
+      </div>
+    </div>
+
+    <!-- Action buttons -->
+    <div class="flex items-center gap-2 flex-wrap">
+      {% if st == "draft" %}
+      <form method="post" action="{{ url_for('shows.activate', show_id=show.id) }}">
+        <button type="submit" class="btn-gold" onclick="return confirm('Go live now? This will end any currently live show.')">
+          🟢 Go Live
+        </button>
+      </form>
+      {% elif st == "live" %}
+      <form method="post" action="{{ url_for('shows.end_show', show_id=show.id) }}">
+        <button type="submit" class="btn-ghost" onclick="return confirm('End this show?')">End Show</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Stats row -->
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6">
+    <div class="card-sm">
+      <div class="text-2xl font-bold" style="color:var(--gold);">{{ show.signup_count }}</div>
+      <div class="text-xs mt-1" style="color:var(--text-dim);">Signups</div>
+    </div>
+    <div class="card-sm">
+      <div class="text-base font-mono font-bold" style="color:var(--text);">{{ show.keyword or "—" }}</div>
+      <div class="text-xs mt-1" style="color:var(--text-dim);">Keyword</div>
+    </div>
+    <div class="card-sm">
+      <div class="text-base font-semibold capitalize" style="color:var(--text);">{{ show.deliver_as or "sms" }}</div>
+      <div class="text-xs mt-1" style="color:var(--text-dim);">Channel</div>
+    </div>
+    <div class="card-sm">
+      <div class="text-base font-semibold" style="color:var(--text);">{{ (show.event_category or "other").title() }}</div>
+      <div class="text-xs mt-1" style="color:var(--text-dim);">Type</div>
+    </div>
+  </div>
+</div>
+
+<!-- Blast this audience (send from blast tool) -->
+<div class="card mb-6">
+  <div class="stat-label mb-3">Send a message to this audience</div>
+  <p class="text-sm mb-4" style="color:var(--text-muted);">
+    Go to the Blast Tool and choose <strong style="color:var(--gold);">Live Show: {{ show.name }}</strong> as your audience — the broadcast will go out via the Admin Dashboard's Live Show broadcast feature, which handles queuing and SlickText/Twilio routing.
+  </p>
+  <div class="flex gap-3 flex-wrap">
+    <a href="{{ url_for('blast.blast_index') }}" class="btn-gold btn-sm">Open Blast Tool →</a>
+    <a href="/admin/live-shows/{{ show.id }}" class="btn-ghost btn-sm" target="_blank">Advanced broadcast (Admin) ↗</a>
+  </div>
+</div>
+
+<!-- Audit log -->
+{% if audit %}
+<div class="card">
+  <div class="stat-label mb-4">Recent Activity</div>
+  <div class="space-y-3">
+    {% for entry in audit %}
+    <div class="flex items-start gap-3 text-sm">
+      <span class="text-xs font-mono shrink-0 mt-0.5" style="color:var(--text-dim);">
+        {{ entry.created_at.strftime('%m/%d %H:%M') if entry.created_at else '—' }}
+      </span>
+      <div>
+        <span class="font-medium" style="color:var(--text);">{{ entry.action }}</span>
+        {% if entry.detail %}
+        <span style="color:var(--text-muted);"> — {{ entry.detail }}</span>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

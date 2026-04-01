@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Live Shows{% endblock %}
+
+{% block content %}
+<div class="mb-8 flex items-start justify-between flex-wrap gap-4">
+  <div>
+    <h1 class="text-2xl font-bold mb-1" style="color:var(--text);">Live Shows</h1>
+    <p class="text-sm" style="color:var(--text-muted);">Activate a show to start collecting signups via keyword text</p>
+  </div>
+</div>
+
+<!-- Live now -->
+<div class="mb-6">
+  <div class="stat-label mb-3">Live Now</div>
+  {% if live_shows %}
+    {% for show in live_shows %}
+    <div class="card mb-3 border-green-900" style="border-color:#166534;">
+      <div class="flex items-center justify-between flex-wrap gap-4">
+        <div class="flex items-center gap-4">
+          <div class="w-2.5 h-2.5 rounded-full bg-green-400 animate-pulse shrink-0"></div>
+          <div>
+            <div class="font-semibold text-base" style="color:var(--text);">{{ show.name }}</div>
+            <div class="text-xs mt-1 space-x-3" style="color:var(--text-muted);">
+              <span>{{ show.signup_count }} signups</span>
+              <span>·</span>
+              <span>Keyword: <span class="font-mono font-semibold" style="color:var(--gold);">{{ show.keyword or "—" }}</span></span>
+              <span>·</span>
+              <span>{{ (show.event_category or "other").title() }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="badge-live">🟢 LIVE</span>
+          <a href="{{ url_for('shows.show_detail', show_id=show.id) }}" class="btn-ghost btn-sm">Manage →</a>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="card text-center py-10" style="border-style:dashed;">
+      <div class="text-3xl mb-3">🎤</div>
+      <p class="text-sm font-medium mb-1" style="color:var(--text);">No show is live right now</p>
+      <p class="text-xs" style="color:var(--text-dim);">Go to a draft and hit "Go Live" to start collecting signups</p>
+    </div>
+  {% endif %}
+</div>
+
+<!-- Drafts -->
+{% if draft_shows %}
+<div class="mb-6">
+  <div class="stat-label mb-3">Drafts</div>
+  <div class="card" style="padding:0;overflow:hidden;">
+    <table class="w-full text-sm">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border);">
+          <th class="text-left px-5 py-3 stat-label">Name</th>
+          <th class="text-left px-5 py-3 stat-label">Keyword</th>
+          <th class="text-left px-5 py-3 stat-label hidden sm:table-cell">Type</th>
+          <th class="text-right px-5 py-3 stat-label"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for show in draft_shows %}
+        <tr class="border-b last:border-0 hover:bg-opacity-50 transition-colors"
+            style="border-color:var(--border);">
+          <td class="px-5 py-3.5" style="color:var(--text);">{{ show.name }}</td>
+          <td class="px-5 py-3.5 font-mono text-xs" style="color:var(--gold);">{{ show.keyword or "—" }}</td>
+          <td class="px-5 py-3.5 hidden sm:table-cell" style="color:var(--text-muted);">{{ (show.event_category or "other").title() }}</td>
+          <td class="px-5 py-3.5 text-right">
+            <a href="{{ url_for('shows.show_detail', show_id=show.id) }}" class="btn-gold btn-sm">Open →</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Past Events -->
+{% if ended_shows %}
+<div>
+  <div class="stat-label mb-3">Past Events</div>
+  <div class="card" style="padding:0;overflow:hidden;">
+    <table class="w-full text-sm">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border);">
+          <th class="text-left px-5 py-3 stat-label">Name</th>
+          <th class="text-left px-5 py-3 stat-label text-right">Signups</th>
+          <th class="text-left px-5 py-3 stat-label hidden sm:table-cell">Type</th>
+          <th class="text-right px-5 py-3 stat-label"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for show in ended_shows %}
+        <tr class="border-b last:border-0 hover:bg-opacity-50 transition-colors"
+            style="border-color:var(--border);">
+          <td class="px-5 py-3.5" style="color:var(--text);">{{ show.name }}</td>
+          <td class="px-5 py-3.5 text-right font-semibold" style="color:var(--gold);">{{ show.signup_count }}</td>
+          <td class="px-5 py-3.5 hidden sm:table-cell" style="color:var(--text-muted);">{{ (show.event_category or "other").title() }}</td>
+          <td class="px-5 py-3.5 text-right">
+            <span class="badge-ended">Ended</span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if not live_shows and not draft_shows and not ended_shows %}
+<div class="card text-center py-16">
+  <div class="text-4xl mb-4">🎤</div>
+  <p class="font-medium mb-2" style="color:var(--text);">No shows yet</p>
+  <p class="text-sm mb-6" style="color:var(--text-muted);">Create your first show from the Admin Dashboard → Live Shows, then come back here to manage it.</p>
+</div>
+{% endif %}
+{% endblock %}
