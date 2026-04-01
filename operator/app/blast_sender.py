@@ -91,10 +91,10 @@ def _send_twilio(phone: str, body: str) -> bool:
 def _send_slicktext(phone: str, body: str) -> bool:
     try:
         import requests
-        api_key = os.getenv("SLICKTEXT_API_KEY", "")
         pub_key = os.getenv("SLICKTEXT_PUBLIC_KEY", "")
-        if not api_key or not pub_key:
-            logger.error("SlickText credentials not configured")
+        priv_key = os.getenv("SLICKTEXT_PRIVATE_KEY", "")
+        if not pub_key or not priv_key:
+            logger.error("SlickText credentials not configured (need SLICKTEXT_PUBLIC_KEY + SLICKTEXT_PRIVATE_KEY)")
             return False
         digits = "".join(c for c in phone if c.isdigit())
         if digits.startswith("1") and len(digits) == 11:
@@ -102,7 +102,7 @@ def _send_slicktext(phone: str, body: str) -> bool:
         resp = requests.post(
             "https://api.slicktext.com/v1/messages",
             json={"number": digits, "message": body},
-            auth=(pub_key, api_key),
+            auth=(pub_key, priv_key),
             timeout=15,
         )
         return resp.status_code in (200, 201)
