@@ -57,7 +57,7 @@ def _update_show_status(show_id: int, new_status: str):
                     (new_status, show_id),
                 )
                 cur.execute(
-                    "INSERT INTO live_show_audit_log (show_id, action, detail) VALUES (%s, %s, %s)",
+                    "INSERT INTO admin_audit_log (show_id, action, detail) VALUES (%s, %s, %s)",
                     (show_id, "show_status", f"status → {new_status} (via operator dashboard)"),
                 )
     finally:
@@ -81,7 +81,7 @@ def _get_recent_audit(show_id: int) -> list:
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT action, detail, created_at FROM live_show_audit_log
+                SELECT action, detail, created_at FROM admin_audit_log
                 WHERE show_id=%s ORDER BY created_at DESC LIMIT 10
             """, (show_id,))
             return [{"action": r[0], "detail": r[1], "created_at": r[2]} for r in cur.fetchall()]
@@ -106,8 +106,8 @@ def _create_show(name, keyword, use_keyword, window_start, window_end, deliver_a
                       deliver_as, event_category, event_timezone))
                 show_id = cur.fetchone()[0]
                 cur.execute(
-                    "INSERT INTO live_show_audit_log (show_id, action, detail) VALUES (%s,%s,%s)",
-                    (show_id, "show_created", f"created via operator dashboard"),
+                    "INSERT INTO admin_audit_log (show_id, action, detail) VALUES (%s,%s,%s)",
+                    (show_id, "show_created", "created via operator dashboard"),
                 )
                 return show_id
     finally:
