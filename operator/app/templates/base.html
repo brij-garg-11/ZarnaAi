@@ -5,57 +5,45 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Zarna HQ{% endblock %} — Zarna HQ</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            pink: {
-              50:  '#fff0f5',
-              100: '#ffe0ec',
-              200: '#ffc2d8',
-              300: '#f472a8',
-              400: '#ef7ca4',
-              500: '#ef4984',
-              600: '#d4306a',
-              700: '#c6235d',
-              800: '#9a1847',
-              900: '#6e0f32',
-            },
-            cream: '#faf3e9',
-            zarna: {
-              bg:     '#0D0F10',
-              card:   '#171a1d',
-              hover:  '#1e2226',
-              border: '#2a2e32',
-            }
-          }
-        }
-      }
-    }
-  </script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800;1,9..40,400&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg:           #0D0F10;
-      --bg-card:      #171a1d;
-      --bg-hover:     #1e2226;
-      --border:       #2a2e32;
-      --border-light: #363c42;
+      /* ── backgrounds ── */
+      --bg:           #faf8f5;   /* warm off-white page bg */
+      --bg-card:      #ffffff;
+      --bg-sidebar:   #ffffff;
+      --bg-hover:     #fef1f6;   /* very light pink hover */
+      --bg-input:     #f9f6f3;
+
+      /* ── borders ── */
+      --border:       #ede8e3;
+      --border-med:   #ddd6d0;
+
+      /* ── pink brand ── */
       --pink:         #ef4984;
       --pink-light:   #f472a8;
       --pink-dark:    #c6235d;
-      --pink-glow:    rgba(239,73,132,0.15);
-      --cream:        #faf3e9;
-      --text:         #f0ebe3;
-      --text-muted:   #9a9490;
-      --text-dim:     #5e5a56;
-      --green:        #4ade80;
-      --blue:         #60a5fa;
-      --red:          #f87171;
+      --pink-pale:    #fce7f0;   /* very pale pink bg */
+      --pink-glow:    rgba(239,73,132,0.12);
+
+      /* ── text ── */
+      --text:         #1a1614;
+      --text-muted:   #6b6360;
+      --text-dim:     #a8a09a;
+
+      /* ── semantic ── */
+      --green:        #16a34a;
+      --green-bg:     #f0fdf4;
+      --green-border: #bbf7d0;
+      --red:          #dc2626;
+      --red-bg:       #fef2f2;
+      --red-border:   #fecaca;
+      --blue:         #2563eb;
+      --blue-bg:      #eff6ff;
+      --blue-border:  #bfdbfe;
     }
 
     *, *::before, *::after { box-sizing: border-box; }
@@ -68,13 +56,13 @@
 
     ::-webkit-scrollbar { width: 5px; height: 5px; }
     ::-webkit-scrollbar-track { background: var(--bg); }
-    ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: var(--pink-dark); }
+    ::-webkit-scrollbar-thumb { background: var(--border-med); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--pink-light); }
 
     /* ── Inputs ── */
     .zarna-input {
-      background: rgba(255,255,255,0.04);
-      border: 1px solid var(--border);
+      background: var(--bg-input);
+      border: 1.5px solid var(--border);
       color: var(--text);
       border-radius: 10px;
       padding: 11px 14px;
@@ -86,22 +74,24 @@
     .zarna-input:focus {
       outline: none;
       border-color: var(--pink);
+      background: #fff;
       box-shadow: 0 0 0 3px var(--pink-glow);
     }
     .zarna-input::placeholder { color: var(--text-dim); }
     textarea.zarna-input { min-height: 120px; resize: vertical; }
     select.zarna-input {
       appearance: none;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='7' viewBox='0 0 12 7'%3E%3Cpath fill='%239a9490' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='7' viewBox='0 0 12 7'%3E%3Cpath fill='%23a8a09a' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
       background-repeat: no-repeat;
       background-position: right 13px center;
       padding-right: 38px;
+      background-color: var(--bg-input);
     }
 
     /* ── Buttons ── */
     .btn-pink {
       display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-      background: linear-gradient(135deg, #ef4984 0%, #d4306a 100%);
+      background: linear-gradient(135deg, #ef4984 0%, #c6235d 100%);
       color: #fff;
       font-weight: 700;
       font-family: inherit;
@@ -111,34 +101,34 @@
       font-size: 14px;
       cursor: pointer;
       transition: opacity 0.15s, transform 0.1s, box-shadow 0.15s;
-      box-shadow: 0 4px 14px rgba(239,73,132,0.25);
+      box-shadow: 0 3px 12px rgba(239,73,132,0.3);
       text-decoration: none;
       white-space: nowrap;
     }
-    .btn-pink:hover { opacity: 0.92; transform: translateY(-1px); box-shadow: 0 6px 20px rgba(239,73,132,0.35); }
+    .btn-pink:hover  { opacity: 0.92; transform: translateY(-1px); box-shadow: 0 5px 18px rgba(239,73,132,0.4); }
     .btn-pink:active { transform: translateY(0); }
 
     .btn-ghost {
       display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-      background: transparent;
+      background: white;
       color: var(--text-muted);
-      border: 1px solid var(--border);
+      border: 1.5px solid var(--border);
       border-radius: 10px;
       padding: 10px 20px;
       font-size: 14px;
       font-family: inherit;
       cursor: pointer;
-      transition: border-color 0.15s, color 0.15s;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
       text-decoration: none;
       white-space: nowrap;
     }
-    .btn-ghost:hover { border-color: var(--pink); color: var(--pink-light); }
+    .btn-ghost:hover { border-color: var(--pink); color: var(--pink); background: var(--pink-pale); }
 
     .btn-danger {
       display: inline-flex; align-items: center; gap: 5px;
-      background: rgba(239,68,68,0.1);
-      color: #fca5a5;
-      border: 1px solid rgba(239,68,68,0.3);
+      background: var(--red-bg);
+      color: var(--red);
+      border: 1.5px solid var(--red-border);
       border-radius: 10px;
       padding: 8px 16px;
       font-size: 13px;
@@ -146,7 +136,7 @@
       cursor: pointer;
       transition: background 0.15s;
     }
-    .btn-danger:hover { background: rgba(239,68,68,0.2); }
+    .btn-danger:hover { background: #fee2e2; }
 
     .btn-sm { padding: 6px 14px !important; font-size: 13px !important; }
 
@@ -156,27 +146,19 @@
       border: 1px solid var(--border);
       border-radius: 14px;
       padding: 22px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
     .card-sm {
-      background: rgba(255,255,255,0.03);
-      border: 1px solid var(--border);
+      background: var(--bg);
+      border: 1.5px solid var(--border);
       border-radius: 10px;
       padding: 14px 16px;
     }
     .card-pink {
-      background: linear-gradient(135deg, rgba(239,73,132,0.08) 0%, rgba(198,35,93,0.04) 100%);
-      border: 1px solid rgba(239,73,132,0.2);
+      background: linear-gradient(135deg, #fce7f0 0%, #fff0f7 100%);
+      border: 1px solid #f9c0d8;
       border-radius: 14px;
       padding: 22px;
-    }
-
-    /* ── Labels ── */
-    .section-label {
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      color: var(--text-dim);
     }
 
     /* ── Stat cards ── */
@@ -185,46 +167,79 @@
       border: 1px solid var(--border);
       border-radius: 14px;
       padding: 22px;
-      transition: border-color 0.2s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      transition: box-shadow 0.2s, border-color 0.2s;
     }
-    .stat-card:hover { border-color: var(--border-light); }
+    .stat-card:hover { border-color: var(--border-med); box-shadow: 0 4px 12px rgba(0,0,0,0.07); }
+
     .stat-num { font-size: 34px; font-weight: 800; line-height: 1; letter-spacing: -1px; }
-    .stat-label-sm { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); margin-bottom: 10px; }
-    .delta-up   { color: var(--green); font-size: 12px; }
-    .delta-down { color: var(--red);   font-size: 12px; }
+    .section-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+    }
+    .stat-label-sm {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      margin-bottom: 10px;
+    }
+
+    .delta-up   { color: var(--green); font-size: 12px; font-weight: 600; }
+    .delta-down { color: var(--red);   font-size: 12px; font-weight: 600; }
     .delta-flat { color: var(--text-dim); font-size: 12px; }
 
     /* ── Badges ── */
     .badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
-    .badge-live      { background: rgba(74,222,128,0.12); color: #4ade80; border: 1px solid rgba(74,222,128,0.25); }
-    .badge-draft     { background: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--border); }
-    .badge-ended     { background: rgba(167,139,250,0.1); color: #a78bfa; border: 1px solid rgba(167,139,250,0.2); }
-    .badge-sent      { background: rgba(74,222,128,0.12); color: #4ade80; border: 1px solid rgba(74,222,128,0.25); }
-    .badge-scheduled { background: rgba(96,165,250,0.1);  color: #60a5fa; border: 1px solid rgba(96,165,250,0.2); }
-    .badge-sending   { background: rgba(239,73,132,0.1);  color: var(--pink-light); border: 1px solid rgba(239,73,132,0.25); }
-    .badge-cancelled { background: rgba(255,255,255,0.04); color: var(--text-dim); border: 1px solid var(--border); }
+    .badge-live      { background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
+    .badge-draft     { background: #f3f4f6; color: #6b7280; border: 1px solid #e5e7eb; }
+    .badge-ended     { background: #ede9fe; color: #7c3aed; border: 1px solid #ddd6fe; }
+    .badge-sent      { background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
+    .badge-scheduled { background: #dbeafe; color: #1d4ed8; border: 1px solid #bfdbfe; }
+    .badge-sending   { background: var(--pink-pale); color: var(--pink-dark); border: 1px solid #f9c0d8; }
+    .badge-cancelled { background: #f9fafb; color: #9ca3af; border: 1px solid #e5e7eb; }
 
     /* ── Tag pill ── */
     .tag-pill {
       display: inline-flex; align-items: center; gap: 5px;
-      background: rgba(239,73,132,0.08);
-      color: var(--pink-light);
-      border: 1px solid rgba(239,73,132,0.2);
-      padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 500;
+      background: var(--pink-pale);
+      color: var(--pink-dark);
+      border: 1px solid #f9c0d8;
+      padding: 4px 12px; border-radius: 20px;
+      font-size: 12px; font-weight: 600;
     }
 
     /* ── Flash messages ── */
-    .flash-success { background: rgba(74,222,128,0.08); border: 1px solid rgba(74,222,128,0.2); color: #4ade80; border-radius: 10px; padding: 13px 16px; font-size: 14px; }
-    .flash-error   { background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.2); color: #fca5a5; border-radius: 10px; padding: 13px 16px; font-size: 14px; }
-    .flash-info    { background: rgba(96,165,250,0.08); border: 1px solid rgba(96,165,250,0.2); color: #93c5fd; border-radius: 10px; padding: 13px 16px; font-size: 14px; }
+    .flash-success { background: var(--green-bg); border: 1px solid var(--green-border); color: #15803d; border-radius: 10px; padding: 13px 16px; font-size: 14px; font-weight: 500; }
+    .flash-error   { background: var(--red-bg);   border: 1px solid var(--red-border);   color: var(--red);  border-radius: 10px; padding: 13px 16px; font-size: 14px; font-weight: 500; }
+    .flash-info    { background: var(--blue-bg);  border: 1px solid var(--blue-border);  color: var(--blue); border-radius: 10px; padding: 13px 16px; font-size: 14px; font-weight: 500; }
 
     /* ── Nav ── */
-    .nav-active   { background: rgba(239,73,132,0.12); color: var(--pink-light); border-left: 2px solid var(--pink); }
-    .nav-inactive { color: var(--text-muted); border-left: 2px solid transparent; }
-    .nav-inactive:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+    .nav-active {
+      background: var(--pink-pale);
+      color: var(--pink-dark);
+      border-left: 2.5px solid var(--pink);
+      font-weight: 700;
+    }
+    .nav-inactive {
+      color: var(--text-muted);
+      border-left: 2.5px solid transparent;
+    }
+    .nav-inactive:hover { background: var(--bg); color: var(--text); }
 
-    /* ── Pink divider ── */
+    /* ── Pink accent line ── */
     .pink-line { width: 32px; height: 3px; background: var(--pink); border-radius: 2px; }
+
+    /* ── Table ── */
+    .zarna-table { width: 100%; border-collapse: collapse; }
+    .zarna-table th { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); padding: 10px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+    .zarna-table td { padding: 13px 16px; font-size: 14px; border-bottom: 1px solid var(--border); color: var(--text); }
+    .zarna-table tr:last-child td { border-bottom: none; }
+    .zarna-table tr:hover td { background: var(--bg); }
   </style>
   {% block head %}{% endblock %}
 </head>
@@ -234,13 +249,13 @@
 
   <!-- ── Sidebar ── -->
   <aside class="hidden md:flex flex-col w-60 shrink-0"
-         style="background:#0a0c0e; border-right: 1px solid var(--border);">
+         style="background: var(--bg-sidebar); border-right: 1px solid var(--border);">
 
     <!-- Logo -->
     <div class="px-5 py-5" style="border-bottom: 1px solid var(--border);">
       <div class="flex items-center gap-3">
         <div class="w-9 h-9 rounded-xl flex items-center justify-center font-black text-base shrink-0"
-             style="background: linear-gradient(135deg, #ef4984, #c6235d); color: white; box-shadow: 0 4px 12px rgba(239,73,132,0.35);">
+             style="background: linear-gradient(135deg, #ef4984, #c6235d); color: white; box-shadow: 0 3px 10px rgba(239,73,132,0.3);">
           Z
         </div>
         <div>
@@ -281,8 +296,10 @@
           <div class="text-xs truncate" style="color: var(--text-dim);">{{ user.email }}</div>
         </div>
         <a href="{{ url_for('auth.logout') }}"
-           class="text-xs transition-colors hover:text-red-400"
-           style="color: var(--text-dim);" title="Log out">↩</a>
+           class="text-xs transition-colors"
+           style="color: var(--text-dim);"
+           onmouseover="this.style.color='#ef4984'" onmouseout="this.style.color='var(--text-dim)'"
+           title="Log out">↩</a>
       </div>
       {% endif %}
     </div>
@@ -293,7 +310,7 @@
 
     <!-- Mobile header -->
     <header class="flex md:hidden items-center gap-4 px-4 py-3 sticky top-0 z-50"
-            style="background: #0a0c0e; border-bottom: 1px solid var(--border);">
+            style="background: white; border-bottom: 1px solid var(--border);">
       <button @click="mobileOpen=!mobileOpen" style="color: var(--text-muted);">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
@@ -310,7 +327,7 @@
     <div x-show="mobileOpen" x-transition:enter="transition ease-out duration-150"
          x-transition:leave="transition ease-in duration-100"
          class="fixed inset-0 z-50 md:hidden" @click.self="mobileOpen=false">
-      <div class="absolute inset-y-0 left-0 w-64" style="background: #0a0c0e; border-right: 1px solid var(--border);">
+      <div class="absolute inset-y-0 left-0 w-64 bg-white" style="border-right: 1px solid var(--border);">
         <div class="px-5 py-5 flex items-center justify-between" style="border-bottom: 1px solid var(--border);">
           <div class="flex items-center gap-2.5">
             <div class="w-8 h-8 rounded-xl flex items-center justify-center font-black text-sm"
