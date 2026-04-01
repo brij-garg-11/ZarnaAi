@@ -155,7 +155,35 @@ def send_now(draft_id: int):
         flash("Please check the confirmation box before sending.", "error")
         return redirect(url_for("blast.blast_compose", draft_id=draft_id))
 
-    # Queue the blast in background
+    # Auto-save any in-form edits before sending so body/channel/audience are fresh
+    body = (request.form.get("body") or draft.get("body") or "").strip()
+    if not body:
+        flash("Message body is required before sending.", "error")
+        return redirect(url_for("blast.blast_compose", draft_id=draft_id))
+
+    name = (request.form.get("name") or draft.get("name") or "Untitled draft").strip()[:120]
+    channel = request.form.get("channel") or draft.get("channel") or "twilio"
+    if channel not in ("twilio", "slicktext"):
+        channel = "twilio"
+    audience_type = request.form.get("audience_type") or draft.get("audience_type") or "all"
+    if audience_type not in ("all", "tag", "location", "random", "show"):
+        audience_type = "all"
+    audience_filter = (request.form.get("audience_filter") or draft.get("audience_filter") or "").strip()[:200]
+    sample_pct = _safe_int(request.form.get("audience_sample_pct"), int(draft.get("audience_sample_pct") or 100), 1, 100)
+    user = current_user()
+
+    save_blast_draft(
+        name=name,
+        body=body,
+        channel=channel,
+        audience_type=audience_type,
+        audience_filter=audience_filter,
+        sample_pct=sample_pct,
+        created_by=user["email"],
+        draft_id=draft_id,
+    )
+
+    # Mark as sending and queue
     from ..db import get_conn
     conn = get_conn()
     try:

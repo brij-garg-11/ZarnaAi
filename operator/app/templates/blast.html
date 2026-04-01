@@ -269,6 +269,13 @@
         </div>
         <form method="post" action="{{ url_for('blast.send_now', draft_id=active_draft.id) }}"
               @submit.prevent="confirmSend($event)">
+          <!-- Mirror all draft fields so send_now always has the latest values -->
+          <input type="hidden" name="name" x-bind:value="document.querySelector('[name=name]') ? document.querySelector('[name=name]').value : '{{ active_draft.name|e }}'">
+          <input type="hidden" name="body" :value="body">
+          <input type="hidden" name="channel" :value="channel">
+          <input type="hidden" name="audience_type" :value="audienceType">
+          <input type="hidden" name="audience_filter" :value="resolvedFilter">
+          <input type="hidden" name="audience_sample_pct" :value="samplePct">
           <label class="flex items-start gap-3 mb-4 cursor-pointer">
             <input type="checkbox" name="confirm" value="1" class="mt-1 shrink-0"
                    style="accent-color:var(--pink);" x-model="confirmed">
