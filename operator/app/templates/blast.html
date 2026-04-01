@@ -140,8 +140,8 @@
         <!-- Audience -->
         <div class="mb-5">
           <label class="section-label mb-2 block">Audience</label>
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
-            {% for val, lbl in [("all","Everyone"),("tag","By Tag"),("location","By Location"),("random","Random %")] %}
+          <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-3">
+            {% for val, lbl in [("all","Everyone"),("show","By Show"),("tag","By Tag"),("location","By Location"),("random","Random %")] %}
             <label class="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg border cursor-pointer text-xs font-medium transition-colors"
                    :style="audienceType==='{{ val }}' ? 'border-color:var(--pink);background:#3a2a0e;color:var(--pink);' : 'border-color:var(--border);color:var(--text-muted);'">
               <input type="radio" name="audience_type" value="{{ val }}" x-model="audienceType" class="sr-only"
@@ -151,6 +151,26 @@
             {% endfor %}
           </div>
 
+          <div x-show="audienceType==='show'" x-transition>
+            {% if shows %}
+            <select name="audience_filter_show" class="zarna-input" x-model="audienceFilter"
+                    @change="updateCount()">
+              <option value="">— select a show —</option>
+              {% for show in shows %}
+              <option value="{{ show.id }}"
+                      {{ 'selected' if active_draft.audience_filter == show.id|string else '' }}>
+                {{ show.name }}
+                {% if show.status == 'live' %}🔴{% endif %}
+                ({{ show.signup_count }} signed up)
+              </option>
+              {% endfor %}
+            </select>
+            {% else %}
+            <p class="text-xs px-3 py-2 rounded-lg" style="background:var(--bg-subtle);color:var(--text-muted);">
+              No shows yet — create one in <a href="{{ url_for('shows.list_shows_view') }}" style="color:var(--pink);">Live Shows</a>.
+            </p>
+            {% endif %}
+          </div>
           <div x-show="audienceType==='tag'" x-transition>
             <select name="audience_filter_tag" class="zarna-input" x-model="audienceFilter"
                     @change="updateCount()">
@@ -310,6 +330,7 @@ function blastCompose() {
     get resolvedFilter() {
       if (this.audienceType === 'tag') return this.audienceFilter;
       if (this.audienceType === 'location') return this.audienceFilter;
+      if (this.audienceType === 'show') return this.audienceFilter;
       return '';
     },
 

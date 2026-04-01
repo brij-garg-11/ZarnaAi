@@ -120,6 +120,15 @@ def count_audience(audience_type: str, audience_filter: str, sample_pct: int = 1
                     "SELECT COUNT(DISTINCT phone_number) FROM contacts WHERE LOWER(fan_location) LIKE %s",
                     (f"%{audience_filter.lower()}%",),
                 )
+            elif audience_type == "show" and audience_filter:
+                try:
+                    show_id = int(audience_filter)
+                    cur.execute(
+                        "SELECT COUNT(DISTINCT phone_number) FROM live_show_signups WHERE show_id = %s",
+                        (show_id,),
+                    )
+                except (ValueError, TypeError):
+                    cur.execute("SELECT 0")
             else:
                 cur.execute("SELECT COUNT(DISTINCT phone_number) FROM contacts")
             total = cur.fetchone()[0]
@@ -148,6 +157,15 @@ def get_audience_phones(audience_type: str, audience_filter: str, sample_pct: in
                     "SELECT DISTINCT phone_number FROM contacts WHERE LOWER(fan_location) LIKE %s",
                     (f"%{audience_filter.lower()}%",),
                 )
+            elif audience_type == "show" and audience_filter:
+                try:
+                    show_id = int(audience_filter)
+                    cur.execute(
+                        "SELECT DISTINCT phone_number FROM live_show_signups WHERE show_id = %s",
+                        (show_id,),
+                    )
+                except (ValueError, TypeError):
+                    cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE FALSE")
             else:
                 cur.execute("SELECT DISTINCT phone_number FROM contacts")
 

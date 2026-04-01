@@ -19,6 +19,7 @@ from ..queries import (
     save_blast_draft,
     schedule_blast,
     mark_blast_cancelled,
+    list_shows,
 )
 from ..blast_sender import execute_blast_async
 
@@ -31,11 +32,13 @@ blast_bp = Blueprint("blast", __name__)
 def blast_index():
     drafts = list_blast_drafts()
     tags = get_all_tags()
+    shows = list_shows()
     return render_template(
         "blast.html",
         user=current_user(),
         drafts=drafts,
         tags=tags,
+        shows=shows,
         active_draft=None,
         audience_count=None,
     )
@@ -62,6 +65,7 @@ def blast_new():
 @login_required
 def blast_compose(draft_id: int):
     tags = get_all_tags()
+    shows = list_shows()
     drafts = list_blast_drafts()
 
     active_draft = get_blast_draft(draft_id)
@@ -80,6 +84,7 @@ def blast_compose(draft_id: int):
         user=current_user(),
         drafts=drafts,
         tags=tags,
+        shows=shows,
         active_draft=active_draft,
         audience_count=audience_count,
     )
@@ -90,6 +95,8 @@ def blast_compose(draft_id: int):
 def preview_count():
     """HTMX or AJAX endpoint — returns audience count for current filter."""
     audience_type = request.form.get("audience_type", "all")
+    if audience_type not in ("all", "tag", "location", "random", "show"):
+        audience_type = "all"
     audience_filter = request.form.get("audience_filter", "").strip()
     sample_pct = _safe_int(request.form.get("audience_sample_pct"), 100, 1, 100)
     count = count_audience(audience_type, audience_filter, sample_pct)
@@ -106,7 +113,7 @@ def save_draft():
     if channel not in ("twilio", "slicktext"):
         channel = "twilio"
     audience_type = request.form.get("audience_type", "all")
-    if audience_type not in ("all", "tag", "location", "random"):
+    if audience_type not in ("all", "tag", "location", "random", "show"):
         audience_type = "all"
     audience_filter = (request.form.get("audience_filter") or "").strip()[:200]
     sample_pct = _safe_int(request.form.get("audience_sample_pct"), 100, 1, 100)
