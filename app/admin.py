@@ -11,13 +11,15 @@ Tabs:
 """
 
 import csv
+import hashlib
 import io
 import os
+import secrets as _secrets
 from collections import Counter
 from datetime import datetime, timezone
 from urllib.parse import quote, urlencode
 
-from flask import Blueprint, Response, request
+from flask import Blueprint, Response, redirect as _redirect, request
 
 from app.admin_auth import (
     admin_password_configured,
@@ -66,6 +68,47 @@ def _no_password_configured():
 
 def _get_db():
     return get_db_connection()
+
+
+def _init_tracking_tables():
+    """Idempotent — create tracked_links / tracked_link_clicks tables if absent."""
+    conn = _get_db()
+    if not conn:
+        return
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS tracked_links (
+                        id            BIGSERIAL PRIMARY KEY,
+                        slug          TEXT UNIQUE NOT NULL,
+                        label         TEXT NOT NULL DEFAULT '',
+                        campaign_type TEXT NOT NULL DEFAULT 'other',
+                        destination   TEXT NOT NULL,
+                        created_by    TEXT DEFAULT '',
+                        created_at    TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS tracked_link_clicks (
+                        id         BIGSERIAL PRIMARY KEY,
+                        link_id    BIGINT NOT NULL REFERENCES tracked_links(id) ON DELETE CASCADE,
+                        clicked_at TIMESTAMPTZ DEFAULT NOW(),
+                        ip_hash    TEXT DEFAULT '',
+                        ua_short   TEXT DEFAULT ''
+                    )
+                """)
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_tlc_link_id ON tracked_link_clicks(link_id)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_tlc_clicked_at ON tracked_link_clicks(clicked_at)"
+                )
+    except Exception as e:
+        import logging
+        logging.warning("_init_tracking_tables error: %s", e)
+    finally:
+        conn.close()
 
 
 def _fetch_export(tag_filter="", location_filter=""):
@@ -193,6 +236,96 @@ def admin_export_thread():
         mimetype="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@admin_bp.route("/t/<slug>")
+def track_redirect(slug: str):
+    """
+    Public tracked-link redirect — no auth required.
+    Logs an anonymous click then 302s to the real destination.
+    """
+    _init_tracking_tables()
+    conn = _get_db()
+    if not conn:
+        return "Link not found", 404
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, destination FROM tracked_links WHERE slug=%s", (slug,)
+            )
+            row = cur.fetchone()
+        if not row:
+            return "Link not found", 404
+        link_id, destination = row[0], row[1]
+        ip_raw = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
+        ip_hash = hashlib.sha256(ip_raw.encode()).hexdigest()[:16] if ip_raw else ""
+        ua_short = (request.user_agent.string or "")[:120]
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO tracked_link_clicks (link_id, ip_hash, ua_short) VALUES (%s,%s,%s)",
+                    (link_id, ip_hash, ua_short),
+                )
+        return _redirect(destination, 302)
+    except Exception:
+        return _redirect(destination, 302) if "destination" in dir() else ("Error", 500)
+    finally:
+        conn.close()
+
+
+@admin_bp.route("/admin/conversions/new", methods=["POST"])
+def conversions_new():
+    if not admin_password_configured():
+        return _no_password_configured()
+    if not _check_auth():
+        return _require_auth()
+    _init_tracking_tables()
+
+    label = request.form.get("label", "").strip()[:200]
+    campaign_type = request.form.get("campaign_type", "other").strip()
+    if campaign_type not in ("ticket", "podcast", "promo", "other"):
+        campaign_type = "other"
+    destination = request.form.get("destination", "").strip()
+
+    if not label or not destination:
+        return _redirect("/admin?tab=conversions&cerr=missing")
+    if not destination.startswith(("http://", "https://")):
+        return _redirect("/admin?tab=conversions&cerr=badurl")
+
+    slug = _secrets.token_urlsafe(6)
+    conn = _get_db()
+    if not conn:
+        return "No DB", 503
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO tracked_links (slug, label, campaign_type, destination) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (slug, label, campaign_type, destination),
+                )
+    finally:
+        conn.close()
+    return _redirect(f"/admin?tab=conversions&cnew={slug}")
+
+
+@admin_bp.route("/admin/conversions/<int:link_id>/delete", methods=["POST"])
+def conversions_delete(link_id: int):
+    if not admin_password_configured():
+        return _no_password_configured()
+    if not _check_auth():
+        return _require_auth()
+
+    conn = _get_db()
+    if not conn:
+        return "No DB", 503
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM tracked_links WHERE id=%s", (link_id,))
+    finally:
+        conn.close()
+    return _redirect("/admin?tab=conversions")
 
 
 def _fetch_dashboard(
@@ -344,6 +477,46 @@ def _fetch_dashboard(
             )
             profiled_fans = cur.fetchone()[0]
 
+            # ── Conversions tab ───────────────────────────────────────────
+            tracked_links_rows = []
+            conv_clicks_by_day = []
+            conv_summary = {"total_links": 0, "total_clicks": 0, "clicks_week": 0, "top_label": "—"}
+            if tab == "conversions":
+                _init_tracking_tables()
+                try:
+                    cur.execute("""
+                        SELECT tl.id, tl.slug, tl.label, tl.campaign_type, tl.destination,
+                               tl.created_at,
+                               COUNT(tlc.id)                                                AS total_clicks,
+                               COUNT(tlc.id) FILTER (WHERE tlc.clicked_at >= NOW()-INTERVAL '7 days') AS clicks_7d
+                        FROM   tracked_links tl
+                        LEFT JOIN tracked_link_clicks tlc ON tlc.link_id = tl.id
+                        GROUP  BY tl.id
+                        ORDER  BY total_clicks DESC, tl.created_at DESC
+                    """)
+                    tracked_links_rows = [dict(r) for r in cur.fetchall()]
+                except Exception:
+                    tracked_links_rows = []
+
+                conv_summary["total_links"] = len(tracked_links_rows)
+                conv_summary["total_clicks"] = sum(r["total_clicks"] for r in tracked_links_rows)
+                conv_summary["clicks_week"] = sum(r["clicks_7d"] for r in tracked_links_rows)
+                if tracked_links_rows:
+                    top = tracked_links_rows[0]
+                    conv_summary["top_label"] = (top["label"] or top["slug"])[:40]
+
+                try:
+                    cur.execute("""
+                        SELECT DATE(clicked_at AT TIME ZONE 'America/New_York') AS day,
+                               COUNT(*) AS cnt
+                        FROM   tracked_link_clicks
+                        WHERE  clicked_at >= NOW() - INTERVAL '30 days'
+                        GROUP  BY day ORDER BY day
+                    """)
+                    conv_clicks_by_day = [(str(r["day"]), r["cnt"]) for r in cur.fetchall()]
+                except Exception:
+                    conv_clicks_by_day = []
+
             # ── Conversations tab ─────────────────────────────────────────
             if tab == "convos":
                 inbox_off = max(0, inbox_page) * INBOX_PAGE_SIZE
@@ -419,6 +592,10 @@ def _fetch_dashboard(
             "thread_total": thread_total,
             "chart_days": chart_days,
             "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            # conversions
+            "tracked_links_rows": tracked_links_rows,
+            "conv_clicks_by_day": conv_clicks_by_day,
+            "conv_summary": conv_summary,
         }
     finally:
         conn.close()
@@ -661,6 +838,72 @@ def admin():
     range_pills = _range_links(chart_days)
     health_note = f'<span class="health-pill">{mh} fan msg in last hour</span>'
 
+    # ── Conversions tab HTML ──────────────────────────────────────────────────
+    cnew_slug = request.args.get("cnew", "")
+    cerr      = request.args.get("cerr", "")
+    base_url  = request.host_url.rstrip("/")
+    # Override to https when behind Railway proxy
+    scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+    host   = request.headers.get("X-Forwarded-Host", request.host)
+    base_url = f"{scheme}://{host}"
+
+    conv_notice_html = ""
+    if cnew_slug:
+        short_url = f"{base_url}/t/{cnew_slug}"
+        conv_notice_html = f"""
+        <div style="background:#064e3b;border:1px solid #065f46;border-radius:8px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span style="color:#6ee7b7;font-size:14px;">✅ Link created!</span>
+          <code style="background:#1f2937;color:#a5b4fc;padding:5px 12px;border-radius:6px;font-size:13px;flex:1;word-break:break-all;">{_esc(short_url)}</code>
+          <button onclick="navigator.clipboard.writeText('{_esc(short_url)}');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)"
+                  style="background:#7c3aed;color:white;border:none;border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer;">Copy</button>
+        </div>"""
+    elif cerr == "missing":
+        conv_notice_html = '<div style="background:#450a0a;border:1px solid #dc2626;border-radius:8px;padding:12px 18px;margin-bottom:16px;color:#fca5a5;font-size:13px;">⚠️ Label and destination URL are both required.</div>'
+    elif cerr == "badurl":
+        conv_notice_html = '<div style="background:#450a0a;border:1px solid #dc2626;border-radius:8px;padding:12px 18px;margin-bottom:16px;color:#fca5a5;font-size:13px;">⚠️ Destination must start with http:// or https://</div>'
+
+    type_colors = {"ticket": ("#7c3aed","#c4b5fd"), "podcast": ("#0891b2","#67e8f9"), "promo": ("#d97706","#fcd34d"), "other": ("#374151","#9ca3af")}
+
+    conv_rows_html = ""
+    for lnk in stats["tracked_links_rows"]:
+        short = f"{base_url}/t/{lnk['slug']}"
+        short_e = _esc(short)
+        label_e = _esc(lnk["label"] or lnk["slug"])
+        dest_e  = _esc(lnk["destination"][:60] + ("…" if len(lnk["destination"]) > 60 else ""))
+        ct = lnk["campaign_type"] or "other"
+        bg, fg = type_colors.get(ct, type_colors["other"])
+        created = lnk["created_at"].strftime("%b %d %Y") if lnk.get("created_at") else "—"
+        tc = lnk["total_clicks"]
+        wc = lnk["clicks_7d"]
+        conv_rows_html += f"""
+        <tr class="conv-row">
+          <td style="padding:12px 14px;color:#e2e8f0;font-weight:500;">{label_e}</td>
+          <td style="padding:12px 14px;"><span style="background:{bg};color:{fg};padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600;">{ct}</span></td>
+          <td style="padding:12px 14px;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <code style="color:#a5b4fc;font-size:12px;">{_esc('/t/' + lnk['slug'])}</code>
+              <button onclick="navigator.clipboard.writeText('{short_e}');this.textContent='✓';setTimeout(()=>this.textContent='Copy',1500)"
+                      style="background:#1f2937;color:#9ca3af;border:1px solid #374151;border-radius:5px;padding:3px 9px;font-size:11px;cursor:pointer;">Copy</button>
+            </div>
+            <div style="color:#64748b;font-size:11px;margin-top:2px;">{dest_e}</div>
+          </td>
+          <td style="padding:12px 14px;text-align:center;font-size:20px;font-weight:800;color:#a78bfa;">{tc:,}</td>
+          <td style="padding:12px 14px;text-align:center;font-size:16px;font-weight:700;color:#4ade80;">{wc:,}</td>
+          <td style="padding:12px 14px;color:#64748b;font-size:12px;">{created}</td>
+          <td style="padding:12px 14px;">
+            <form method="post" action="/admin/conversions/{lnk['id']}/delete"
+                  onsubmit="return confirm('Delete this link and all its click history?')">
+              <button type="submit" style="background:transparent;border:1px solid #6b7280;color:#9ca3af;border-radius:5px;padding:3px 9px;font-size:11px;cursor:pointer;">Delete</button>
+            </form>
+          </td>
+        </tr>"""
+
+    if not conv_rows_html:
+        conv_rows_html = '<tr><td colspan="7" style="padding:30px;text-align:center;color:#6b7280;font-style:italic;">No tracked links yet — create your first one above.</td></tr>'
+
+    conv_clicks_labels = [d for d, _ in stats["conv_clicks_by_day"]]
+    conv_clicks_data   = [c for _, c in stats["conv_clicks_by_day"]]
+
     from app.ops_metrics import snapshot as ops_snapshot
 
     ops = ops_snapshot()
@@ -815,6 +1058,19 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
 .tab-content {{ display: none; }}
 .tab-content.active {{ display: block; }}
 
+/* Conversions tab */
+.conv-table {{ width:100%;border-collapse:collapse; }}
+.conv-table th {{ padding:10px 14px;text-align:left;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid #1f2937; }}
+.conv-table th.center {{ text-align:center; }}
+.conv-row {{ border-bottom:1px solid #1f2937;transition:background .1s; }}
+.conv-row:hover {{ background:rgba(124,58,237,.07); }}
+.conv-row:last-child {{ border-bottom:none; }}
+.conv-form-row {{ display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end; }}
+.conv-form-row .search-input {{ flex:1;min-width:140px; }}
+.conv-chart-toggle {{ background:#1f2937;color:#94a3b8;border:1px solid #374151;border-radius:8px;padding:8px 16px;font-size:13px;cursor:pointer;transition:all .15s; }}
+.conv-chart-toggle:hover {{ color:#e2e8f0;border-color:#7c3aed; }}
+.conv-chart-toggle.active {{ background:#312e81;color:#c4b5fd;border-color:#7c3aed; }}
+
 @media (max-width: 768px) {{
   .header {{ padding: 16px; }}
   .header-logo {{ font-size: 18px; }}
@@ -852,6 +1108,7 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
   <a href="/admin?tab=overview&amp;range={chart_days}" class="nav-tab {'active' if tab == 'overview' else ''}">📊 Overview</a>
   <a href="/admin?tab=audience" class="nav-tab {'active' if tab == 'audience' else ''}">👥 Audience</a>
   <a href="/admin?tab=convos" class="nav-tab {'active' if tab == 'convos' else ''}">💬 Conversations</a>
+  <a href="/admin?tab=conversions" class="nav-tab {'active' if tab == 'conversions' else ''}">🔗 Conversions</a>
   <a href="/admin/live-shows" class="nav-tab">🎤 Live shows</a>
 </nav>
 
@@ -965,6 +1222,93 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
     {convos_inner_html}
   </div>
 
+  <div class="tab-content {'active' if tab == 'conversions' else ''}" id="tab-conversions">
+
+    {conv_notice_html}
+
+    <!-- Summary stats -->
+    <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:24px;">
+      <div class="stat-card">
+        <div class="stat-label">Total Links</div>
+        <div class="stat-value">{stats["conv_summary"]["total_links"]:,}</div>
+        <div class="stat-trend" style="color:#64748b;font-size:12px">tracked destinations</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Clicks</div>
+        <div class="stat-value purple">{stats["conv_summary"]["total_clicks"]:,}</div>
+        <div class="stat-trend" style="color:#64748b;font-size:12px">all time</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">This Week</div>
+        <div class="stat-value teal">{stats["conv_summary"]["clicks_week"]:,}</div>
+        <div class="stat-trend" style="color:#64748b;font-size:12px">last 7 days</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Top Performer</div>
+        <div class="stat-value green" style="font-size:18px;padding-top:4px;">{_esc(stats["conv_summary"]["top_label"])}</div>
+        <div class="stat-trend" style="color:#64748b;font-size:12px">most clicks</div>
+      </div>
+    </div>
+
+    <!-- New link form -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-title">Create a new tracked link</div>
+      <p style="color:#94a3b8;font-size:13px;margin-bottom:14px;">
+        Paste your real URL — we generate a short <code style="color:#a5b4fc">/t/…</code> link. Use it in bot messages, blasts, or anywhere else. Every click is logged.
+      </p>
+      <form method="post" action="/admin/conversions/new">
+        <div class="conv-form-row">
+          <input type="text" name="label" class="search-input" placeholder="Label — e.g. Phoenix ticket link, April podcast ep…"
+                 required maxlength="200" style="flex:2;min-width:200px;">
+          <select name="campaign_type" class="search-input" style="flex:0 0 140px;">
+            <option value="ticket">🎟 Ticket</option>
+            <option value="podcast">🎙 Podcast</option>
+            <option value="promo">🎁 Promo</option>
+            <option value="other">🔗 Other</option>
+          </select>
+          <input type="url" name="destination" class="search-input" placeholder="https://your-destination.com/…"
+                 required style="flex:3;min-width:240px;">
+          <button type="submit" class="search-btn" style="flex:0 0 auto;">Generate link →</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Chart toggle -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+      <div class="card-title" style="margin:0;">All Tracked Links</div>
+      <button class="conv-chart-toggle" id="convChartToggle" onclick="toggleConvChart()">📈 Show Charts</button>
+    </div>
+
+    <!-- Charts (hidden by default) -->
+    <div id="convChartSection" style="display:none;margin-bottom:20px;">
+      <div class="card">
+        <div class="card-title">Total Clicks Per Day — Last 30 Days (all links)</div>
+        <canvas id="convDayChart" height="80"></canvas>
+      </div>
+    </div>
+
+    <!-- Links table -->
+    <div class="card" style="padding:0;overflow:hidden;">
+      <table class="conv-table">
+        <thead>
+          <tr>
+            <th>Label</th>
+            <th>Type</th>
+            <th>Tracked URL</th>
+            <th class="center">All-time clicks</th>
+            <th class="center">Last 7 days</th>
+            <th>Created</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {conv_rows_html}
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
 </div>
 
 <script>
@@ -1005,6 +1349,43 @@ function toggleAutoRefresh() {{
     btn.textContent = '⟳ Auto-refresh: On (30s)';
     btn.classList.add('active');
     _refreshTimer = setInterval(() => location.reload(), 30000);
+  }}
+}}
+
+// ── Conversions chart ───────────────────────────────────────────────────────
+let _convChart = null;
+let _convChartVisible = false;
+
+function toggleConvChart() {{
+  const sec = document.getElementById('convChartSection');
+  const btn = document.getElementById('convChartToggle');
+  _convChartVisible = !_convChartVisible;
+  sec.style.display = _convChartVisible ? 'block' : 'none';
+  btn.textContent = _convChartVisible ? '📈 Hide Charts' : '📈 Show Charts';
+  btn.classList.toggle('active', _convChartVisible);
+  if (_convChartVisible && !_convChart) {{
+    const el = document.getElementById('convDayChart');
+    if (el) {{
+      _convChart = new Chart(el, {{
+        type: 'bar',
+        data: {{
+          labels: {conv_clicks_labels},
+          datasets: [{{
+            data: {conv_clicks_data},
+            backgroundColor: '#7c3aed',
+            borderRadius: 4,
+            label: 'Clicks'
+          }}]
+        }},
+        options: {{
+          plugins: {{ legend: {{ display: false }} }},
+          scales: {{
+            x: {{ ticks: {{ color:'#6b7280', font:{{ size:10 }} }}, grid:{{ color:'#1f2937' }} }},
+            y: {{ ticks: {{ color:'#6b7280', font:{{ size:10 }}, stepSize:1 }}, grid:{{ color:'#1f2937' }} }}
+          }}
+        }}
+      }});
+    }}
   }}
 }}
 </script>
