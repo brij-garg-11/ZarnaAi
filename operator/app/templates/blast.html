@@ -94,7 +94,14 @@
         </div>
         {% endif %}
       </div>
-      <a href="{{ url_for('blast.blast_index') }}" class="btn-ghost btn-sm">← Back to drafts</a>
+      <div class="flex items-center gap-3 mt-2 flex-wrap">
+        <a href="{{ url_for('blast.blast_index') }}" class="btn-ghost btn-sm">← Back to drafts</a>
+        <form method="post" action="{{ url_for('blast.clone_draft', draft_id=active_draft.id) }}">
+          <button type="submit" class="btn-pink btn-sm">
+            ↩ Clone &amp; Resend
+          </button>
+        </form>
+      </div>
     </div>
 
     {% else %}

@@ -445,6 +445,30 @@ def send_test(draft_id: int):
     return redirect(url_for("blast.blast_compose", draft_id=draft_id))
 
 
+@blast_bp.route("/operator/blast/<int:draft_id>/clone", methods=["POST"])
+@login_required
+def clone_draft(draft_id: int):
+    """Clone a sent/cancelled blast as a new draft so it can be resent."""
+    original = get_blast_draft(draft_id)
+    if not original:
+        flash("Draft not found.", "error")
+        return redirect(url_for("blast.blast_index"))
+
+    user = current_user()
+    new_id = save_blast_draft(
+        name=f"{(original['name'] or 'Untitled')} (resend)",
+        body=original["body"] or "",
+        channel=original["channel"] or "twilio",
+        audience_type=original["audience_type"] or "all",
+        audience_filter=original["audience_filter"] or "",
+        sample_pct=int(original["audience_sample_pct"] or 100),
+        media_url=original.get("media_url") or "",
+        created_by=user["email"] if user else "",
+    )
+    flash("Cloned as a new draft — ready to send.", "success")
+    return redirect(url_for("blast.blast_compose", draft_id=new_id))
+
+
 @blast_bp.route("/operator/blast/<int:draft_id>/cancel", methods=["POST"])
 @login_required
 def cancel_blast(draft_id: int):
