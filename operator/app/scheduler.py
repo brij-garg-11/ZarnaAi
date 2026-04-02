@@ -27,11 +27,14 @@ def init_scheduler(app):
 
 def _process_scheduled_blasts():
     try:
-        from .queries import get_pending_scheduled_blasts
+        from .queries import claim_pending_scheduled_blasts
         from .blast_sender import execute_blast
-        pending = get_pending_scheduled_blasts()
-        for draft in pending:
-            logger.info("Processing scheduled blast id=%s name=%s", draft["id"], draft["name"])
+        # claim_pending_scheduled_blasts atomically marks each blast 'sending'
+        # using FOR UPDATE SKIP LOCKED, so concurrent workers never double-fire
+        claimed = claim_pending_scheduled_blasts()
+        for draft in claimed:
+            logger.info("Scheduler claimed blast id=%s name=%s — starting send",
+                        draft["id"], draft["name"])
             execute_blast(draft["id"])
     except Exception as e:
         logger.exception("Scheduler error: %s", e)

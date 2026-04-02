@@ -302,18 +302,49 @@ def mark_blast_cancelled(draft_id: int) -> None:
         conn.close()
 
 
-def get_pending_scheduled_blasts():
+def claim_pending_scheduled_blasts() -> list[dict]:
+    """
+    Atomically claim scheduled blasts by marking them 'sending' in one
+    UPDATE … RETURNING statement with FOR UPDATE SKIP LOCKED.
+    This prevents two gunicorn workers from double-firing the same blast.
+    Only blasts with a non-empty body are claimed; empty-body blasts are
+    cancelled automatically so they stop looping forever.
+    """
     conn = get_conn()
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute("""
-                SELECT * FROM blast_drafts
-                WHERE status='scheduled' AND scheduled_at <= NOW()
-                ORDER BY scheduled_at ASC
-            """)
-            return [dict(r) for r in cur.fetchall()]
+        with conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                # Cancel ghost blasts with no body so they never fire again
+                cur.execute("""
+                    UPDATE blast_drafts SET status='cancelled', updated_at=NOW()
+                    WHERE status='scheduled'
+                      AND (body IS NULL OR body = '')
+                      AND scheduled_at <= NOW()
+                """)
+                if cur.rowcount:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Cancelled %d scheduled blast(s) with empty body", cur.rowcount)
+
+                # Atomically claim ready blasts for this worker only
+                cur.execute("""
+                    UPDATE blast_drafts SET status='sending', updated_at=NOW()
+                    WHERE id IN (
+                        SELECT id FROM blast_drafts
+                        WHERE status='scheduled' AND scheduled_at <= NOW()
+                        ORDER BY scheduled_at
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    RETURNING *
+                """)
+                return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
+
+
+def get_pending_scheduled_blasts():
+    """Legacy alias — use claim_pending_scheduled_blasts for new code."""
+    return claim_pending_scheduled_blasts()
 
 
 # ── Live shows (read-only, PII-free) ───────────────────────────────────────
