@@ -88,6 +88,29 @@ def blast_new():
     return redirect(url_for("blast.blast_compose", draft_id=new_id))
 
 
+@blast_bp.route("/operator/blast/new-for-show/<int:show_id>")
+@login_required
+def blast_new_for_show(show_id: int):
+    """
+    Create a pre-filled draft targeted at a specific live show audience,
+    then redirect straight into the compose form — no manual setup needed.
+    """
+    from ..queries import get_show
+    user = current_user()
+    show = get_show(show_id)
+    show_name = show["name"] if show else f"Show #{show_id}"
+    new_id = save_blast_draft(
+        name=f"{show_name} — show message",
+        body="",
+        channel="slicktext",
+        audience_type="show",
+        audience_filter=str(show_id),
+        sample_pct=100,
+        created_by=user["email"] if user else "",
+    )
+    return redirect(url_for("blast.blast_compose", draft_id=new_id))
+
+
 @blast_bp.route("/operator/blast/<int:draft_id>")
 @login_required
 def blast_compose(draft_id: int):
