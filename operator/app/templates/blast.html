@@ -260,9 +260,10 @@
       <div class="border-t pt-5 mb-5" style="border-color:var(--border);">
         <div class="section-label mb-3">Send Test to a Phone</div>
         <form method="post" action="{{ url_for('blast.send_test', draft_id=active_draft.id) }}"
-              class="flex items-end gap-3 flex-wrap">
-          <input type="hidden" name="body" :value="body">
-          <input type="hidden" name="channel" :value="channel">
+              class="flex items-end gap-3 flex-wrap"
+              @submit="document.getElementById('st_body').value = body; document.getElementById('st_channel').value = channel;">
+          <input type="hidden" id="st_body" name="body" value="{{ active_draft.body|e }}">
+          <input type="hidden" id="st_channel" name="channel" value="{{ active_draft.channel }}">
           <div class="flex-1">
             <input type="tel" name="test_phone" class="zarna-input"
                    placeholder="+1 212 555 0100 — sends [TEST] prefix, just to this number">
@@ -288,15 +289,15 @@
             No phone numbers are shown — the system handles routing privately.
           </p>
         </div>
-        <form method="post" action="{{ url_for('blast.send_now', draft_id=active_draft.id) }}"
+        <form id="sendNowForm" method="post" action="{{ url_for('blast.send_now', draft_id=active_draft.id) }}"
               @submit.prevent="confirmSend($event)">
-          <!-- Mirror all draft fields so send_now always has the latest values -->
-          <input type="hidden" name="name" x-bind:value="document.querySelector('[name=name]') ? document.querySelector('[name=name]').value : '{{ active_draft.name|e }}'">
-          <input type="hidden" name="body" :value="body">
-          <input type="hidden" name="channel" :value="channel">
-          <input type="hidden" name="audience_type" :value="audienceType">
-          <input type="hidden" name="audience_filter" :value="resolvedFilter">
-          <input type="hidden" name="audience_sample_pct" :value="samplePct">
+          <!-- Populated explicitly by confirmSend() before submit -->
+          <input type="hidden" id="sn_name" name="name" value="{{ active_draft.name|e }}">
+          <input type="hidden" id="sn_body" name="body" value="{{ active_draft.body|e }}">
+          <input type="hidden" id="sn_channel" name="channel" value="{{ active_draft.channel }}">
+          <input type="hidden" id="sn_audience_type" name="audience_type" value="{{ active_draft.audience_type }}">
+          <input type="hidden" id="sn_audience_filter" name="audience_filter" value="{{ active_draft.audience_filter or '' }}">
+          <input type="hidden" id="sn_audience_sample_pct" name="audience_sample_pct" value="{{ active_draft.audience_sample_pct or 100 }}">
           <label class="flex items-start gap-3 mb-4 cursor-pointer">
             <input type="checkbox" name="confirm" value="1" class="mt-1 shrink-0"
                    style="accent-color:var(--pink);" x-model="confirmed">
@@ -380,13 +381,22 @@ function blastCompose() {
     confirmSend(e) {
       if (!this.confirmed || !this.body.trim()) {
         e.preventDefault();
+        alert('Add a message and check the confirmation box first.');
         return;
       }
       if (!confirm(`Send to ${this.audienceCount.toLocaleString()} fans via ${this.channel === 'twilio' ? 'Twilio SMS' : 'SlickText'}?`)) {
         e.preventDefault();
-      } else {
-        e.target.submit();
+        return;
       }
+      // Explicitly populate all hidden fields with live values before submitting
+      const nameEl = document.querySelector('#draftForm [name=name]');
+      document.getElementById('sn_name').value = nameEl ? nameEl.value : '{{ active_draft.name|e }}';
+      document.getElementById('sn_body').value = this.body;
+      document.getElementById('sn_channel').value = this.channel;
+      document.getElementById('sn_audience_type').value = this.audienceType;
+      document.getElementById('sn_audience_filter').value = this.resolvedFilter;
+      document.getElementById('sn_audience_sample_pct').value = this.samplePct;
+      e.target.submit();
     }
   }
 }
