@@ -120,7 +120,7 @@ def new_show():
     error = None
     if request.method == "POST":
         name = (request.form.get("name") or "").strip()
-        keyword = (request.form.get("keyword") or "").strip().upper()
+        keyword = "".join((request.form.get("keyword") or "").split()).upper()  # strip all spaces
         mode = request.form.get("signup_mode", "keyword")
         use_kw = (mode == "keyword")
         etz = request.form.get("event_timezone") or "America/New_York"
