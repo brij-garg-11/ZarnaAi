@@ -113,29 +113,37 @@ def _send_slicktext(phone: str, body: str) -> bool:
         priv_key    = os.getenv("SLICKTEXT_PRIVATE_KEY", "")
         textword_id = os.getenv("SLICKTEXT_TEXTWORD_ID", "")
 
+        logger.info("  [ST-v1] pub_key set=%s  priv_key set=%s  textword_id=%r",
+                    bool(pub_key), bool(priv_key), textword_id)
+
         if not pub_key or not priv_key:
-            logger.error("SlickText credentials missing: need SLICKTEXT_PUBLIC_KEY + SLICKTEXT_PRIVATE_KEY")
+            logger.error("  [ST-v1] MISSING credentials: SLICKTEXT_PUBLIC_KEY / SLICKTEXT_PRIVATE_KEY not set")
             return False
         if not textword_id:
-            logger.error("SLICKTEXT_TEXTWORD_ID not set — required for v1 outbound sends")
+            logger.error("  [ST-v1] MISSING SLICKTEXT_TEXTWORD_ID — required for v1 outbound sends")
             return False
+
+        payload = {
+            "action":   "SEND",
+            "textword": textword_id,
+            "number":   phone,
+            "body":     body,
+        }
+        logger.info("  [ST-v1] POST /v1/messages/  payload=%r", payload)
 
         resp = requests.post(
             "https://api.slicktext.com/v1/messages/",
-            data={
-                "action":   "SEND",
-                "textword": textword_id,
-                "number":   phone,
-                "body":     body,
-            },
+            data=payload,
             auth=(pub_key, priv_key),
             timeout=10,
         )
+        logger.info("  [ST-v1] response: status=%s  body=%r", resp.status_code, resp.text[:300])
+
         if resp.status_code == 200:
-            logger.info("SlickText send OK to ...%s", phone[-4:])
+            logger.info("  [ST-v1] SENT OK to ...%s", phone[-4:])
             return True
-        logger.error("SlickText send failed: %s — %s", resp.status_code, resp.text[:200])
+        logger.error("  [ST-v1] FAILED: %s — %s", resp.status_code, resp.text[:300])
         return False
     except Exception as e:
-        logger.warning("SlickText send error: %s", e)
+        logger.exception("  [ST-v1] EXCEPTION: %s", e)
         return False
