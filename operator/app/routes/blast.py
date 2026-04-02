@@ -159,11 +159,6 @@ def save_draft():
         return redirect(url_for("blast.blast_compose", draft_id=new_id))
 
     if intent == "send":
-        confirm = request.form.get("confirm") == "1"
-        if not confirm:
-            flash("Check the confirmation box before sending.", "error")
-            return redirect(url_for("blast.blast_compose", draft_id=new_id))
-
         existing = get_blast_draft(new_id)
         if existing and existing["status"] in ("sent", "cancelled"):
             flash("This blast has already been sent or cancelled.", "error")

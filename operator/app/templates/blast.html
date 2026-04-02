@@ -282,17 +282,11 @@
               No phone numbers are shown — the system handles routing privately.
             </p>
           </div>
-          <label class="flex items-start gap-3 mb-4 cursor-pointer">
-            <input type="checkbox" name="confirm" value="1" id="confirmCheck"
-                   class="mt-1 shrink-0" style="accent-color:var(--pink);">
-            <span class="text-sm" style="color:var(--text-muted);">
-              I confirm I want to send this message to
-              <strong style="color:var(--pink);" x-text="audienceCount.toLocaleString()"></strong> fans.
-            </span>
-          </label>
-          <button type="submit" name="intent" value="send" class="btn-pink"
-                  onclick="return document.getElementById('confirmCheck').checked || (alert('Check the confirmation box first.'), false)">
-            📢 Send Now
+          <p class="text-xs mb-4" style="color:var(--text-dim);">
+            Clicking Send Now will immediately queue the blast. Make sure your message is typed above and your audience is selected.
+          </p>
+          <button type="submit" name="intent" value="send" class="btn-pink">
+            📢 Send Now to <span x-text="audienceCount.toLocaleString()"></span> fans
           </button>
         </div>
         {% endif %}
