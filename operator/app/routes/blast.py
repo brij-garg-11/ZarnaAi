@@ -149,17 +149,16 @@ def serve_db_image(image_id: int, filename: str):
             )
             row = cur.fetchone()
         if not row:
+            logger.warning("serve_db_image: id=%s not found in DB", image_id)
             return "Image not found", 404
-        data, mime_type = bytes(row[0]), row[1]
-        return Response(
-            data,
-            status=200,
-            mimetype=mime_type,
-            headers={
-                "Cache-Control": "public, max-age=86400",
-                "Content-Length": str(len(data)),
-            },
-        )
+        # memoryview → bytes: use tobytes() which is correct for binary data
+        raw = row[0]
+        data = raw.tobytes() if hasattr(raw, "tobytes") else bytes(raw)
+        mime_type = row[1] or "image/jpeg"
+        logger.info("serve_db_image: id=%s size=%d mime=%s", image_id, len(data), mime_type)
+        resp = Response(data, status=200, mimetype=mime_type)
+        resp.headers["Cache-Control"] = "public, max-age=86400"
+        return resp
     except Exception as e:
         logger.exception("serve_db_image error: %s", e)
         return "Error serving image", 500
@@ -210,6 +209,10 @@ def upload_image():
     # ── Postgres (default, zero-config, survives redeploys) ─────────────────
     try:
         data = f.read()
+        logger.info("upload_image: read %d bytes from upload stream (mime=%s)", len(data), mime_type)
+        if not data:
+            return jsonify({"error": "Uploaded file is empty — please try again."}), 400
+
         from ..db import get_conn
         conn = get_conn()
         try:
@@ -221,13 +224,13 @@ def upload_image():
                         (filename, mime_type, psycopg2.Binary(data)),
                     )
                     image_id = cur.fetchone()[0]
+            logger.info("Stored blast image in DB: id=%s size=%d bytes", image_id, len(data))
         finally:
             conn.close()
 
         base = request.host_url.rstrip("/")
         url  = f"{base}/operator/blast/img/{image_id}/{filename}"
-        logger.info("Stored blast image in DB: id=%s size=%d", image_id, len(data))
-        return jsonify({"url": url})
+        return jsonify({"url": url, "size": len(data)})
     except Exception as e:
         logger.exception("DB image store failed: %s", e)
         return jsonify({"error": f"Upload failed: {e}"}), 500
