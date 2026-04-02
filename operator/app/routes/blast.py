@@ -515,6 +515,70 @@ def cancel_blast(draft_id: int):
     return redirect(url_for("blast.blast_index"))
 
 
+@blast_bp.route("/operator/blast/debug-state")
+@login_required
+def debug_state():
+    """
+    Hidden diagnostics page — shows scheduled blasts and stored images.
+    Access at /operator/blast/debug-state to diagnose MMS/scheduling issues.
+    """
+    from ..db import get_conn
+    conn = get_conn()
+    rows_blasts = []
+    rows_images = []
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, name, status, channel, audience_type, audience_filter,
+                       scheduled_at, sent_at, sent_count, failed_count,
+                       LEFT(body, 80) AS body_preview,
+                       LEFT(COALESCE(media_url,''), 120) AS media_url_preview,
+                       updated_at
+                FROM blast_drafts
+                ORDER BY id DESC
+                LIMIT 30
+            """)
+            rows_blasts = cur.fetchall()
+            cur.execute("""
+                SELECT id, filename, mime_type, created_at,
+                       CASE WHEN data_b64 IS NULL THEN 'NULL'
+                            WHEN LENGTH(data_b64) = 0 THEN 'EMPTY_STRING'
+                            ELSE LENGTH(data_b64)::TEXT || ' chars (≈' ||
+                                 (LENGTH(data_b64)*3/4/1024)::TEXT || ' KB)'
+                       END AS data_b64_status
+                FROM operator_blast_images
+                ORDER BY id DESC
+                LIMIT 20
+            """)
+            rows_images = cur.fetchall()
+    except Exception as e:
+        logger.exception("debug_state query failed: %s", e)
+    finally:
+        conn.close()
+
+    lines = ["<pre style='font-family:monospace;font-size:13px;padding:20px'>"]
+    lines.append("=== BLAST DRAFTS (last 30) ===\n")
+    for r in rows_blasts:
+        lines.append(
+            f"id={r['id']}  status={r['status']}  channel={r['channel']}\n"
+            f"  scheduled_at={r['scheduled_at']}  sent_at={r['sent_at']}\n"
+            f"  body: {r['body_preview']!r}\n"
+            f"  media_url: {r['media_url_preview']!r}\n"
+            f"  audience: {r['audience_type']}/{r['audience_filter']}\n"
+            f"  sent={r['sent_count']}  failed={r['failed_count']}  updated={r['updated_at']}\n\n"
+        )
+    lines.append("=== STORED IMAGES (last 20) ===\n")
+    for r in rows_images:
+        lines.append(
+            f"id={r['id']}  file={r['filename']}  mime={r['mime_type']}\n"
+            f"  data_b64: {r['data_b64_status']}\n"
+            f"  created: {r['created_at']}\n\n"
+        )
+    lines.append("</pre>")
+    from flask import Response as FlaskResponse
+    return FlaskResponse("".join(lines), mimetype="text/html")
+
+
 def _safe_int(val, default: int, mn: int = 1, mx: int = 100) -> int:
     try:
         v = int(val)
