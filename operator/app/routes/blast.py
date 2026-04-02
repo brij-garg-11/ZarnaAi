@@ -6,9 +6,11 @@ Scheduled send support via the background scheduler.
 """
 
 import logging
+import os
+import uuid
 from datetime import datetime, timezone
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
 from ..routes.auth import login_required, current_user
 from ..queries import (
@@ -42,6 +44,7 @@ def blast_index():
         shows=shows,
         active_draft=None,
         audience_count=None,
+        image_upload_enabled=_image_upload_configured(),
     )
 
 
@@ -109,7 +112,61 @@ def blast_compose(draft_id: int):
         shows=shows,
         active_draft=active_draft,
         audience_count=audience_count,
+        image_upload_enabled=_image_upload_configured(),
     )
+
+
+def _image_upload_configured() -> bool:
+    """True when all S3/R2 env vars are present."""
+    return all([
+        os.getenv("IMAGE_BUCKET"),
+        os.getenv("IMAGE_ENDPOINT_URL"),
+        os.getenv("IMAGE_AWS_KEY_ID"),
+        os.getenv("IMAGE_AWS_KEY_SECRET"),
+        os.getenv("IMAGE_PUBLIC_BASE_URL"),
+    ])
+
+
+@blast_bp.route("/operator/blast/upload-image", methods=["POST"])
+@login_required
+def upload_image():
+    """Upload an image to S3/R2 and return its public URL as JSON."""
+    if not _image_upload_configured():
+        return jsonify({"error": "Image storage not configured on this server. Paste a URL instead."}), 503
+
+    f = request.files.get("image")
+    if not f or not f.filename:
+        return jsonify({"error": "No file received."}), 400
+
+    ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else "jpg"
+    if ext not in ("jpg", "jpeg", "png", "gif", "webp"):
+        return jsonify({"error": f"Unsupported format .{ext} — use jpg, png, gif, or webp."}), 400
+
+    try:
+        import boto3
+        bucket     = os.getenv("IMAGE_BUCKET")
+        endpoint   = os.getenv("IMAGE_ENDPOINT_URL")
+        key_id     = os.getenv("IMAGE_AWS_KEY_ID")
+        key_secret = os.getenv("IMAGE_AWS_KEY_SECRET")
+        public_base = os.getenv("IMAGE_PUBLIC_BASE_URL", "").rstrip("/")
+
+        key = f"blast-images/{uuid.uuid4().hex}.{ext}"
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id=key_id,
+            aws_secret_access_key=key_secret,
+        )
+        s3.upload_fileobj(
+            f.stream, bucket, key,
+            ExtraArgs={"ContentType": f.content_type or f"image/{ext}", "ACL": "public-read"},
+        )
+        url = f"{public_base}/{key}"
+        logger.info("Uploaded blast image: %s", url)
+        return jsonify({"url": url})
+    except Exception as e:
+        logger.exception("Image upload failed: %s", e)
+        return jsonify({"error": f"Upload failed: {e}"}), 500
 
 
 @blast_bp.route("/operator/blast/preview-count", methods=["POST"])
@@ -151,11 +208,13 @@ def save_draft():
         audience_type = "all"
     audience_filter = (request.form.get("audience_filter") or "").strip()[:200]
     sample_pct = _safe_int(request.form.get("audience_sample_pct"), 100, 1, 100)
+    media_url = (request.form.get("media_url") or "").strip()[:1000]
     draft_id_raw = request.form.get("draft_id")
     draft_id = int(draft_id_raw) if draft_id_raw and draft_id_raw.isdigit() else None
 
-    logger.info("  parsed: body=%r  audience_type=%r  audience_filter=%r  draft_id=%r",
-                body[:60] if body else "", audience_type, audience_filter, draft_id)
+    logger.info("  parsed: body=%r  audience_type=%r  audience_filter=%r  draft_id=%r  media_url=%r",
+                body[:60] if body else "", audience_type, audience_filter, draft_id,
+                media_url[:60] if media_url else "")
 
     if not body:
         logger.warning("  BLOCKED: body is empty")
@@ -166,7 +225,8 @@ def save_draft():
         new_id = save_blast_draft(
             name=name, body=body, channel=channel,
             audience_type=audience_type, audience_filter=audience_filter,
-            sample_pct=sample_pct, created_by=user["email"], draft_id=draft_id,
+            sample_pct=sample_pct, media_url=media_url,
+            created_by=user["email"], draft_id=draft_id,
         )
         logger.info("  saved draft id=%s", new_id)
     except Exception as e:
@@ -181,7 +241,7 @@ def save_draft():
             flash("Enter a phone number to send the test to.", "error")
             return redirect(url_for("blast.blast_compose", draft_id=new_id))
         from ..blast_sender import _send_one
-        ok = _send_one(test_phone, f"[TEST] {body}", channel)
+        ok = _send_one(test_phone, f"[TEST] {body}", channel, media_url=media_url)
         logger.info("  TEST send result: ok=%s", ok)
         if ok:
             masked = test_phone[-4:].rjust(len(test_phone), "*")

@@ -28,9 +28,11 @@ def execute_blast(draft_id: int):
         logger.error("Blast draft %s not found in DB", draft_id)
         return
 
-    logger.info("  draft: body=%r  channel=%r  audience_type=%r  audience_filter=%r",
+    media_url = (draft.get("media_url") or "").strip()
+    logger.info("  draft: body=%r  channel=%r  audience_type=%r  audience_filter=%r  media_url=%r",
                 (draft["body"] or "")[:60], draft["channel"],
-                draft["audience_type"], draft["audience_filter"])
+                draft["audience_type"], draft["audience_filter"],
+                media_url[:60] if media_url else "")
 
     phones = get_audience_phones(
         audience_type=draft["audience_type"],
@@ -57,7 +59,7 @@ def execute_blast(draft_id: int):
 
     for phone in phones:
         try:
-            ok = _send_one(phone, body, channel)
+            ok = _send_one(phone, body, channel, media_url=media_url)
             logger.info("  send to ...%s via %s: %s", phone[-4:], channel, "OK" if ok else "FAIL")
             if ok:
                 sent += 1
@@ -78,14 +80,14 @@ def execute_blast_async(draft_id: int):
     t.start()
 
 
-def _send_one(phone: str, body: str, channel: str) -> bool:
+def _send_one(phone: str, body: str, channel: str, *, media_url: str = "") -> bool:
     """Route to Twilio or SlickText based on channel setting."""
     if channel == "slicktext":
-        return _send_slicktext(phone, body)
-    return _send_twilio(phone, body)
+        return _send_slicktext(phone, body, media_url=media_url)
+    return _send_twilio(phone, body, media_url=media_url)
 
 
-def _send_twilio(phone: str, body: str) -> bool:
+def _send_twilio(phone: str, body: str, *, media_url: str = "") -> bool:
     try:
         from twilio.rest import Client
         account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
@@ -95,17 +97,22 @@ def _send_twilio(phone: str, body: str) -> bool:
             logger.error("Twilio credentials not configured")
             return False
         client = Client(account_sid, auth_token)
-        msg = client.messages.create(body=body, from_=from_number, to=phone)
+        kwargs = dict(body=body, from_=from_number, to=phone)
+        if media_url:
+            kwargs["media_url"] = [media_url]
+            logger.info("  [Twilio] sending MMS with media_url=%r", media_url[:60])
+        msg = client.messages.create(**kwargs)
         return msg.sid is not None
     except Exception as e:
         logger.warning("Twilio send error: %s", e)
         return False
 
 
-def _send_slicktext(phone: str, body: str) -> bool:
+def _send_slicktext(phone: str, body: str, *, media_url: str = "") -> bool:
     """
     Send via SlickText v1 API — mirrors the main app's SlickTextAdapter._send_v1 exactly.
     Requires: SLICKTEXT_PUBLIC_KEY, SLICKTEXT_PRIVATE_KEY, SLICKTEXT_TEXTWORD_ID
+    Supports MMS by adding mediaUrl when provided.
     """
     try:
         import requests
@@ -129,6 +136,10 @@ def _send_slicktext(phone: str, body: str) -> bool:
             "number":   phone,
             "body":     body,
         }
+        if media_url:
+            payload["mediaUrl"] = media_url
+            logger.info("  [ST-v1] sending MMS with mediaUrl=%r", media_url[:60])
+
         logger.info("  [ST-v1] POST /v1/messages/  payload=%r", payload)
 
         resp = requests.post(

@@ -58,6 +58,8 @@ def init_db():
             updated_at        TIMESTAMPTZ DEFAULT NOW()
         )
         """,
+        # Idempotent column additions for existing tables
+        "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS media_url TEXT DEFAULT ''",
     ]
     try:
         conn = get_conn()

@@ -88,6 +88,11 @@
       <div class="card-sm mb-4">
         <div class="section-label mb-2">Message sent</div>
         <p class="text-sm leading-relaxed" style="color:var(--text);">{{ active_draft.body }}</p>
+        {% if active_draft.media_url %}
+        <div class="mt-3 rounded-xl overflow-hidden border" style="border-color:var(--border);max-width:220px;">
+          <img src="{{ active_draft.media_url }}" alt="MMS image" class="w-full object-cover">
+        </div>
+        {% endif %}
       </div>
       <a href="{{ url_for('blast.blast_index') }}" class="btn-ghost btn-sm">← Back to drafts</a>
     </div>
@@ -215,7 +220,7 @@
         </div>
 
         <!-- Message body -->
-        <div class="mb-6">
+        <div class="mb-5">
           <div class="flex items-center justify-between mb-2">
             <label class="section-label">Message</label>
             <span class="text-xs" style="color:var(--text-dim);" x-text="body.length + ' / 1600 chars'"></span>
@@ -226,6 +231,59 @@
           <p class="text-xs mt-2" style="color:var(--text-dim);">
             Tip: keep messages warm and personal. Add STOP to stop at the end for compliance.
           </p>
+        </div>
+
+        <!-- Image / MMS attachment -->
+        <div class="mb-6" x-data="imageAttach('{{ (active_draft.media_url or '')|e }}', {{ 'true' if image_upload_enabled else 'false' }})">
+          <div class="flex items-center justify-between mb-2">
+            <label class="section-label">Attach Image <span class="text-xs font-normal ml-1" style="color:var(--text-dim);">(MMS — optional)</span></label>
+            <button type="button" x-show="mediaUrl" @click="clearImage()"
+                    class="text-xs px-2 py-1 rounded transition-colors"
+                    style="color:#f87171;border:1px solid #f87171;background:transparent;">Remove</button>
+          </div>
+
+          <!-- Preview -->
+          <div x-show="mediaUrl" x-transition class="mb-3 rounded-xl overflow-hidden border" style="border-color:var(--border);max-width:280px;">
+            <img :src="mediaUrl" alt="MMS preview" class="w-full object-cover" style="max-height:200px;">
+          </div>
+
+          <!-- Drop zone (shown when upload enabled and no image yet) -->
+          <div x-show="uploadEnabled && !mediaUrl" x-transition
+               class="rounded-xl border-2 border-dashed flex flex-col items-center justify-center gap-2 py-7 cursor-pointer transition-colors"
+               :style="dragging ? 'border-color:var(--pink);background:#3a2a0e;' : 'border-color:var(--border);'"
+               @dragover.prevent="dragging=true"
+               @dragleave.prevent="dragging=false"
+               @drop.prevent="onDrop($event)"
+               @click="$refs.fileInput.click()">
+            <div class="text-3xl">🖼️</div>
+            <p class="text-sm font-medium" style="color:var(--text);">Drop image here or click to upload</p>
+            <p class="text-xs" style="color:var(--text-dim);">JPG, PNG, GIF, WEBP · max 5 MB</p>
+            <input type="file" accept="image/jpeg,image/png,image/gif,image/webp"
+                   x-ref="fileInput" class="hidden" @change="onFileChange($event)">
+          </div>
+
+          <!-- Progress indicator -->
+          <div x-show="uploading" x-transition class="mt-2 flex items-center gap-2 text-xs" style="color:var(--text-muted);">
+            <svg class="animate-spin h-4 w-4" style="color:var(--pink);" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+            </svg>
+            Uploading…
+          </div>
+          <div x-show="uploadError" x-transition class="mt-2 text-xs" style="color:#f87171;" x-text="uploadError"></div>
+
+          <!-- URL paste fallback (always visible when no image) -->
+          <div x-show="!mediaUrl && !uploading" x-transition class="mt-2">
+            <input type="text" class="zarna-input text-xs" placeholder="Or paste a public image URL (https://…)"
+                   :value="pasteUrl" @input="pasteUrl=$event.target.value"
+                   @blur="applyPastedUrl()">
+            <p x-show="!uploadEnabled" class="text-xs mt-1" style="color:var(--text-dim);">
+              Image storage not configured — paste a publicly accessible URL above to attach an image.
+            </p>
+          </div>
+
+          <!-- Hidden field submitted with form -->
+          <input type="hidden" name="media_url" :value="mediaUrl">
         </div>
 
         <!-- Save + schedule row -->
@@ -356,7 +414,65 @@ function blastCompose() {
       } catch(e) {}
       this.countLoading = false;
     },
+  }
+}
 
+function imageAttach(initialUrl, uploadEnabled) {
+  return {
+    mediaUrl: initialUrl || '',
+    pasteUrl: '',
+    uploading: false,
+    uploadError: '',
+    dragging: false,
+    uploadEnabled: uploadEnabled,
+
+    clearImage() {
+      this.mediaUrl = '';
+      this.pasteUrl = '';
+      this.uploadError = '';
+    },
+
+    applyPastedUrl() {
+      const v = this.pasteUrl.trim();
+      if (v && (v.startsWith('http://') || v.startsWith('https://'))) {
+        this.mediaUrl = v;
+        this.uploadError = '';
+      }
+    },
+
+    onDrop(e) {
+      this.dragging = false;
+      const file = e.dataTransfer.files[0];
+      if (file) this.uploadFile(file);
+    },
+
+    onFileChange(e) {
+      const file = e.target.files[0];
+      if (file) this.uploadFile(file);
+    },
+
+    async uploadFile(file) {
+      if (file.size > 5 * 1024 * 1024) {
+        this.uploadError = 'File too large — max 5 MB.';
+        return;
+      }
+      this.uploading = true;
+      this.uploadError = '';
+      try {
+        const fd = new FormData();
+        fd.append('image', file);
+        const resp = await fetch('/operator/blast/upload-image', { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (data.url) {
+          this.mediaUrl = data.url;
+        } else {
+          this.uploadError = data.error || 'Upload failed.';
+        }
+      } catch(e) {
+        this.uploadError = 'Upload failed — check your connection.';
+      }
+      this.uploading = false;
+    },
   }
 }
 </script>
