@@ -65,10 +65,15 @@ def init_db():
             id          BIGSERIAL PRIMARY KEY,
             filename    TEXT NOT NULL,
             mime_type   TEXT NOT NULL DEFAULT 'image/jpeg',
-            data        BYTEA NOT NULL,
+            data        BYTEA,
+            data_b64    TEXT,
             created_at  TIMESTAMPTZ DEFAULT NOW()
         )
         """,
+        # Idempotent: add data_b64 column to existing tables that only have BYTEA
+        "ALTER TABLE operator_blast_images ADD COLUMN IF NOT EXISTS data_b64 TEXT",
+        # Clear any stale /tmp media URLs left over from previous deployments
+        "UPDATE blast_drafts SET media_url='' WHERE media_url LIKE '%/operator/blast/uploads/%'",
     ]
     try:
         conn = get_conn()

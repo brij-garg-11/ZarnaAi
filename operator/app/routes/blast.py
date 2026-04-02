@@ -5,6 +5,7 @@ Draft board for composing and saving messages before sending.
 Scheduled send support via the background scheduler.
 """
 
+import base64
 import logging
 import os
 import uuid
@@ -135,8 +136,8 @@ def _image_upload_configured() -> bool:
 def serve_db_image(image_id: int, filename: str):
     """
     Serve a blast image from Postgres — NO login required, survives redeploys.
-    Twilio/SlickText call this URL directly during MMS delivery.
-    image_id is the authoritative PK; filename is for content-type sniffing.
+    Twilio/SlickText fetch this URL directly during MMS delivery.
+    Uses base64 TEXT column (data_b64) — avoids all psycopg2 binary encoding issues.
     """
     from flask import Response
     from ..db import get_conn
@@ -144,23 +145,21 @@ def serve_db_image(image_id: int, filename: str):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT data, mime_type FROM operator_blast_images WHERE id=%s",
+                "SELECT data_b64, mime_type FROM operator_blast_images WHERE id=%s",
                 (image_id,),
             )
             row = cur.fetchone()
-        if not row:
-            logger.warning("serve_db_image: id=%s not found in DB", image_id)
+        if not row or not row[0]:
+            logger.warning("serve_db_image: id=%s not found or empty", image_id)
             return "Image not found", 404
-        # memoryview → bytes: use tobytes() which is correct for binary data
-        raw = row[0]
-        data = raw.tobytes() if hasattr(raw, "tobytes") else bytes(raw)
+        data = base64.b64decode(row[0])
         mime_type = row[1] or "image/jpeg"
-        logger.info("serve_db_image: id=%s size=%d mime=%s", image_id, len(data), mime_type)
+        logger.info("serve_db_image: id=%s decoded_size=%d mime=%s", image_id, len(data), mime_type)
         resp = Response(data, status=200, mimetype=mime_type)
         resp.headers["Cache-Control"] = "public, max-age=86400"
         return resp
     except Exception as e:
-        logger.exception("serve_db_image error: %s", e)
+        logger.exception("serve_db_image error for id=%s: %s", image_id, e)
         return "Error serving image", 500
     finally:
         conn.close()
@@ -206,12 +205,14 @@ def upload_image():
             logger.exception("S3 upload failed, falling back to DB: %s", e)
             f.stream.seek(0)
 
-    # ── Postgres (default, zero-config, survives redeploys) ─────────────────
+    # ── Postgres via base64 TEXT (zero-config, survives redeploys) ──────────
     try:
         data = f.read()
-        logger.info("upload_image: read %d bytes from upload stream (mime=%s)", len(data), mime_type)
+        logger.info("upload_image: read %d bytes (mime=%s)", len(data), mime_type)
         if not data:
             return jsonify({"error": "Uploaded file is empty — please try again."}), 400
+
+        data_b64 = base64.b64encode(data).decode("ascii")
 
         from ..db import get_conn
         conn = get_conn()
@@ -219,17 +220,18 @@ def upload_image():
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO operator_blast_images (filename, mime_type, data) "
+                        "INSERT INTO operator_blast_images (filename, mime_type, data_b64) "
                         "VALUES (%s, %s, %s) RETURNING id",
-                        (filename, mime_type, psycopg2.Binary(data)),
+                        (filename, mime_type, data_b64),
                     )
                     image_id = cur.fetchone()[0]
-            logger.info("Stored blast image in DB: id=%s size=%d bytes", image_id, len(data))
+            logger.info("Stored blast image in DB: id=%s original_size=%d b64_size=%d",
+                        image_id, len(data), len(data_b64))
         finally:
             conn.close()
 
-        base = request.host_url.rstrip("/")
-        url  = f"{base}/operator/blast/img/{image_id}/{filename}"
+        base_url = request.host_url.rstrip("/")
+        url = f"{base_url}/operator/blast/img/{image_id}/{filename}"
         return jsonify({"url": url, "size": len(data)})
     except Exception as e:
         logger.exception("DB image store failed: %s", e)
