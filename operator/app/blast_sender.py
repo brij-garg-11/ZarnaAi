@@ -22,40 +22,54 @@ def execute_blast(draft_id: int):
         mark_blast_cancelled,
     )
 
+    logger.info("=== BLAST WORKER starting for draft %s ===", draft_id)
     draft = get_blast_draft(draft_id)
     if not draft:
-        logger.error("Blast draft %s not found", draft_id)
+        logger.error("Blast draft %s not found in DB", draft_id)
         return
+
+    logger.info("  draft: body=%r  channel=%r  audience_type=%r  audience_filter=%r",
+                (draft["body"] or "")[:60], draft["channel"],
+                draft["audience_type"], draft["audience_filter"])
 
     phones = get_audience_phones(
         audience_type=draft["audience_type"],
         audience_filter=draft["audience_filter"] or "",
         sample_pct=int(draft["audience_sample_pct"] or 100),
     )
+    logger.info("  audience phones count: %d", len(phones))
 
     if not phones:
+        logger.warning("  No phones found — marking sent with 0")
         mark_blast_sent(draft_id, 0, 0, 0)
         return
 
     body = draft["body"]
     channel = draft["channel"]
+
+    if not body:
+        logger.error("  body is empty in DB — aborting blast")
+        mark_blast_sent(draft_id, 0, len(phones), len(phones))
+        return
+
     sent = 0
     failed = 0
 
     for phone in phones:
         try:
             ok = _send_one(phone, body, channel)
+            logger.info("  send to ...%s via %s: %s", phone[-4:], channel, "OK" if ok else "FAIL")
             if ok:
                 sent += 1
             else:
                 failed += 1
         except Exception as e:
-            logger.warning("Blast send error for ...%s: %s", phone[-4:], e)
+            logger.warning("  send error for ...%s: %s", phone[-4:], e)
             failed += 1
         time.sleep(0.05)
 
     mark_blast_sent(draft_id, sent, failed, len(phones))
-    logger.info("Blast %s complete: %s sent, %s failed of %s", draft_id, sent, failed, len(phones))
+    logger.info("=== BLAST %s DONE: %s sent, %s failed of %s ===", draft_id, sent, failed, len(phones))
 
 
 def execute_blast_async(draft_id: int):

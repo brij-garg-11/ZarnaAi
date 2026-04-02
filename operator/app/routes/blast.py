@@ -106,17 +106,21 @@ def preview_count():
 @blast_bp.route("/operator/blast/save", methods=["POST"])
 @login_required
 def save_draft():
-    """
-    Unified save endpoint. Handles three intents via a hidden 'intent' field:
-      save        — save draft and return to compose view (default)
-      send        — save draft, then fire the blast immediately
-      test        — save draft, then send a single test message
-    """
     user = current_user()
     intent = request.form.get("intent", "save")
 
+    # ── DEBUG: log everything received so we can diagnose in Railway logs ──
+    logger.info("=== BLAST SAVE_DRAFT called ===")
+    logger.info("  intent=%r  user=%r", intent, user.get("email") if user else None)
+    logger.info("  form keys: %s", list(request.form.keys()))
+    logger.info("  draft_id=%r  name=%r  channel=%r  audience_type=%r",
+                request.form.get("draft_id"), request.form.get("name"),
+                request.form.get("channel"), request.form.get("audience_type"))
+    body_raw = request.form.get("body", "")
+    logger.info("  body length=%d  body preview=%r", len(body_raw), body_raw[:80])
+
     name = (request.form.get("name") or "Untitled draft").strip()[:120]
-    body = (request.form.get("body") or "").strip()
+    body = body_raw.strip()
     channel = request.form.get("channel", "twilio")
     if channel not in ("twilio", "slicktext"):
         channel = "twilio"
@@ -128,29 +132,35 @@ def save_draft():
     draft_id_raw = request.form.get("draft_id")
     draft_id = int(draft_id_raw) if draft_id_raw and draft_id_raw.isdigit() else None
 
+    logger.info("  parsed: body=%r  audience_type=%r  audience_filter=%r  draft_id=%r",
+                body[:60] if body else "", audience_type, audience_filter, draft_id)
+
     if not body:
+        logger.warning("  BLOCKED: body is empty")
         flash("Message body is required.", "error")
         return redirect(url_for("blast.blast_compose", draft_id=draft_id) if draft_id else url_for("blast.blast_index"))
 
-    # Always save the draft first so DB is the source of truth for the blast worker
-    new_id = save_blast_draft(
-        name=name,
-        body=body,
-        channel=channel,
-        audience_type=audience_type,
-        audience_filter=audience_filter,
-        sample_pct=sample_pct,
-        created_by=user["email"],
-        draft_id=draft_id,
-    )
+    try:
+        new_id = save_blast_draft(
+            name=name, body=body, channel=channel,
+            audience_type=audience_type, audience_filter=audience_filter,
+            sample_pct=sample_pct, created_by=user["email"], draft_id=draft_id,
+        )
+        logger.info("  saved draft id=%s", new_id)
+    except Exception as e:
+        logger.exception("  FAILED to save draft: %s", e)
+        flash(f"Save failed: {e}", "error")
+        return redirect(url_for("blast.blast_compose", draft_id=draft_id) if draft_id else url_for("blast.blast_index"))
 
     if intent == "test":
         test_phone = (request.form.get("test_phone") or "").strip()
+        logger.info("  TEST intent: phone=%r", test_phone)
         if not test_phone:
             flash("Enter a phone number to send the test to.", "error")
             return redirect(url_for("blast.blast_compose", draft_id=new_id))
         from ..blast_sender import _send_one
         ok = _send_one(test_phone, f"[TEST] {body}", channel)
+        logger.info("  TEST send result: ok=%s", ok)
         if ok:
             masked = test_phone[-4:].rjust(len(test_phone), "*")
             flash(f"Test sent to {masked}. Draft saved.", "success")
@@ -159,6 +169,7 @@ def save_draft():
         return redirect(url_for("blast.blast_compose", draft_id=new_id))
 
     if intent == "send":
+        logger.info("  SEND intent: firing blast for draft %s", new_id)
         existing = get_blast_draft(new_id)
         if existing and existing["status"] in ("sent", "cancelled"):
             flash("This blast has already been sent or cancelled.", "error")
@@ -173,14 +184,20 @@ def save_draft():
                         "UPDATE blast_drafts SET status='sending', updated_at=NOW() WHERE id=%s",
                         (new_id,),
                     )
+            logger.info("  marked draft %s as sending", new_id)
+        except Exception as e:
+            logger.exception("  FAILED to mark sending: %s", e)
+            flash(f"Failed to queue blast: {e}", "error")
+            return redirect(url_for("blast.blast_compose", draft_id=new_id))
         finally:
             conn.close()
 
         execute_blast_async(new_id)
+        logger.info("  blast thread started for draft %s", new_id)
         flash("Blast queued — sending in background. Refresh to see results.", "success")
         return redirect(url_for("blast.blast_index"))
 
-    # Default: save only
+    logger.info("  SAVE intent: redirecting to compose %s", new_id)
     flash("Draft saved.", "success")
     return redirect(url_for("blast.blast_compose", draft_id=new_id))
 
