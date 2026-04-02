@@ -10,6 +10,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 
+import psycopg2
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
 from ..routes.auth import login_required, current_user
@@ -117,7 +118,6 @@ def blast_compose(draft_id: int):
 
 
 def _s3_configured() -> bool:
-    """True when all S3/R2 env vars are present."""
     return all([
         os.getenv("IMAGE_BUCKET"),
         os.getenv("IMAGE_ENDPOINT_URL"),
@@ -128,26 +128,43 @@ def _s3_configured() -> bool:
 
 
 def _image_upload_configured() -> bool:
-    """Upload always works — local storage is the zero-config fallback."""
     return True
 
 
-def _local_upload_dir() -> str:
-    """Writable directory for locally stored blast images."""
-    d = os.path.join("/tmp", "blast_uploads")
-    os.makedirs(d, exist_ok=True)
-    return d
-
-
-@blast_bp.route("/operator/blast/uploads/<filename>")
-def serve_upload(filename: str):
+@blast_bp.route("/operator/blast/img/<int:image_id>/<filename>")
+def serve_db_image(image_id: int, filename: str):
     """
-    Serve a locally uploaded blast image — NO login required.
-    Twilio/SlickText need to fetch this URL directly when delivering MMS.
-    Filenames are UUID-based (unguessable), so obscurity is sufficient here.
+    Serve a blast image from Postgres — NO login required, survives redeploys.
+    Twilio/SlickText call this URL directly during MMS delivery.
+    image_id is the authoritative PK; filename is for content-type sniffing.
     """
-    from flask import send_from_directory
-    return send_from_directory(_local_upload_dir(), filename)
+    from flask import Response
+    from ..db import get_conn
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT data, mime_type FROM operator_blast_images WHERE id=%s",
+                (image_id,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return "Image not found", 404
+        data, mime_type = bytes(row[0]), row[1]
+        return Response(
+            data,
+            status=200,
+            mimetype=mime_type,
+            headers={
+                "Cache-Control": "public, max-age=86400",
+                "Content-Length": str(len(data)),
+            },
+        )
+    except Exception as e:
+        logger.exception("serve_db_image error: %s", e)
+        return "Error serving image", 500
+    finally:
+        conn.close()
 
 
 @blast_bp.route("/operator/blast/upload-image", methods=["POST"])
@@ -155,23 +172,21 @@ def serve_upload(filename: str):
 def upload_image():
     """
     Upload a blast image.
-    Uses S3/R2 when credentials are configured; otherwise saves to /tmp
-    and serves via this app (URL valid as long as the container is running —
-    plenty long enough for Twilio to fetch while the blast sends).
+    Default: stores bytes in Postgres → URL survives container redeploys.
+    Optional: S3/R2 when IMAGE_BUCKET etc. env vars are set.
     """
     f = request.files.get("image")
     if not f or not f.filename:
         return jsonify({"error": "No file received."}), 400
 
     ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else "jpg"
-    # SlickText supports jpg/jpeg/png/gif only. Twilio also supports webp/pdf.
-    # We accept all but warn about SlickText limits in the UI.
     if ext not in ("jpg", "jpeg", "png", "gif", "webp", "pdf"):
         return jsonify({"error": f"Unsupported format .{ext} — use jpg, png, gif, or webp."}), 400
 
     filename = f"{uuid.uuid4().hex}.{ext}"
+    mime_type = f.content_type or f"image/{ext}"
 
-    # ── S3 / R2 path ────────────────────────────────────────────────────────
+    # ── S3 / R2 (optional) ──────────────────────────────────────────────────
     if _s3_configured():
         try:
             import boto3
@@ -180,38 +195,41 @@ def upload_image():
             key_id      = os.getenv("IMAGE_AWS_KEY_ID")
             key_secret  = os.getenv("IMAGE_AWS_KEY_SECRET")
             public_base = os.getenv("IMAGE_PUBLIC_BASE_URL", "").rstrip("/")
-
             key = f"blast-images/{filename}"
-            s3 = boto3.client(
-                "s3",
-                endpoint_url=endpoint,
-                aws_access_key_id=key_id,
-                aws_secret_access_key=key_secret,
-            )
-            s3.upload_fileobj(
-                f.stream, bucket, key,
-                ExtraArgs={"ContentType": f.content_type or f"image/{ext}", "ACL": "public-read"},
-            )
+            s3 = boto3.client("s3", endpoint_url=endpoint,
+                              aws_access_key_id=key_id, aws_secret_access_key=key_secret)
+            s3.upload_fileobj(f.stream, bucket, key,
+                              ExtraArgs={"ContentType": mime_type, "ACL": "public-read"})
             url = f"{public_base}/{key}"
             logger.info("Uploaded blast image to S3/R2: %s", url)
             return jsonify({"url": url})
         except Exception as e:
-            logger.exception("S3 upload failed, falling through to local: %s", e)
-            # Fall through to local storage on S3 failure
+            logger.exception("S3 upload failed, falling back to DB: %s", e)
             f.stream.seek(0)
 
-    # ── Local storage fallback ───────────────────────────────────────────────
+    # ── Postgres (default, zero-config, survives redeploys) ─────────────────
     try:
-        dest = os.path.join(_local_upload_dir(), filename)
-        f.save(dest)
+        data = f.read()
+        from ..db import get_conn
+        conn = get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO operator_blast_images (filename, mime_type, data) "
+                        "VALUES (%s, %s, %s) RETURNING id",
+                        (filename, mime_type, psycopg2.Binary(data)),
+                    )
+                    image_id = cur.fetchone()[0]
+        finally:
+            conn.close()
 
-        # Build absolute public URL using the incoming request's host
         base = request.host_url.rstrip("/")
-        url  = f"{base}/operator/blast/uploads/{filename}"
-        logger.info("Saved blast image locally: %s → %s", dest, url)
+        url  = f"{base}/operator/blast/img/{image_id}/{filename}"
+        logger.info("Stored blast image in DB: id=%s size=%d", image_id, len(data))
         return jsonify({"url": url})
     except Exception as e:
-        logger.exception("Local image save failed: %s", e)
+        logger.exception("DB image store failed: %s", e)
         return jsonify({"error": f"Upload failed: {e}"}), 500
 
 

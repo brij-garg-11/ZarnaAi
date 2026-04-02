@@ -254,8 +254,15 @@
             <span x-show="channel==='twilio'">Twilio MMS: JPG, PNG, GIF, WEBP, or PDF · max 5 MB</span>
           </p>
 
+          <!-- Stale /tmp URL warning (old uploads before DB storage was added) -->
+          <div x-show="mediaUrl && mediaUrl.includes('/operator/blast/uploads/')" x-transition
+               class="mb-3 p-3 rounded-lg text-xs" style="background:#2a1a00;border:1px solid #f59e0b;color:#fbbf24;">
+            ⚠️ This image was stored temporarily and may have been lost after a redeploy.
+            Please remove it and re-upload to ensure it sends correctly.
+          </div>
+
           <!-- Preview -->
-          <div x-show="mediaUrl" x-transition class="mb-3 rounded-xl overflow-hidden border" style="border-color:var(--border);max-width:280px;">
+          <div x-show="mediaUrl && !mediaUrl.includes('/operator/blast/uploads/')" x-transition class="mb-3 rounded-xl overflow-hidden border" style="border-color:var(--border);max-width:280px;">
             <template x-if="isPdf">
               <div class="flex items-center gap-3 px-4 py-4" style="background:#1A1714;">
                 <span class="text-3xl">📄</span>

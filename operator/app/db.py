@@ -60,6 +60,15 @@ def init_db():
         """,
         # Idempotent column additions for existing tables
         "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS media_url TEXT DEFAULT ''",
+        """
+        CREATE TABLE IF NOT EXISTS operator_blast_images (
+            id          BIGSERIAL PRIMARY KEY,
+            filename    TEXT NOT NULL,
+            mime_type   TEXT NOT NULL DEFAULT 'image/jpeg',
+            data        BYTEA NOT NULL,
+            created_at  TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
     ]
     try:
         conn = get_conn()
