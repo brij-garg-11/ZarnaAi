@@ -140,9 +140,12 @@ def _local_upload_dir() -> str:
 
 
 @blast_bp.route("/operator/blast/uploads/<filename>")
-@login_required
 def serve_upload(filename: str):
-    """Serve a locally uploaded blast image."""
+    """
+    Serve a locally uploaded blast image — NO login required.
+    Twilio/SlickText need to fetch this URL directly when delivering MMS.
+    Filenames are UUID-based (unguessable), so obscurity is sufficient here.
+    """
     from flask import send_from_directory
     return send_from_directory(_local_upload_dir(), filename)
 
@@ -161,8 +164,10 @@ def upload_image():
         return jsonify({"error": "No file received."}), 400
 
     ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else "jpg"
+    # SlickText supports jpg/jpeg/png/gif only. Twilio also supports webp/pdf.
+    # We accept all but warn about SlickText limits in the UI.
     if ext not in ("jpg", "jpeg", "png", "gif", "webp", "pdf"):
-        return jsonify({"error": f"Unsupported format .{ext} — use jpg, png, gif, webp, or pdf."}), 400
+        return jsonify({"error": f"Unsupported format .{ext} — use jpg, png, gif, or webp."}), 400
 
     filename = f"{uuid.uuid4().hex}.{ext}"
 

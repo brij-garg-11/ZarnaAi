@@ -241,6 +241,11 @@
                     class="text-xs px-2 py-1 rounded transition-colors"
                     style="color:#f87171;border:1px solid #f87171;background:transparent;">Remove</button>
           </div>
+          <!-- Channel-specific constraints note -->
+          <p class="text-xs mb-2" style="color:var(--text-dim);">
+            <span x-show="channel==='slicktext'">SlickText MMS: JPG, PNG, or GIF only · <strong style="color:#fbbf24;">max 590 KB</strong></span>
+            <span x-show="channel==='twilio'">Twilio MMS: JPG, PNG, GIF, WEBP, or PDF · max 5 MB</span>
+          </p>
 
           <!-- Preview -->
           <div x-show="mediaUrl" x-transition class="mb-3 rounded-xl overflow-hidden border" style="border-color:var(--border);max-width:280px;">
@@ -268,7 +273,10 @@
                @click="$refs.fileInput.click()">
             <div class="text-3xl">🖼️</div>
             <p class="text-sm font-medium" style="color:var(--text);">Drop image here or click to upload</p>
-            <p class="text-xs" style="color:var(--text-dim);">JPG, PNG, GIF, WEBP, PDF · max 5 MB</p>
+            <p class="text-xs" style="color:var(--text-dim);">
+              <span x-show="channel==='slicktext'">JPG, PNG, or GIF · keep under 590 KB for SlickText</span>
+              <span x-show="channel==='twilio'">JPG, PNG, GIF, WEBP, or PDF · max 5 MB</span>
+            </p>
             <input type="file" accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
                    x-ref="fileInput" class="hidden" @change="onFileChange($event)">
           </div>
@@ -464,9 +472,22 @@ function imageAttach(initialUrl, uploadEnabled) {
     },
 
     async uploadFile(file) {
-      if (file.size > 15 * 1024 * 1024) {
-        this.uploadError = 'File too large — max 15 MB.';
+      // Get channel from parent blastCompose scope via closest x-data
+      const channelEl = document.querySelector('[name="channel"]:checked');
+      const ch = channelEl ? channelEl.value : 'twilio';
+      const maxBytes = ch === 'slicktext' ? 590 * 1024 : 5 * 1024 * 1024;
+      const maxLabel = ch === 'slicktext' ? '590 KB' : '5 MB';
+      if (file.size > maxBytes) {
+        this.uploadError = `File too large for ${ch === 'slicktext' ? 'SlickText' : 'Twilio'} — max ${maxLabel}. Compress or resize the image and try again.`;
         return;
+      }
+      // SlickText only supports JPG/PNG/GIF
+      if (ch === 'slicktext') {
+        const ext = file.name.split('.').pop().toLowerCase();
+        if (!['jpg','jpeg','png','gif'].includes(ext)) {
+          this.uploadError = 'SlickText only supports JPG, PNG, or GIF images.';
+          return;
+        }
       }
       this.uploading = true;
       this.uploadError = '';
