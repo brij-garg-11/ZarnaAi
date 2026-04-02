@@ -103,23 +103,39 @@ def _send_twilio(phone: str, body: str) -> bool:
 
 
 def _send_slicktext(phone: str, body: str) -> bool:
+    """
+    Send via SlickText v1 API — mirrors the main app's SlickTextAdapter._send_v1 exactly.
+    Requires: SLICKTEXT_PUBLIC_KEY, SLICKTEXT_PRIVATE_KEY, SLICKTEXT_TEXTWORD_ID
+    """
     try:
         import requests
-        pub_key = os.getenv("SLICKTEXT_PUBLIC_KEY", "")
-        priv_key = os.getenv("SLICKTEXT_PRIVATE_KEY", "")
+        pub_key     = os.getenv("SLICKTEXT_PUBLIC_KEY", "")
+        priv_key    = os.getenv("SLICKTEXT_PRIVATE_KEY", "")
+        textword_id = os.getenv("SLICKTEXT_TEXTWORD_ID", "")
+
         if not pub_key or not priv_key:
-            logger.error("SlickText credentials not configured (need SLICKTEXT_PUBLIC_KEY + SLICKTEXT_PRIVATE_KEY)")
+            logger.error("SlickText credentials missing: need SLICKTEXT_PUBLIC_KEY + SLICKTEXT_PRIVATE_KEY")
             return False
-        digits = "".join(c for c in phone if c.isdigit())
-        if digits.startswith("1") and len(digits) == 11:
-            digits = digits[1:]
+        if not textword_id:
+            logger.error("SLICKTEXT_TEXTWORD_ID not set — required for v1 outbound sends")
+            return False
+
         resp = requests.post(
-            "https://api.slicktext.com/v1/messages",
-            json={"number": digits, "message": body},
+            "https://api.slicktext.com/v1/messages/",
+            data={
+                "action":   "SEND",
+                "textword": textword_id,
+                "number":   phone,
+                "body":     body,
+            },
             auth=(pub_key, priv_key),
-            timeout=15,
+            timeout=10,
         )
-        return resp.status_code in (200, 201)
+        if resp.status_code == 200:
+            logger.info("SlickText send OK to ...%s", phone[-4:])
+            return True
+        logger.error("SlickText send failed: %s — %s", resp.status_code, resp.text[:200])
+        return False
     except Exception as e:
         logger.warning("SlickText send error: %s", e)
         return False
