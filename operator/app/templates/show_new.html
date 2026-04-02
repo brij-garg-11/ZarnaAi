@@ -48,13 +48,12 @@
 
       <!-- Keyword -->
       <div x-show="mode==='keyword'" x-transition>
-        <label class="section-label mb-2 block">Keyword</label>
-        <input type="text" name="keyword" id="keywordInput" class="zarna-input" placeholder="e.g. CHICAGO"
-               style="text-transform:uppercase;" maxlength="30" pattern="^\S+$"
-               oninput="this.value=this.value.replace(/\s/g,'').toUpperCase()"
-               title="One word only — no spaces">
+        <label class="section-label mb-2 block">Keyword or phrase</label>
+        <input type="text" name="keyword" class="zarna-input" placeholder="e.g. CHICAGO or ZARNA TEST"
+               style="text-transform:uppercase;" maxlength="50"
+               oninput="this.value=this.value.toUpperCase()">
         <p class="text-xs mt-1.5" style="color:var(--text-dim);">
-          Single word, no spaces. Fans text this to sign up (e.g. <strong>CHICAGO</strong>, <strong>FLORIDA</strong>).
+          Up to 5 words. Fans text this to sign up — typos and spacing variations are matched automatically.
         </p>
       </div>
 

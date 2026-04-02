@@ -44,39 +44,104 @@ def fuzzy_match_tokens(candidate: str, kw: str) -> bool:
     return ratio >= _FUZZY_RATIO or dist <= 2
 
 
+def _normalize(s: str) -> str:
+    """Lowercase, strip punctuation edges, collapse all whitespace."""
+    s = (s or "").strip().lower()
+    s = re.sub(r"[^\w\s]", "", s)   # drop punctuation
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _compact(s: str) -> str:
+    """Like _normalize but also removes all spaces — for spacing-tolerant compare."""
+    return _normalize(s).replace(" ", "")
+
+
 def body_matches_keyword(body: str, keyword: str) -> bool:
-    body = (body or "").strip().lower()
-    kw = (keyword or "").strip().lower()
-    if not kw:
+    """
+    Return True if `body` is a signup attempt matching `keyword`.
+
+    Handles:
+    - Single or multi-word keywords ("FLORIDA", "ZARNA TEST", "COMEDY SHOW NYC")
+    - Case-insensitive exact match
+    - Fan texts the phrase with different spacing ("zarnatest" vs "zarna test")
+    - Fan texts just the start of a multi-word phrase ("ZARNA" for "ZARNA TEST")
+    - Typos / minor misspellings via fuzzy matching
+    - Extra text after the keyword ("FLORIDA yes sign me up")
+    """
+    body_n = _normalize(body)
+    kw_n   = _normalize(keyword)
+
+    if not kw_n:
         return True
-    if body == kw:
+
+    # 1. Exact match (handles "zarna test" == "zarna test")
+    if body_n == kw_n:
         return True
-    parts = body.split()
-    if not parts:
-        return False
-    first = parts[0]
-    # allow trailing punctuation on first token (e.g. "blue!")
-    first_core = re.sub(r"^[^\w]+|[^\w]+$", "", first, flags=re.UNICODE).lower()
-    if not first_core:
-        return False
-    if first_core == kw:
+
+    # 2. Body starts with the keyword (fan typed extra words after)
+    if body_n.startswith(kw_n + " ") or body_n.startswith(kw_n):
         return True
-    return fuzzy_match_tokens(first_core, kw)
+
+    # 3. Space-collapsed comparison — "zarnatest" matches "zarna test"
+    body_c = _compact(body)
+    kw_c   = _compact(keyword)
+    if body_c == kw_c:
+        return True
+    if body_c.startswith(kw_c):
+        return True
+
+    # 4. Fuzzy match on the space-collapsed forms (catches typos in multi-word phrases)
+    if fuzzy_match_tokens(body_c, kw_c):
+        return True
+
+    # 5. Legacy single-token path — first word fuzzy-matched against keyword
+    #    (keeps backward compat for single-word keywords like "FLORIDA")
+    parts = body_n.split()
+    if parts:
+        first_core = re.sub(r"^[^\w]+|[^\w]+$", "", parts[0], flags=re.UNICODE)
+        if first_core:
+            if first_core == kw_n:
+                return True
+            if fuzzy_match_tokens(first_core, kw_n):
+                return True
+
+    return False
 
 
 def is_keyword_only_join(body: str, show_kw: str) -> bool:
-    """Single-token join message (for silencing the AI reply)."""
-    raw = (body or "").strip()
+    """
+    True if the message is clearly just the signup keyword (no extra content).
+    Used to silence the AI reply for pure keyword joins.
+    Handles single and multi-word keywords, spacing variants.
+    """
+    raw  = (body or "").strip()
     if not raw:
         return False
-    parts = raw.split()
-    if len(parts) != 1:
+
+    body_n = _normalize(raw)
+    kw_n   = _normalize(show_kw)
+    if not kw_n:
         return False
-    token = re.sub(r"^[^\w]+|[^\w]+$", "", parts[0], flags=re.UNICODE)
-    token_l = token.lower()
-    kw = (show_kw or "").strip().lower()
-    if not token_l or not kw:
-        return False
-    if token_l == kw:
+
+    # Exact phrase match
+    if body_n == kw_n:
         return True
-    return fuzzy_match_tokens(token_l, kw)
+
+    # Space-collapsed match ("zarnatest" for "zarna test")
+    if _compact(raw) == _compact(show_kw):
+        return True
+
+    # Fuzzy on collapsed forms
+    if fuzzy_match_tokens(_compact(raw), _compact(show_kw)):
+        return True
+
+    # Single-token legacy path
+    parts = raw.split()
+    if len(parts) == 1:
+        token = re.sub(r"^[^\w]+|[^\w]+$", "", parts[0], flags=re.UNICODE).lower()
+        kw_c  = _compact(show_kw)
+        if token and (token == kw_c or fuzzy_match_tokens(token, kw_c)):
+            return True
+
+    return False
