@@ -512,6 +512,21 @@ def clone_draft(draft_id: int):
     return redirect(url_for("blast.blast_compose", draft_id=new_id))
 
 
+@blast_bp.route("/operator/blast/<int:draft_id>/status")
+@login_required
+def draft_status(draft_id: int):
+    """Lightweight JSON endpoint for polling blast send progress."""
+    draft = get_blast_draft(draft_id)
+    if not draft:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({
+        "status":            draft["status"],
+        "sent_count":        draft["sent_count"]        or 0,
+        "failed_count":      draft["failed_count"]      or 0,
+        "total_recipients":  draft["total_recipients"]  or 0,
+    })
+
+
 @blast_bp.route("/operator/blast/<int:draft_id>/cancel", methods=["POST"])
 @login_required
 def cancel_blast(draft_id: int):

@@ -32,7 +32,12 @@
         <div class="flex items-start justify-between gap-2 mb-1.5">
           <span class="text-sm font-medium truncate" style="color:var(--text);">{{ d.name or "Untitled" }}</span>
           {% set ds = d.status or "draft" %}
-          <span class="badge-{{ ds }} shrink-0">{{ ds }}</span>
+          <span class="flex items-center gap-1.5 shrink-0">
+            {% if ds == "sending" %}
+            <span class="inline-block w-1.5 h-1.5 rounded-full animate-pulse" style="background:var(--pink);"></span>
+            {% endif %}
+            <span class="badge-{{ ds }}">{{ ds }}</span>
+          </span>
         </div>
         <p class="text-xs truncate mb-2" style="color:var(--text-muted);">
           {{ d.body[:80] + "…" if d.body|length > 80 else d.body or "(empty)" }}
@@ -108,7 +113,13 @@
     <!-- Compose / Edit / Schedule view -->
     <div class="card">
       <div class="section-label mb-5">
-        {% if active_draft.status == "scheduled" %}Scheduled Blast{% elif active_draft.status == "sending" %}Sending…{% else %}Edit Draft{% endif %}
+        {% if active_draft.status == "scheduled" %}Scheduled Blast
+        {% elif active_draft.status == "sending" %}
+          <span class="flex items-center gap-2">
+            <span class="inline-block w-2 h-2 rounded-full animate-pulse" style="background:var(--pink);"></span>
+            Sending… <span class="text-xs font-normal ml-1" style="color:var(--text-muted);">auto-updates when done</span>
+          </span>
+        {% else %}Edit Draft{% endif %}
       </div>
 
       <form method="post" action="{{ url_for('blast.save_draft') }}" id="draftForm">
@@ -409,6 +420,49 @@
 
 {% block scripts %}
 <script>
+// ── Auto-refresh while a blast is sending ──────────────────────────────────
+(function() {
+  {% if active_draft and active_draft.status == "sending" %}
+  // Compose page: poll this draft until it leaves "sending"
+  var draftId  = {{ active_draft.id }};
+  var interval = setInterval(function() {
+    fetch('/operator/blast/' + draftId + '/status')
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.status && d.status !== 'sending') {
+          clearInterval(interval);
+          window.location.reload();
+        }
+      })
+      .catch(function() {}); // network hiccup — keep polling
+  }, 3000);
+
+  {% elif not active_draft %}
+  // Index page: if any card shows "sending", poll each one and reload when done
+  var sendingIds = [
+    {% for d in drafts if d.status == "sending" %}{{ d.id }},{% endfor %}
+  ];
+  if (sendingIds.length > 0) {
+    var done = {};
+    var interval = setInterval(function() {
+      sendingIds.forEach(function(id) {
+        if (done[id]) return;
+        fetch('/operator/blast/' + id + '/status')
+          .then(function(r) { return r.json(); })
+          .then(function(d) {
+            if (d.status && d.status !== 'sending') {
+              done[id] = true;
+              if (Object.keys(done).length === sendingIds.length) clearInterval(interval);
+              window.location.reload();
+            }
+          })
+          .catch(function() {});
+      });
+    }, 3000);
+  }
+  {% endif %}
+})();
+
 function blastCompose() {
   return {
     channel: '{{ active_draft.channel if active_draft else "twilio" }}',
