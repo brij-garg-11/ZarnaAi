@@ -30,6 +30,7 @@ blast_bp = Blueprint("blast", __name__)
 @blast_bp.route("/operator/blast")
 @login_required
 def blast_index():
+    _reset_stuck_sending_drafts()
     drafts = list_blast_drafts()
     tags = get_all_tags()
     shows = list_shows()
@@ -42,6 +43,27 @@ def blast_index():
         active_draft=None,
         audience_count=None,
     )
+
+
+def _reset_stuck_sending_drafts():
+    """Reset any drafts stuck in 'sending' for >5 min back to 'draft' so they can be retried."""
+    from ..db import get_conn
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE blast_drafts
+                    SET status = 'draft', updated_at = NOW()
+                    WHERE status = 'sending'
+                      AND updated_at < NOW() - INTERVAL '5 minutes'
+                """)
+                if cur.rowcount:
+                    logger.info("Reset %d stuck 'sending' blast drafts back to 'draft'", cur.rowcount)
+    except Exception as e:
+        logger.warning("Could not reset stuck drafts: %s", e)
+    finally:
+        conn.close()
 
 
 @blast_bp.route("/operator/blast/new")
