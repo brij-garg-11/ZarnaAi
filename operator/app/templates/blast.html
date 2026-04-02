@@ -228,15 +228,11 @@
           </p>
         </div>
 
-        <!-- Intent hidden field — set by buttons below before submit -->
-        <input type="hidden" name="intent" id="formIntent" value="save">
-
         <!-- Save + schedule row -->
         {% if active_draft.status not in ("sending",) %}
         <div class="flex flex-wrap gap-3 mb-6">
           {% if active_draft.status != "scheduled" %}
-          <button type="submit" class="btn-ghost"
-                  @click="document.getElementById('formIntent').value='save'">
+          <button type="submit" name="intent" value="save" class="btn-ghost">
             Save Draft
           </button>
           {% endif %}
@@ -261,7 +257,7 @@
         {% endif %}
 
         {% if active_draft.status not in ("sending", "sent", "cancelled") %}
-        <!-- Send Test — part of the same form -->
+        <!-- Send Test -->
         <div class="border-t pt-5 mb-5" style="border-color:var(--border);">
           <div class="section-label mb-3">Send Test to a Phone</div>
           <div class="flex items-end gap-3 flex-wrap">
@@ -269,16 +265,13 @@
               <input type="tel" name="test_phone" class="zarna-input"
                      placeholder="+1 212 555 0100 — sends [TEST] prefix to this number only">
             </div>
-            <button type="submit" class="btn-ghost shrink-0"
-                    :disabled="!body.trim()"
-                    :style="!body.trim() ? 'opacity:0.4;cursor:not-allowed;' : ''"
-                    @click="document.getElementById('formIntent').value='test'">
+            <button type="submit" name="intent" value="test" class="btn-ghost shrink-0">
               Send Test →
             </button>
           </div>
         </div>
 
-        <!-- Send Now — also part of the same form -->
+        <!-- Send Now -->
         <div class="border-t pt-6" style="border-color:var(--border);">
           <div class="section-label mb-4">Send Now</div>
           <div class="card-sm mb-4" style="background:#0F0D0B;">
@@ -290,17 +283,15 @@
             </p>
           </div>
           <label class="flex items-start gap-3 mb-4 cursor-pointer">
-            <input type="checkbox" name="confirm" value="1" class="mt-1 shrink-0"
-                   style="accent-color:var(--pink);" x-model="confirmed">
+            <input type="checkbox" name="confirm" value="1" id="confirmCheck"
+                   class="mt-1 shrink-0" style="accent-color:var(--pink);">
             <span class="text-sm" style="color:var(--text-muted);">
               I confirm I want to send this message to
               <strong style="color:var(--pink);" x-text="audienceCount.toLocaleString()"></strong> fans.
             </span>
           </label>
-          <button type="submit" class="btn-pink"
-                  :disabled="!confirmed || !body.trim()"
-                  :style="(!confirmed || !body.trim()) ? 'opacity:0.4;cursor:not-allowed;' : ''"
-                  @click.prevent="sendNow($event)">
+          <button type="submit" name="intent" value="send" class="btn-pink"
+                  onclick="return document.getElementById('confirmCheck').checked || (alert('Check the confirmation box first.'), false)">
             📢 Send Now
           </button>
         </div>
@@ -346,7 +337,6 @@ function blastCompose() {
     body: `{{ (active_draft.body or '')|replace('`', '\\`')|replace('\\', '\\\\')|safe if active_draft else '' }}`,
     audienceCount: {{ audience_count or 0 }},
     countLoading: false,
-    confirmed: false,
     showSchedule: false,
 
     get resolvedFilter() {
@@ -371,17 +361,6 @@ function blastCompose() {
       this.countLoading = false;
     },
 
-    sendNow(e) {
-      if (!this.confirmed || !this.body.trim()) {
-        alert('Add a message and check the confirmation box first.');
-        return;
-      }
-      if (!confirm(`Send to ${this.audienceCount.toLocaleString()} fans via ${this.channel === 'twilio' ? 'Twilio SMS' : 'SlickText'}?`)) {
-        return;
-      }
-      document.getElementById('formIntent').value = 'send';
-      e.target.closest('form').submit();
-    }
   }
 }
 </script>
