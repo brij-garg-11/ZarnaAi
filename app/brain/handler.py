@@ -139,6 +139,13 @@ class ZarnaBrain:
         )
         gen_ms = (time.perf_counter() - t_gen) * 1000
 
+        # Silently rewrite known URLs (website, podcast) to tracked /t/<slug> links
+        try:
+            from app.link_tracker import rewrite_bot_reply
+            reply = rewrite_bot_reply(reply)
+        except Exception:
+            pass  # never block a reply over tracking
+
         if LOG_REPLY_METRICS:
             provider = infer_reply_provider(intent, routing_tier)
             _logger.info(
