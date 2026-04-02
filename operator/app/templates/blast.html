@@ -244,7 +244,18 @@
 
           <!-- Preview -->
           <div x-show="mediaUrl" x-transition class="mb-3 rounded-xl overflow-hidden border" style="border-color:var(--border);max-width:280px;">
-            <img :src="mediaUrl" alt="MMS preview" class="w-full object-cover" style="max-height:200px;">
+            <template x-if="isPdf">
+              <div class="flex items-center gap-3 px-4 py-4" style="background:#1A1714;">
+                <span class="text-3xl">📄</span>
+                <div>
+                  <p class="text-sm font-medium" style="color:var(--text);">PDF attached</p>
+                  <a :href="mediaUrl" target="_blank" class="text-xs" style="color:var(--pink);">Preview ↗</a>
+                </div>
+              </div>
+            </template>
+            <template x-if="!isPdf">
+              <img :src="mediaUrl" alt="MMS preview" class="w-full object-cover" style="max-height:200px;">
+            </template>
           </div>
 
           <!-- Drop zone (shown when upload enabled and no image yet) -->
@@ -257,8 +268,8 @@
                @click="$refs.fileInput.click()">
             <div class="text-3xl">🖼️</div>
             <p class="text-sm font-medium" style="color:var(--text);">Drop image here or click to upload</p>
-            <p class="text-xs" style="color:var(--text-dim);">JPG, PNG, GIF, WEBP · max 5 MB</p>
-            <input type="file" accept="image/jpeg,image/png,image/gif,image/webp"
+            <p class="text-xs" style="color:var(--text-dim);">JPG, PNG, GIF, WEBP, PDF · max 5 MB</p>
+            <input type="file" accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
                    x-ref="fileInput" class="hidden" @change="onFileChange($event)">
           </div>
 
@@ -277,9 +288,6 @@
             <input type="text" class="zarna-input text-xs" placeholder="Or paste a public image URL (https://…)"
                    :value="pasteUrl" @input="pasteUrl=$event.target.value"
                    @blur="applyPastedUrl()">
-            <p x-show="!uploadEnabled" class="text-xs mt-1" style="color:var(--text-dim);">
-              Image storage not configured — paste a publicly accessible URL above to attach an image.
-            </p>
           </div>
 
           <!-- Hidden field submitted with form -->
@@ -426,6 +434,10 @@ function imageAttach(initialUrl, uploadEnabled) {
     dragging: false,
     uploadEnabled: uploadEnabled,
 
+    get isPdf() {
+      return this.mediaUrl.toLowerCase().includes('.pdf');
+    },
+
     clearImage() {
       this.mediaUrl = '';
       this.pasteUrl = '';
@@ -452,8 +464,8 @@ function imageAttach(initialUrl, uploadEnabled) {
     },
 
     async uploadFile(file) {
-      if (file.size > 5 * 1024 * 1024) {
-        this.uploadError = 'File too large — max 5 MB.';
+      if (file.size > 15 * 1024 * 1024) {
+        this.uploadError = 'File too large — max 15 MB.';
         return;
       }
       this.uploading = true;

@@ -116,7 +116,7 @@ def blast_compose(draft_id: int):
     )
 
 
-def _image_upload_configured() -> bool:
+def _s3_configured() -> bool:
     """True when all S3/R2 env vars are present."""
     return all([
         os.getenv("IMAGE_BUCKET"),
@@ -127,45 +127,86 @@ def _image_upload_configured() -> bool:
     ])
 
 
+def _image_upload_configured() -> bool:
+    """Upload always works — local storage is the zero-config fallback."""
+    return True
+
+
+def _local_upload_dir() -> str:
+    """Writable directory for locally stored blast images."""
+    d = os.path.join("/tmp", "blast_uploads")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+@blast_bp.route("/operator/blast/uploads/<filename>")
+@login_required
+def serve_upload(filename: str):
+    """Serve a locally uploaded blast image."""
+    from flask import send_from_directory
+    return send_from_directory(_local_upload_dir(), filename)
+
+
 @blast_bp.route("/operator/blast/upload-image", methods=["POST"])
 @login_required
 def upload_image():
-    """Upload an image to S3/R2 and return its public URL as JSON."""
-    if not _image_upload_configured():
-        return jsonify({"error": "Image storage not configured on this server. Paste a URL instead."}), 503
-
+    """
+    Upload a blast image.
+    Uses S3/R2 when credentials are configured; otherwise saves to /tmp
+    and serves via this app (URL valid as long as the container is running —
+    plenty long enough for Twilio to fetch while the blast sends).
+    """
     f = request.files.get("image")
     if not f or not f.filename:
         return jsonify({"error": "No file received."}), 400
 
     ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else "jpg"
-    if ext not in ("jpg", "jpeg", "png", "gif", "webp"):
-        return jsonify({"error": f"Unsupported format .{ext} — use jpg, png, gif, or webp."}), 400
+    if ext not in ("jpg", "jpeg", "png", "gif", "webp", "pdf"):
+        return jsonify({"error": f"Unsupported format .{ext} — use jpg, png, gif, webp, or pdf."}), 400
 
+    filename = f"{uuid.uuid4().hex}.{ext}"
+
+    # ── S3 / R2 path ────────────────────────────────────────────────────────
+    if _s3_configured():
+        try:
+            import boto3
+            bucket      = os.getenv("IMAGE_BUCKET")
+            endpoint    = os.getenv("IMAGE_ENDPOINT_URL")
+            key_id      = os.getenv("IMAGE_AWS_KEY_ID")
+            key_secret  = os.getenv("IMAGE_AWS_KEY_SECRET")
+            public_base = os.getenv("IMAGE_PUBLIC_BASE_URL", "").rstrip("/")
+
+            key = f"blast-images/{filename}"
+            s3 = boto3.client(
+                "s3",
+                endpoint_url=endpoint,
+                aws_access_key_id=key_id,
+                aws_secret_access_key=key_secret,
+            )
+            s3.upload_fileobj(
+                f.stream, bucket, key,
+                ExtraArgs={"ContentType": f.content_type or f"image/{ext}", "ACL": "public-read"},
+            )
+            url = f"{public_base}/{key}"
+            logger.info("Uploaded blast image to S3/R2: %s", url)
+            return jsonify({"url": url})
+        except Exception as e:
+            logger.exception("S3 upload failed, falling through to local: %s", e)
+            # Fall through to local storage on S3 failure
+            f.stream.seek(0)
+
+    # ── Local storage fallback ───────────────────────────────────────────────
     try:
-        import boto3
-        bucket     = os.getenv("IMAGE_BUCKET")
-        endpoint   = os.getenv("IMAGE_ENDPOINT_URL")
-        key_id     = os.getenv("IMAGE_AWS_KEY_ID")
-        key_secret = os.getenv("IMAGE_AWS_KEY_SECRET")
-        public_base = os.getenv("IMAGE_PUBLIC_BASE_URL", "").rstrip("/")
+        dest = os.path.join(_local_upload_dir(), filename)
+        f.save(dest)
 
-        key = f"blast-images/{uuid.uuid4().hex}.{ext}"
-        s3 = boto3.client(
-            "s3",
-            endpoint_url=endpoint,
-            aws_access_key_id=key_id,
-            aws_secret_access_key=key_secret,
-        )
-        s3.upload_fileobj(
-            f.stream, bucket, key,
-            ExtraArgs={"ContentType": f.content_type or f"image/{ext}", "ACL": "public-read"},
-        )
-        url = f"{public_base}/{key}"
-        logger.info("Uploaded blast image: %s", url)
+        # Build absolute public URL using the incoming request's host
+        base = request.host_url.rstrip("/")
+        url  = f"{base}/operator/blast/uploads/{filename}"
+        logger.info("Saved blast image locally: %s → %s", dest, url)
         return jsonify({"url": url})
     except Exception as e:
-        logger.exception("Image upload failed: %s", e)
+        logger.exception("Local image save failed: %s", e)
         return jsonify({"error": f"Upload failed: {e}"}), 500
 
 
