@@ -72,6 +72,8 @@ def init_db():
         """,
         # Idempotent: add data_b64 column to existing tables that only have BYTEA
         "ALTER TABLE operator_blast_images ADD COLUMN IF NOT EXISTS data_b64 TEXT",
+        # Drop NOT NULL on data (BYTEA) since we now use data_b64 (TEXT) instead
+        "ALTER TABLE operator_blast_images ALTER COLUMN data DROP NOT NULL",
         # Clear any stale /tmp media URLs left over from previous deployments
         "UPDATE blast_drafts SET media_url='' WHERE media_url LIKE '%/operator/blast/uploads/%'",
     ]

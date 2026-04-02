@@ -329,16 +329,16 @@
           </button>
         </div>
 
-        <!-- Schedule panel — uses scheduleForm OUTSIDE draftForm to avoid nesting -->
+        <!-- Schedule panel — submits draftForm with intent=schedule (auto-saves first) -->
         <div x-show="showSchedule" x-transition class="card-sm mb-6" style="background:#1A1714;">
           <div class="section-label mb-3">Schedule this blast</div>
-          <p class="text-xs mb-3" style="color:var(--text-muted);">Enter UTC time. The blast will send automatically.</p>
+          <p class="text-xs mb-3" style="color:var(--text-muted);">Pick a time — your message and audience will be saved automatically.</p>
           <div class="flex items-end gap-3 flex-wrap">
             <div class="flex-1">
               <label class="section-label mb-1 block">Send at (UTC)</label>
-              <input type="datetime-local" name="send_at" form="scheduleForm" class="zarna-input">
+              <input type="datetime-local" name="send_at" x-model="sendAt" class="zarna-input">
             </div>
-            <button type="submit" form="scheduleForm" class="btn-pink">Schedule →</button>
+            <button type="submit" name="intent" value="schedule" class="btn-pink">Schedule →</button>
           </div>
         </div>
         {% endif %}
@@ -380,9 +380,6 @@
 
       </form>
 
-      <!-- Standalone forms that must NOT be nested inside draftForm -->
-      <form id="scheduleForm" method="post"
-            action="{{ url_for('blast.schedule', draft_id=active_draft.id) }}"></form>
 
       {% if active_draft.status == "scheduled" %}
       <div class="border-t pt-6 mt-4" style="border-color:var(--border);">
@@ -422,6 +419,7 @@ function blastCompose() {
     audienceCount: {{ audience_count or 0 }},
     countLoading: false,
     showSchedule: false,
+    sendAt: '',
 
     get resolvedFilter() {
       if (this.audienceType === 'tag') return this.audienceFilter;

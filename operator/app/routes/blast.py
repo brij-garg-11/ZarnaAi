@@ -319,6 +319,21 @@ def save_draft():
             flash("Test send failed — check Twilio/SlickText credentials in Railway env vars.", "error")
         return redirect(url_for("blast.blast_compose", draft_id=new_id))
 
+    if intent == "schedule":
+        send_at_str = (request.form.get("send_at") or "").strip()
+        logger.info("  SCHEDULE intent: send_at=%r draft=%s", send_at_str, new_id)
+        if not send_at_str:
+            flash("Pick a send time before scheduling.", "error")
+            return redirect(url_for("blast.blast_compose", draft_id=new_id))
+        try:
+            send_at = datetime.fromisoformat(send_at_str).replace(tzinfo=timezone.utc)
+        except ValueError:
+            flash("Invalid date — use the date/time picker.", "error")
+            return redirect(url_for("blast.blast_compose", draft_id=new_id))
+        schedule_blast(new_id, send_at)
+        flash(f"Blast scheduled for {send_at.strftime('%b %d at %I:%M %p UTC')}. Draft auto-saved.", "success")
+        return redirect(url_for("blast.blast_index"))
+
     if intent == "send":
         logger.info("  SEND intent: firing blast for draft %s", new_id)
         existing = get_blast_draft(new_id)
