@@ -95,6 +95,34 @@ def toggle_user(user_id: int):
     return redirect(url_for("team.team_index"))
 
 
+@team_bp.route("/operator/team/<int:user_id>/toggle-owner", methods=["POST"])
+@owner_required
+def toggle_owner(user_id: int):
+    me = current_user()
+    if me and me["id"] == user_id:
+        flash("You cannot change your own access level.", "error")
+        return redirect(url_for("team.team_index"))
+
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                cur.execute("SELECT name, is_owner FROM operator_users WHERE id=%s", (user_id,))
+                row = cur.fetchone()
+                if not row:
+                    flash("User not found.", "error")
+                    return redirect(url_for("team.team_index"))
+                new_owner = not row["is_owner"]
+                cur.execute("UPDATE operator_users SET is_owner=%s WHERE id=%s", (new_owner, user_id))
+        flash(f"{'Owner' if new_owner else 'Operator'} access set for {row['name']}.", "success")
+    except Exception as e:
+        flash(f"Error: {e}", "error")
+    finally:
+        conn.close()
+
+    return redirect(url_for("team.team_index"))
+
+
 @team_bp.route("/operator/team/<int:user_id>/reset-password", methods=["POST"])
 @owner_required
 def reset_password(user_id: int):

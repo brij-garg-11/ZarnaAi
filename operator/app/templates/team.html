@@ -27,6 +27,8 @@
             <span class="text-sm font-semibold" style="color:var(--text);">{{ u.name }}</span>
             {% if u.is_owner %}
             <span class="text-xs px-2 py-0.5 rounded-full" style="background:#3a2a0e;color:var(--pink);border:1px solid var(--pink-dark);">Owner</span>
+            {% else %}
+            <span class="text-xs px-2 py-0.5 rounded-full" style="background:#1E1B18;color:var(--text-muted);border:1px solid var(--border);">Operator</span>
             {% endif %}
             {% if not u.is_active %}
             <span class="text-xs px-2 py-0.5 rounded-full" style="background:#1c1917;color:#78716c;border:1px solid #44403c;">Inactive</span>
@@ -45,8 +47,16 @@
                   onclick="document.getElementById('reset-{{ u.id }}').classList.toggle('hidden')"
                   class="btn-ghost btn-sm text-xs">Reset PW</button>
 
-          <!-- Toggle active (don't allow deactivating yourself) -->
           {% if user and user.id != u.id %}
+          <!-- Promote / demote owner -->
+          <form method="post" action="{{ url_for('team.toggle_owner', user_id=u.id) }}">
+            <button type="submit" class="btn-ghost btn-sm text-xs"
+                    onclick="return confirm('{{ 'Remove owner access from' if u.is_owner else 'Give owner access to' }} {{ u.name }}?')">
+              {{ "Remove Owner" if u.is_owner else "Make Owner" }}
+            </button>
+          </form>
+
+          <!-- Toggle active -->
           <form method="post" action="{{ url_for('team.toggle_user', user_id=u.id) }}">
             <button type="submit" class="btn-ghost btn-sm text-xs"
                     onclick="return confirm('{{ 'Deactivate' if u.is_active else 'Reactivate' }} {{ u.name }}?')">

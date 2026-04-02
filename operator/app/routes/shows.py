@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
 from ..routes.auth import login_required, current_user
 from ..queries import list_shows, get_show
@@ -199,6 +199,19 @@ def show_detail(show_id: int):
         ok_msg=ok,
         err_msg=err,
     )
+
+
+@shows_bp.route("/operator/shows/<int:show_id>/live-status")
+@login_required
+def show_live_status(show_id: int):
+    """Lightweight JSON endpoint polled by the browser for live signup counts."""
+    show = get_show(show_id)
+    if not show:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({
+        "status": show["status"],
+        "signup_count": show["signup_count"],
+    })
 
 
 @shows_bp.route("/operator/shows/<int:show_id>/activate", methods=["POST"])

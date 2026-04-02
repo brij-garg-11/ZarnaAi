@@ -22,7 +22,7 @@
           <div>
             <div class="font-semibold text-base" style="color:var(--text);">{{ show.name }}</div>
             <div class="text-xs mt-1 space-x-3" style="color:var(--text-muted);">
-              <span>{{ show.signup_count }} signups</span>
+              <span id="live-count-{{ show.id }}">{{ show.signup_count }} signups</span>
               <span>·</span>
               <span>Keyword: <span class="font-mono font-semibold" style="color:var(--pink);">{{ show.keyword or "—" }}</span></span>
               <span>·</span>
@@ -117,5 +117,34 @@
   <p class="text-sm mb-6" style="color:var(--text-muted);">Create your first show to start collecting fan signups via keyword text.</p>
   <a href="{{ url_for('shows.new_show') }}" class="btn-pink">+ Create First Show</a>
 </div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if live_shows %}
+<script>
+(function() {
+  const POLL_MS = 10000;
+  const liveShowIds = [{% for s in live_shows %}{{ s.id }}{% if not loop.last %},{% endif %}{% endfor %}];
+
+  async function pollAll() {
+    let anyEnded = false;
+    await Promise.all(liveShowIds.map(async (id) => {
+      try {
+        const resp = await fetch('/operator/shows/' + id + '/live-status');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const el = document.getElementById('live-count-' + id);
+        if (el) el.textContent = (data.signup_count ?? 0).toLocaleString() + ' signups';
+        if (data.status !== 'live') anyEnded = true;
+      } catch(e) {}
+    }));
+    // Reload the full list if a show's status changed (e.g. someone ended it)
+    if (anyEnded) location.reload();
+  }
+
+  setInterval(pollAll, POLL_MS);
+})();
+</script>
 {% endif %}
 {% endblock %}

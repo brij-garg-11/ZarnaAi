@@ -24,10 +24,10 @@
   <div class="flex items-start justify-between flex-wrap gap-4">
     <div>
       <h1 class="text-xl font-bold mb-2" style="color:var(--text);">{{ show.name }}</h1>
-      <div class="flex items-center gap-3 flex-wrap">
+        <div class="flex items-center gap-3 flex-wrap">
         {% set st = (show.status or "draft").lower() %}
-        <span class="badge-{{ st }}">{{ st.upper() }}</span>
-        <span class="text-xs" style="color:var(--text-dim);">{{ show.signup_count }} signups</span>
+        <span class="badge-{{ st }}" id="status-badge">{{ st.upper() }}</span>
+        <span class="text-xs" style="color:var(--text-dim);" id="header-signup-count">{{ show.signup_count }} signups</span>
         {% if show.keyword %}
         <span class="text-xs" style="color:var(--text-muted);">
           Keyword: <span class="font-mono font-semibold" style="color:var(--pink);">{{ show.keyword }}</span>
@@ -56,7 +56,7 @@
   <!-- Stats row -->
   <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6">
     <div class="card-sm">
-      <div class="text-2xl font-bold" style="color:var(--pink);">{{ show.signup_count }}</div>
+      <div class="text-2xl font-bold" style="color:var(--pink);" id="stat-signup-count">{{ show.signup_count }}</div>
       <div class="text-xs mt-1" style="color:var(--text-dim);">Signups</div>
     </div>
     <div class="card-sm">
@@ -106,5 +106,47 @@
     {% endfor %}
   </div>
 </div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% set st = (show.status or "draft").lower() %}
+{% if st == "live" %}
+<script>
+(function() {
+  const POLL_MS   = 8000;
+  const statusUrl = '/operator/shows/{{ show.id }}/live-status';
+
+  const statCount   = document.getElementById('stat-signup-count');
+  const headerCount = document.getElementById('header-signup-count');
+  const badge       = document.getElementById('status-badge');
+
+  let staleCount = 0; // how many polls returned non-live status
+
+  async function poll() {
+    try {
+      const resp = await fetch(statusUrl);
+      if (!resp.ok) return;
+      const data = await resp.json();
+
+      // Update signup count everywhere
+      const n = (data.signup_count ?? 0).toLocaleString();
+      if (statCount)   statCount.textContent   = n;
+      if (headerCount) headerCount.textContent = n + ' signups';
+
+      // If show is no longer live, reload after 2 consecutive non-live reads
+      // (avoids a brief flicker from a stale DB read)
+      if (data.status !== 'live') {
+        staleCount++;
+        if (staleCount >= 2) location.reload();
+      } else {
+        staleCount = 0;
+      }
+    } catch(e) { /* network hiccup — ignore */ }
+  }
+
+  setInterval(poll, POLL_MS);
+})();
+</script>
 {% endif %}
 {% endblock %}
