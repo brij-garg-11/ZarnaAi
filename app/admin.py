@@ -108,16 +108,27 @@ def _init_tracking_tables():
                 cur.execute(
                     "ALTER TABLE tracked_links ADD COLUMN IF NOT EXISTS sent_to INT DEFAULT 0"
                 )
-                # Seed the two permanent bot-tracking rows (idempotent — ignored if slug exists)
+                # Seed the two permanent bot-tracking rows — insert if missing, then
+                # fix destination if it was stored without https:// (old bug).
                 cur.execute("""
                     INSERT INTO tracked_links (slug, label, campaign_type, destination)
-                    VALUES ('bot-website', 'Bot → Website / Tickets', 'ticket',  'https://zarnagarg.com')
+                    VALUES ('bot-website', 'Bot → Website / Tickets', 'ticket', 'https://zarnagarg.com')
                     ON CONFLICT (slug) DO NOTHING
+                """)
+                cur.execute("""
+                    UPDATE tracked_links
+                    SET destination = 'https://zarnagarg.com'
+                    WHERE slug = 'bot-website' AND destination NOT LIKE 'https://%'
                 """)
                 cur.execute("""
                     INSERT INTO tracked_links (slug, label, campaign_type, destination)
                     VALUES ('bot-podcast', 'Bot → Podcast', 'podcast', 'https://open.spotify.com')
                     ON CONFLICT (slug) DO NOTHING
+                """)
+                cur.execute("""
+                    UPDATE tracked_links
+                    SET destination = 'https://open.spotify.com'
+                    WHERE slug = 'bot-podcast' AND destination NOT LIKE 'https://%'
                 """)
     except Exception as e:
         import logging

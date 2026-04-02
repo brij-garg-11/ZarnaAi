@@ -92,6 +92,15 @@ def _ensure_bot_links(base_url: str) -> dict[str, str]:
                         """,
                         (slug, label, ctype, dest),
                     )
+                    # Fix any row that was previously stored without https://
+                    cur.execute(
+                        """
+                        UPDATE tracked_links
+                        SET destination = %s
+                        WHERE slug = %s AND destination NOT LIKE 'https://%%'
+                        """,
+                        (dest, slug),
+                    )
                     result[slug] = f"{base_url}/t/{slug}"
         _short_url_cache = result
         _logger.info("link_tracker: bot canonical links ensured — %s", list(result.keys()))
