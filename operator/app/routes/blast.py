@@ -6,13 +6,15 @@ Scheduled send support via the background scheduler.
 """
 
 import base64
+import hashlib
 import logging
 import os
+import secrets as _secrets
 import uuid
 from datetime import datetime, timezone
 
 import psycopg2
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, Response as _Response, flash, jsonify, redirect, render_template, request, url_for
 
 from ..routes.auth import login_required, current_user
 from ..queries import (
@@ -47,6 +49,7 @@ def blast_index():
         active_draft=None,
         audience_count=None,
         image_upload_enabled=_image_upload_configured(),
+        tracked_short_url="",
     )
 
 
@@ -129,6 +132,13 @@ def blast_compose(draft_id: int):
         int(active_draft["audience_sample_pct"] or 100),
     )
 
+    # Build the full tracked short URL so the template can display it
+    tracked_short_url = ""
+    if active_draft.get("tracked_link_slug"):
+        scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+        host   = request.headers.get("X-Forwarded-Host", request.host)
+        tracked_short_url = f"{scheme}://{host}/t/{active_draft['tracked_link_slug']}"
+
     return render_template(
         "blast.html",
         user=current_user(),
@@ -138,6 +148,7 @@ def blast_compose(draft_id: int):
         active_draft=active_draft,
         audience_count=audience_count,
         image_upload_enabled=_image_upload_configured(),
+        tracked_short_url=tracked_short_url,
     )
 
 
@@ -153,6 +164,73 @@ def _s3_configured() -> bool:
 
 def _image_upload_configured() -> bool:
     return True
+
+
+@blast_bp.route("/t/<slug>")
+def track_redirect_operator(slug: str):
+    """
+    Tracked-link redirect served by the operator app — no auth required.
+    Mirrors the same route in the main app; both log to the shared DB table.
+    """
+    from ..db import get_conn
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, destination FROM tracked_links WHERE slug=%s", (slug,))
+            row = cur.fetchone()
+        if not row:
+            return "Link not found", 404
+        link_id, destination = row[0], row[1]
+        ip_raw = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
+        ip_hash = hashlib.sha256(ip_raw.encode()).hexdigest()[:16] if ip_raw else ""
+        ua_short = (request.user_agent.string or "")[:120]
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO tracked_link_clicks (link_id, ip_hash, ua_short) VALUES (%s,%s,%s)",
+                    (link_id, ip_hash, ua_short),
+                )
+        from flask import redirect as _redir
+        return _redir(destination, 302)
+    except Exception:
+        if "destination" in dir():
+            from flask import redirect as _redir
+            return _redir(destination, 302)
+        return "Error", 500
+    finally:
+        conn.close()
+
+
+def _get_or_create_tracked_link(raw_url: str, label: str) -> str | None:
+    """
+    Find an existing tracked link for `raw_url` or create a new one.
+    Returns the slug (not the full URL — caller builds the full URL).
+    """
+    if not raw_url or not raw_url.startswith(("http://", "https://")):
+        return None
+    from ..db import get_conn
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT slug FROM tracked_links WHERE destination=%s LIMIT 1", (raw_url,)
+                )
+                row = cur.fetchone()
+                if row:
+                    return row[0]
+                slug = _secrets.token_urlsafe(6)
+                cur.execute(
+                    "INSERT INTO tracked_links (slug, label, campaign_type, destination) "
+                    "VALUES (%s, %s, 'other', %s) RETURNING slug",
+                    (slug, (label or raw_url)[:200], raw_url),
+                )
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.exception("_get_or_create_tracked_link error: %s", e)
+        return None
+    finally:
+        conn.close()
 
 
 @blast_bp.route("/operator/blast/img/<int:image_id>/<filename>")
@@ -306,12 +384,19 @@ def save_draft():
     audience_filter = (request.form.get("audience_filter") or "").strip()[:200]
     sample_pct = _safe_int(request.form.get("audience_sample_pct"), 100, 1, 100)
     media_url = (request.form.get("media_url") or "").strip()[:1000]
+    link_url  = (request.form.get("link_url")  or "").strip()[:2000]
+    tracked_link_slug = (request.form.get("tracked_link_slug") or "").strip()
     draft_id_raw = request.form.get("draft_id")
     draft_id = int(draft_id_raw) if draft_id_raw and draft_id_raw.isdigit() else None
 
-    logger.info("  parsed: body=%r  audience_type=%r  audience_filter=%r  draft_id=%r  media_url=%r",
+    logger.info("  parsed: body=%r  audience_type=%r  audience_filter=%r  draft_id=%r  media_url=%r  link_url=%r",
                 body[:60] if body else "", audience_type, audience_filter, draft_id,
-                media_url[:60] if media_url else "")
+                media_url[:60] if media_url else "", link_url[:60] if link_url else "")
+
+    # Auto-create (or reuse) a tracked link for the operator-supplied link_url
+    if link_url and not tracked_link_slug:
+        tracked_link_slug = _get_or_create_tracked_link(link_url, name) or ""
+        logger.info("  tracked_link_slug=%r for link_url=%r", tracked_link_slug, link_url[:60])
 
     if not body:
         logger.warning("  BLOCKED: body is empty")
@@ -323,6 +408,7 @@ def save_draft():
             name=name, body=body, channel=channel,
             audience_type=audience_type, audience_filter=audience_filter,
             sample_pct=sample_pct, media_url=media_url,
+            link_url=link_url, tracked_link_slug=tracked_link_slug,
             created_by=user["email"], draft_id=draft_id,
         )
         logger.info("  saved draft id=%s", new_id)

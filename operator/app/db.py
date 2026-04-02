@@ -83,6 +83,11 @@ def init_db():
 
         # ── Idempotent column additions ────────────────────────────────────
         "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS media_url TEXT DEFAULT ''",
+        # link_url: raw URL entered by operator; tracked_link_slug: the /t/<slug> we created
+        "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS link_url TEXT DEFAULT ''",
+        "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS tracked_link_slug TEXT DEFAULT ''",
+        # sent_to on tracked_links: cumulative recipients across all blasts using this link
+        "ALTER TABLE tracked_links ADD COLUMN IF NOT EXISTS sent_to INT DEFAULT 0",
         "ALTER TABLE operator_blast_images ADD COLUMN IF NOT EXISTS data_b64 TEXT",
 
         # Drop NOT NULL on legacy BYTEA column — only needed on old deployments

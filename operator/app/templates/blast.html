@@ -251,6 +251,33 @@
           </p>
         </div>
 
+        <!-- Trackable link -->
+        <div class="mb-5">
+          <label class="section-label mb-2 block">
+            Trackable link
+            <span class="text-xs font-normal ml-1" style="color:var(--text-dim);">(optional — click tracking)</span>
+          </label>
+          <input type="url" name="link_url" class="zarna-input"
+                 placeholder="https://… — paste any link to auto-track clicks"
+                 value="{{ active_draft.link_url or '' }}"
+                 {{ 'readonly' if active_draft.status in ('scheduled','sending') else '' }}>
+          <input type="hidden" name="tracked_link_slug" value="{{ active_draft.tracked_link_slug or '' }}">
+          {% if tracked_short_url %}
+          <p class="text-xs mt-2" style="color:var(--text-dim);">
+            ✅ Tracked as
+            <code style="color:var(--pink);">{{ tracked_short_url }}</code>
+            — appended to message automatically &nbsp;
+            <button type="button"
+                    onclick="navigator.clipboard.writeText('{{ tracked_short_url }}');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)"
+                    class="text-xs px-2 py-0.5 rounded" style="background:#1f2937;border:1px solid #374151;color:#9ca3af;cursor:pointer;">Copy</button>
+          </p>
+          {% elif active_draft.link_url %}
+          <p class="text-xs mt-2" style="color:#fbbf24;">⏳ Save draft to generate the tracked link.</p>
+          {% else %}
+          <p class="text-xs mt-2" style="color:var(--text-dim);">The link will be converted to a short tracking URL and appended to your message. Fans click through normally — you see the count in the Conversions tab.</p>
+          {% endif %}
+        </div>
+
         <!-- Image / MMS attachment -->
         <div class="mb-6" x-data="imageAttach('{{ (active_draft.media_url or '')|e }}', {{ 'true' if image_upload_enabled else 'false' }})">
           <div class="flex items-center justify-between mb-2">

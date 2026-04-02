@@ -104,6 +104,10 @@ def _init_tracking_tables():
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_tlc_clicked_at ON tracked_link_clicks(clicked_at)"
                 )
+                # sent_to: total recipients across all blasts that used this link
+                cur.execute(
+                    "ALTER TABLE tracked_links ADD COLUMN IF NOT EXISTS sent_to INT DEFAULT 0"
+                )
     except Exception as e:
         import logging
         logging.warning("_init_tracking_tables error: %s", e)
@@ -486,7 +490,7 @@ def _fetch_dashboard(
                 try:
                     cur.execute("""
                         SELECT tl.id, tl.slug, tl.label, tl.campaign_type, tl.destination,
-                               tl.created_at,
+                               tl.created_at, COALESCE(tl.sent_to, 0) AS sent_to,
                                COUNT(tlc.id)                                                AS total_clicks,
                                COUNT(tlc.id) FILTER (WHERE tlc.clicked_at >= NOW()-INTERVAL '7 days') AS clicks_7d
                         FROM   tracked_links tl
@@ -873,8 +877,14 @@ def admin():
         ct = lnk["campaign_type"] or "other"
         bg, fg = type_colors.get(ct, type_colors["other"])
         created = lnk["created_at"].strftime("%b %d %Y") if lnk.get("created_at") else "—"
-        tc = lnk["total_clicks"]
-        wc = lnk["clicks_7d"]
+        tc      = lnk["total_clicks"]
+        wc      = lnk["clicks_7d"]
+        sent_to = lnk["sent_to"]
+        ctr_html = "—"
+        if sent_to > 0:
+            ctr_pct = round(tc / sent_to * 100, 1)
+            ctr_color = "#4ade80" if ctr_pct >= 5 else ("#fbbf24" if ctr_pct >= 1 else "#f87171")
+            ctr_html = f'<span style="color:{ctr_color};font-weight:700;">{ctr_pct}%</span>'
         conv_rows_html += f"""
         <tr class="conv-row">
           <td style="padding:12px 14px;color:#e2e8f0;font-weight:500;">{label_e}</td>
@@ -889,6 +899,8 @@ def admin():
           </td>
           <td style="padding:12px 14px;text-align:center;font-size:20px;font-weight:800;color:#a78bfa;">{tc:,}</td>
           <td style="padding:12px 14px;text-align:center;font-size:16px;font-weight:700;color:#4ade80;">{wc:,}</td>
+          <td style="padding:12px 14px;text-align:center;color:#94a3b8;font-size:14px;">{sent_to:,}</td>
+          <td style="padding:12px 14px;text-align:center;font-size:14px;">{ctr_html}</td>
           <td style="padding:12px 14px;color:#64748b;font-size:12px;">{created}</td>
           <td style="padding:12px 14px;">
             <form method="post" action="/admin/conversions/{lnk['id']}/delete"
@@ -1290,13 +1302,15 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
     <!-- Links table -->
     <div class="card" style="padding:0;overflow:hidden;">
       <table class="conv-table">
-        <thead>
+          <thead>
           <tr>
             <th>Label</th>
             <th>Type</th>
             <th>Tracked URL</th>
             <th class="center">All-time clicks</th>
             <th class="center">Last 7 days</th>
+            <th class="center">Sent to</th>
+            <th class="center">CTR</th>
             <th>Created</th>
             <th></th>
           </tr>

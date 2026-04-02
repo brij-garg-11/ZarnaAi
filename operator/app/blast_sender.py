@@ -28,11 +28,26 @@ def execute_blast(draft_id: int):
         logger.error("Blast draft %s not found in DB", draft_id)
         return
 
-    media_url = (draft.get("media_url") or "").strip()
-    logger.info("  draft: body=%r  channel=%r  audience_type=%r  audience_filter=%r  media_url=%r",
+    media_url          = (draft.get("media_url") or "").strip()
+    tracked_link_slug  = (draft.get("tracked_link_slug") or "").strip()
+    tracked_short_url  = ""
+
+    # Build the full public short URL from the stored slug (main app serves /t/<slug>)
+    # We derive the base URL from DATABASE_URL domain or fall back to the env var.
+    if tracked_link_slug:
+        main_base = os.getenv("MAIN_APP_BASE_URL", "").rstrip("/")
+        if not main_base:
+            # Derive from Railway's public domain env var when MAIN_APP_BASE_URL not set
+            railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
+            main_base = f"https://{railway_domain}" if railway_domain else ""
+        tracked_short_url = f"{main_base}/t/{tracked_link_slug}" if main_base else ""
+        logger.info("  tracked link: slug=%r  short_url=%r", tracked_link_slug, tracked_short_url)
+
+    logger.info("  draft: body=%r  channel=%r  audience_type=%r  audience_filter=%r  media_url=%r  link_slug=%r",
                 (draft["body"] or "")[:60], draft["channel"],
                 draft["audience_type"], draft["audience_filter"],
-                media_url[:60] if media_url else "")
+                media_url[:60] if media_url else "",
+                tracked_link_slug or "")
 
     phones = get_audience_phones(
         audience_type=draft["audience_type"],
@@ -54,12 +69,18 @@ def execute_blast(draft_id: int):
         mark_blast_sent(draft_id, 0, len(phones), len(phones))
         return
 
+    # Append the tracked short URL to every outgoing message (invisible to operator)
+    send_body = body
+    if tracked_short_url:
+        send_body = f"{body}\n{tracked_short_url}"
+        logger.info("  appended tracked URL to body — final length=%d", len(send_body))
+
     sent = 0
     failed = 0
 
     for phone in phones:
         try:
-            ok = _send_one(phone, body, channel, media_url=media_url)
+            ok = _send_one(phone, send_body, channel, media_url=media_url)
             logger.info("  send to ...%s via %s: %s", phone[-4:], channel, "OK" if ok else "FAIL")
             if ok:
                 sent += 1
@@ -72,6 +93,22 @@ def execute_blast(draft_id: int):
 
     mark_blast_sent(draft_id, sent, failed, len(phones))
     logger.info("=== BLAST %s DONE: %s sent, %s failed of %s ===", draft_id, sent, failed, len(phones))
+
+    # Update tracked_links.sent_to with the number of recipients this blast reached
+    if tracked_link_slug and len(phones) > 0:
+        try:
+            from .db import get_conn
+            conn = get_conn()
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE tracked_links SET sent_to = sent_to + %s WHERE slug = %s",
+                        (len(phones), tracked_link_slug),
+                    )
+            conn.close()
+            logger.info("  updated sent_to +%d for slug=%r", len(phones), tracked_link_slug)
+        except Exception as e:
+            logger.warning("  could not update sent_to: %s", e)
 
 
 def execute_blast_async(draft_id: int):

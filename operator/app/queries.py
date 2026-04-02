@@ -211,7 +211,9 @@ def list_blast_drafts() -> list[dict]:
                 SELECT id, name, body, channel, audience_type, audience_filter,
                        audience_sample_pct, status, scheduled_at, sent_at,
                        sent_count, failed_count, total_recipients, created_by, created_at,
-                       COALESCE(media_url, '') AS media_url
+                       COALESCE(media_url, '')          AS media_url,
+                       COALESCE(link_url, '')           AS link_url,
+                       COALESCE(tracked_link_slug, '')  AS tracked_link_slug
                 FROM blast_drafts ORDER BY updated_at DESC LIMIT 100
             """)
             return [dict(r) for r in cur.fetchall()]
@@ -232,7 +234,9 @@ def get_blast_draft(draft_id: int) -> dict | None:
 
 def save_blast_draft(*, name: str, body: str, channel: str, audience_type: str,
                      audience_filter: str, sample_pct: int, created_by: str,
-                     media_url: str = "", draft_id: int | None = None) -> int:
+                     media_url: str = "", link_url: str = "",
+                     tracked_link_slug: str = "",
+                     draft_id: int | None = None) -> int:
     conn = get_conn()
     try:
         with conn:
@@ -242,19 +246,21 @@ def save_blast_draft(*, name: str, body: str, channel: str, audience_type: str,
                         UPDATE blast_drafts
                         SET name=%s, body=%s, channel=%s, audience_type=%s,
                             audience_filter=%s, audience_sample_pct=%s,
-                            media_url=%s, status='draft', updated_at=NOW()
+                            media_url=%s, link_url=%s, tracked_link_slug=%s,
+                            status='draft', updated_at=NOW()
                         WHERE id=%s
                     """, (name, body, channel, audience_type, audience_filter, sample_pct,
-                          media_url, draft_id))
+                          media_url, link_url, tracked_link_slug, draft_id))
                     return draft_id
                 else:
                     cur.execute("""
                         INSERT INTO blast_drafts
                           (name, body, channel, audience_type, audience_filter,
-                           audience_sample_pct, media_url, status, created_by)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,'draft',%s) RETURNING id
+                           audience_sample_pct, media_url, link_url, tracked_link_slug,
+                           status, created_by)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'draft',%s) RETURNING id
                     """, (name, body, channel, audience_type, audience_filter, sample_pct,
-                          media_url, created_by))
+                          media_url, link_url, tracked_link_slug, created_by))
                     return cur.fetchone()[0]
     finally:
         conn.close()
