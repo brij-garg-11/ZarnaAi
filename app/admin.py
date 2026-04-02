@@ -274,6 +274,7 @@ def track_redirect(slug: str):
     Logs an anonymous click then 302s to the real destination.
     """
     _init_tracking_tables()
+    destination = None
     conn = _get_db()
     if not conn:
         _tlog.error("track_redirect: no DB connection for slug=%r", slug)
@@ -286,8 +287,16 @@ def track_redirect(slug: str):
             row = cur.fetchone()
         if not row:
             _tlog.warning("track_redirect: slug=%r not found in tracked_links", slug)
+            conn.close()
             return "Link not found", 404
         link_id, destination = row[0], row[1]
+    except Exception as e:
+        _tlog.error("track_redirect: DB lookup error for slug=%r: %s", slug, e)
+        conn.close()
+        return "Link not found", 404
+
+    # Always redirect — log the click separately so an error there never breaks the redirect
+    try:
         ip_raw = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
         ip_hash = hashlib.sha256(ip_raw.encode()).hexdigest()[:16] if ip_raw else ""
         ua_short = (request.user_agent.string or "")[:120]
@@ -297,11 +306,13 @@ def track_redirect(slug: str):
                     "INSERT INTO tracked_link_clicks (link_id, ip_hash, ua_short) VALUES (%s,%s,%s)",
                     (link_id, ip_hash, ua_short),
                 )
-        return _redirect(destination, 302)
-    except Exception:
-        return _redirect(destination, 302) if "destination" in dir() else ("Error", 500)
+        _tlog.info("track_redirect: logged click for slug=%r link_id=%s", slug, link_id)
+    except Exception as e:
+        _tlog.error("track_redirect: failed to log click for slug=%r link_id=%s: %s", slug, link_id, e)
     finally:
         conn.close()
+
+    return _redirect(destination, 302)
 
 
 @admin_bp.route("/admin/conversions/new", methods=["POST"])
