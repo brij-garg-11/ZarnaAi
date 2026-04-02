@@ -230,8 +230,13 @@ def upload_image():
         finally:
             conn.close()
 
-        base_url = request.host_url.rstrip("/")
+        # Always use the public HTTPS origin so SlickText/Twilio can fetch
+        # the image without being redirected (Railway terminates TLS at proxy).
+        scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+        host = request.headers.get("X-Forwarded-Host", request.host)
+        base_url = f"{scheme}://{host}"
         url = f"{base_url}/operator/blast/img/{image_id}/{filename}"
+        logger.info("upload_image: public URL=%s", url)
         return jsonify({"url": url, "size": len(data)})
     except Exception as e:
         logger.exception("DB image store failed: %s", e)
