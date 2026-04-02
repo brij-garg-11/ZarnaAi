@@ -201,10 +201,12 @@ def track_redirect_operator(slug: str):
         conn.close()
 
 
-def _get_or_create_tracked_link(raw_url: str, label: str) -> str | None:
+def _create_tracked_link(raw_url: str, label: str) -> str | None:
     """
-    Find an existing tracked link for `raw_url` or create a new one.
-    Returns the slug (not the full URL — caller builds the full URL).
+    Always create a brand-new tracked link for this specific blast draft.
+    Never reuses an existing row — each blast gets its own slug so CTR
+    is measured per-message, not per-destination URL.
+    Returns the new slug.
     """
     if not raw_url or not raw_url.startswith(("http://", "https://")):
         return None
@@ -213,12 +215,6 @@ def _get_or_create_tracked_link(raw_url: str, label: str) -> str | None:
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT slug FROM tracked_links WHERE destination=%s LIMIT 1", (raw_url,)
-                )
-                row = cur.fetchone()
-                if row:
-                    return row[0]
                 slug = _secrets.token_urlsafe(6)
                 cur.execute(
                     "INSERT INTO tracked_links (slug, label, campaign_type, destination) "
@@ -227,7 +223,7 @@ def _get_or_create_tracked_link(raw_url: str, label: str) -> str | None:
                 )
                 return cur.fetchone()[0]
     except Exception as e:
-        logger.exception("_get_or_create_tracked_link error: %s", e)
+        logger.exception("_create_tracked_link error: %s", e)
         return None
     finally:
         conn.close()
@@ -393,10 +389,11 @@ def save_draft():
                 body[:60] if body else "", audience_type, audience_filter, draft_id,
                 media_url[:60] if media_url else "", link_url[:60] if link_url else "")
 
-    # Auto-create (or reuse) a tracked link for the operator-supplied link_url
+    # Create a new tracked link the first time a link_url is saved with this draft.
+    # We intentionally never reuse slugs across drafts so each blast has its own CTR.
     if link_url and not tracked_link_slug:
-        tracked_link_slug = _get_or_create_tracked_link(link_url, name) or ""
-        logger.info("  tracked_link_slug=%r for link_url=%r", tracked_link_slug, link_url[:60])
+        tracked_link_slug = _create_tracked_link(link_url, name) or ""
+        logger.info("  created tracked_link_slug=%r for link_url=%r", tracked_link_slug, link_url[:60])
 
     if not body:
         logger.warning("  BLOCKED: body is empty")
