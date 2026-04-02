@@ -108,6 +108,17 @@ def _init_tracking_tables():
                 cur.execute(
                     "ALTER TABLE tracked_links ADD COLUMN IF NOT EXISTS sent_to INT DEFAULT 0"
                 )
+                # Seed the two permanent bot-tracking rows (idempotent — ignored if slug exists)
+                cur.execute("""
+                    INSERT INTO tracked_links (slug, label, campaign_type, destination)
+                    VALUES ('bot-website', 'Bot → Website / Tickets', 'ticket',  'https://zarnagarg.com')
+                    ON CONFLICT (slug) DO NOTHING
+                """)
+                cur.execute("""
+                    INSERT INTO tracked_links (slug, label, campaign_type, destination)
+                    VALUES ('bot-podcast', 'Bot → Podcast', 'podcast', 'https://open.spotify.com')
+                    ON CONFLICT (slug) DO NOTHING
+                """)
     except Exception as e:
         import logging
         logging.warning("_init_tracking_tables error: %s", e)
@@ -242,6 +253,9 @@ def admin_export_thread():
     )
 
 
+_tlog = __import__("logging").getLogger(__name__)
+
+
 @admin_bp.route("/t/<slug>")
 def track_redirect(slug: str):
     """
@@ -251,6 +265,7 @@ def track_redirect(slug: str):
     _init_tracking_tables()
     conn = _get_db()
     if not conn:
+        _tlog.error("track_redirect: no DB connection for slug=%r", slug)
         return "Link not found", 404
     try:
         with conn.cursor() as cur:
@@ -259,6 +274,7 @@ def track_redirect(slug: str):
             )
             row = cur.fetchone()
         if not row:
+            _tlog.warning("track_redirect: slug=%r not found in tracked_links", slug)
             return "Link not found", 404
         link_id, destination = row[0], row[1]
         ip_raw = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()

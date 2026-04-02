@@ -76,8 +76,8 @@ def _ensure_bot_links(base_url: str) -> dict[str, str]:
         return {}
 
     rows = [
-        (_SLUG_WEBSITE, "Bot → Website / Tickets", "ticket",  _WEBSITE_DOMAIN),
-        (_SLUG_PODCAST, "Bot → Podcast",           "podcast", "podcast"),
+        (_SLUG_WEBSITE, "Bot → Website / Tickets", "ticket",  f"https://{_WEBSITE_DOMAIN}"),
+        (_SLUG_PODCAST, "Bot → Podcast",           "podcast", "https://open.spotify.com"),
     ]
     result: dict[str, str] = {}
     try:
