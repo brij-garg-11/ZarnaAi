@@ -173,14 +173,28 @@ def track_redirect_operator(slug: str):
     Mirrors the same route in the main app; both log to the shared DB table.
     """
     from ..db import get_conn
+    from flask import redirect as _redir
+
+    destination = None
     conn = get_conn()
+
+    # ── Slug lookup ────────────────────────────────────────────────────────
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT id, destination FROM tracked_links WHERE slug=%s", (slug,))
             row = cur.fetchone()
         if not row:
+            logger.warning("track_redirect_operator: slug=%r not found", slug)
+            conn.close()
             return "Link not found", 404
         link_id, destination = row[0], row[1]
+    except Exception as e:
+        logger.error("track_redirect_operator: lookup error slug=%r: %s", slug, e)
+        conn.close()
+        return "Link not found", 404
+
+    # ── Click logging (non-critical — redirect always fires) ────────────────
+    try:
         ip_raw = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
         ip_hash = hashlib.sha256(ip_raw.encode()).hexdigest()[:16] if ip_raw else ""
         ua_short = (request.user_agent.string or "")[:120]
@@ -190,15 +204,13 @@ def track_redirect_operator(slug: str):
                     "INSERT INTO tracked_link_clicks (link_id, ip_hash, ua_short) VALUES (%s,%s,%s)",
                     (link_id, ip_hash, ua_short),
                 )
-        from flask import redirect as _redir
-        return _redir(destination, 302)
-    except Exception:
-        if "destination" in dir():
-            from flask import redirect as _redir
-            return _redir(destination, 302)
-        return "Error", 500
+        logger.info("track_redirect_operator: logged click slug=%r link_id=%s", slug, link_id)
+    except Exception as e:
+        logger.error("track_redirect_operator: failed to log click slug=%r link_id=%s: %s", slug, link_id, e)
     finally:
         conn.close()
+
+    return _redir(destination, 302)
 
 
 def _create_tracked_link(raw_url: str, label: str) -> str | None:

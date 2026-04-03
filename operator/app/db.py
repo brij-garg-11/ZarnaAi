@@ -86,6 +86,19 @@ def init_db():
         # link_url: raw URL entered by operator; tracked_link_slug: the /t/<slug> we created
         "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS link_url TEXT DEFAULT ''",
         "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS tracked_link_slug TEXT DEFAULT ''",
+        # tracked_link_clicks: shared with main app — ensure it exists here too
+        # so the operator's /t/<slug> redirect can log clicks independently
+        """
+        CREATE TABLE IF NOT EXISTS tracked_link_clicks (
+            id         BIGSERIAL PRIMARY KEY,
+            link_id    BIGINT NOT NULL REFERENCES tracked_links(id) ON DELETE CASCADE,
+            clicked_at TIMESTAMPTZ DEFAULT NOW(),
+            ip_hash    TEXT DEFAULT '',
+            ua_short   TEXT DEFAULT ''
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_tlc_link_id ON tracked_link_clicks(link_id)",
+        "CREATE INDEX IF NOT EXISTS idx_tlc_clicked_at ON tracked_link_clicks(clicked_at)",
         # sent_to on tracked_links: cumulative recipients across all blasts using this link
         "ALTER TABLE tracked_links ADD COLUMN IF NOT EXISTS sent_to INT DEFAULT 0",
         "ALTER TABLE operator_blast_images ADD COLUMN IF NOT EXISTS data_b64 TEXT",
