@@ -211,6 +211,12 @@ class PostgresStorage(BaseStorage):
                         cur.execute(sql)
                     for sql in _QUIZ_MIGRATIONS:
                         cur.execute(sql)
+                # conversation_sessions lives in session_manager — ensure it exists here too
+                try:
+                    from app.analytics.session_manager import ensure_session_tables
+                    ensure_session_tables()
+                except Exception:
+                    pass
         except (psycopg2.errors.UniqueViolation, psycopg2.errors.DeadlockDetected):
             # Another worker won the race and already ran the migrations.
             # All DDL is idempotent (IF NOT EXISTS / ADD COLUMN IF NOT EXISTS)

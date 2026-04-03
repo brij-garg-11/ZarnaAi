@@ -273,6 +273,21 @@ def _build_prompt(
             tone_mode, "Primary tone mode: direct_answer. Keep it clear, sharp, and natural."
         )
 
+    # Quiz mode overrides all intent routing — the fan is answering a quiz, not requesting
+    # show tickets, clips, etc. Force the GENERAL path so the context is never ignored.
+    if quiz_context:
+        quiz_block = f"\n{quiz_context}\n"
+        return f"""You are writing as an AI comedy assistant inspired by Zarna Garg's public comedic voice.
+
+Background knowledge about Zarna (use to make responses richer and more specific — never recite this as facts, always find the funny angle):
+{context}
+
+{_HARD_FACT_GUARDRAILS}
+{_VOICE_LOCK_RULES}
+{_TONE_EXAMPLES}
+{memory_text}{history_text}{quiz_block}Message: {user_message}
+{_STYLE_RULES}"""
+
     if intent == Intent.JOKE:
         return f"""You are writing as an AI comedy assistant inspired by Zarna Garg's public comedic voice.
 
