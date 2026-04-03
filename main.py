@@ -25,6 +25,7 @@ from app.admin import admin_bp
 from app.analytics.blueprint import analytics_bp
 from app.live_shows.blueprint import live_shows_bp
 from app.live_shows.signup import LiveShowSignupResult, try_live_show_signup
+from app.live_shows.quiz import get_active_quiz_for_fan, record_quiz_response, build_quiz_context
 from app.ops_metrics import ai_reply_enter, ai_reply_leave, bump as ops_bump
 
 logging.basicConfig(level=logging.INFO)
@@ -173,14 +174,14 @@ def message():
 # ---------------------------------------------------------------------------
 
 
-def _process_slicktext_message(phone_number: str, message_text: str) -> None:
+def _process_slicktext_message(phone_number: str, message_text: str, quiz_context: str = None) -> None:
     if not ai_reply_enter():
         ops_bump("ai_reply_capacity_reject")
         logging.warning("AI at capacity — SlickText message dropped (...%s)", phone_number[-4:])
         return
     try:
         try:
-            reply = brain.handle_incoming_message(phone_number, message_text)
+            reply = brain.handle_incoming_message(phone_number, message_text, quiz_context=quiz_context)
         except Exception as e:
             ops_bump("ai_reply_error")
             logging.error("Error processing SlickText message from %s: %s", phone_number, e)
@@ -245,9 +246,24 @@ def slicktext_webhook():
         logging.warning("Rate limit hit for ...%s — dropping message", phone_number[-4:] if phone_number else "?")
         return jsonify({"status": "rate_limited"}), 200
 
+    # Check for an active pop quiz for this fan — inject context so AI can react in character.
+    quiz_ctx = None
+    try:
+        quiz_session = get_active_quiz_for_fan(phone_number)
+        if quiz_session:
+            record_quiz_response(quiz_session["id"], phone_number, message_text)
+            quiz_ctx = build_quiz_context(
+                quiz_session["question_text"],
+                quiz_session["correct_answer"],
+                message_text,
+            )
+            logging.info("Quiz intercept: quiz_id=%s fan=...%s", quiz_session["id"], phone_number[-4:] if phone_number else "?")
+    except Exception:
+        logging.exception("Quiz intercept failed — continuing with normal AI reply")
+
     threading.Thread(
         target=_process_slicktext_message,
-        args=(phone_number, message_text),
+        args=(phone_number, message_text, quiz_ctx),
         daemon=True,
     ).start()
 
@@ -259,14 +275,14 @@ def slicktext_webhook():
 # ---------------------------------------------------------------------------
 
 
-def _process_twilio_message(phone_number: str, message_text: str) -> None:
+def _process_twilio_message(phone_number: str, message_text: str, quiz_context: str = None) -> None:
     if not ai_reply_enter():
         ops_bump("ai_reply_capacity_reject")
         logging.warning("AI at capacity — Twilio message dropped (...%s)", phone_number[-4:])
         return
     try:
         try:
-            reply = brain.handle_incoming_message(phone_number, message_text)
+            reply = brain.handle_incoming_message(phone_number, message_text, quiz_context=quiz_context)
         except Exception as e:
             ops_bump("ai_reply_error")
             logging.error("Error processing Twilio message from %s: %s", phone_number, e)
@@ -344,9 +360,24 @@ def twilio_webhook():
         logging.warning("Rate limit hit for Twilio ...%s — dropping message", phone_number[-4:] if phone_number else "?")
         return ("", 204)
 
+    # Check for an active pop quiz for this fan — inject context so AI can react in character.
+    quiz_ctx = None
+    try:
+        quiz_session = get_active_quiz_for_fan(phone_number)
+        if quiz_session:
+            record_quiz_response(quiz_session["id"], phone_number, message_text)
+            quiz_ctx = build_quiz_context(
+                quiz_session["question_text"],
+                quiz_session["correct_answer"],
+                message_text,
+            )
+            logging.info("Quiz intercept: quiz_id=%s fan=...%s", quiz_session["id"], phone_number[-4:] if phone_number else "?")
+    except Exception:
+        logging.exception("Quiz intercept failed — continuing with normal AI reply")
+
     threading.Thread(
         target=_process_twilio_message,
-        args=(phone_number, message_text),
+        args=(phone_number, message_text, quiz_ctx),
         daemon=True,
     ).start()
 

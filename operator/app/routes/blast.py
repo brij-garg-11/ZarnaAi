@@ -394,6 +394,10 @@ def save_draft():
     media_url = (request.form.get("media_url") or "").strip()[:1000]
     link_url  = (request.form.get("link_url")  or "").strip()[:2000]
     tracked_link_slug = (request.form.get("tracked_link_slug") or "").strip()
+    # Quiz fields — checkbox sends "1" when checked; hidden field is fallback
+    is_quiz_raw = request.form.get("is_quiz") or request.form.get("is_quiz_hidden") or "0"
+    is_quiz = is_quiz_raw in ("1", "true", "on")
+    quiz_correct_answer = (request.form.get("quiz_correct_answer") or "").strip()[:500]
     draft_id_raw = request.form.get("draft_id")
     draft_id = int(draft_id_raw) if draft_id_raw and draft_id_raw.isdigit() else None
 
@@ -418,6 +422,7 @@ def save_draft():
             audience_type=audience_type, audience_filter=audience_filter,
             sample_pct=sample_pct, media_url=media_url,
             link_url=link_url, tracked_link_slug=tracked_link_slug,
+            is_quiz=is_quiz, quiz_correct_answer=quiz_correct_answer,
             created_by=user["email"], draft_id=draft_id,
         )
         logger.info("  saved draft id=%s", new_id)
@@ -532,6 +537,8 @@ def send_now(draft_id: int):
         audience_type=audience_type,
         audience_filter=audience_filter,
         sample_pct=sample_pct,
+        is_quiz=bool(draft.get("is_quiz")),
+        quiz_correct_answer=draft.get("quiz_correct_answer") or "",
         created_by=user["email"],
         draft_id=draft_id,
     )

@@ -3,6 +3,7 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
 
 from app.analytics.outcome_scorer import (
     save_reply_context_async,
@@ -53,7 +54,7 @@ class ZarnaBrain:
         self.storage = storage
         self.retriever = retriever
 
-    def handle_incoming_message(self, phone_number: str, message_text: str) -> str:
+    def handle_incoming_message(self, phone_number: str, message_text: str, quiz_context: Optional[str] = None) -> str:
         # 1. Ensure contact exists
         self.storage.save_contact(phone_number)
 
@@ -148,6 +149,7 @@ class ZarnaBrain:
             emphasis_suppress_all=emphasis_suppress_all,
             routing_tier=routing_tier,
             tone_mode=tone_mode,
+            quiz_context=quiz_context,
         )
         gen_ms = (time.perf_counter() - t_gen) * 1000
 

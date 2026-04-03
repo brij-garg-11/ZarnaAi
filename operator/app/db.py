@@ -108,6 +108,35 @@ def init_db():
         # Silently skipped on fresh DBs where the column is already nullable.
         "ALTER TABLE operator_blast_images ALTER COLUMN data DROP NOT NULL",
 
+        # ── Quiz tables (shared with main app via same DATABASE_URL) ──────────
+        """
+        CREATE TABLE IF NOT EXISTS quiz_sessions (
+            id             SERIAL PRIMARY KEY,
+            show_id        INT,
+            blast_draft_id BIGINT,
+            question_text  TEXT NOT NULL,
+            correct_answer TEXT NOT NULL,
+            created_at     TIMESTAMPTZ DEFAULT NOW(),
+            expires_at     TIMESTAMPTZ
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS quiz_responses (
+            id           BIGSERIAL PRIMARY KEY,
+            quiz_id      INT  NOT NULL REFERENCES quiz_sessions(id) ON DELETE CASCADE,
+            phone_number TEXT NOT NULL,
+            fan_answer   TEXT NOT NULL DEFAULT '',
+            answered_at  TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE (quiz_id, phone_number)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_quiz_sessions_active ON quiz_sessions (expires_at, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_quiz_responses_lookup ON quiz_responses (quiz_id, phone_number)",
+
+        # ── Quiz columns on blast_drafts ───────────────────────────────────
+        "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS is_quiz BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS quiz_correct_answer TEXT DEFAULT ''",
+
         # ── Data-cleanup on every startup ──────────────────────────────────
         # 1. Clear /tmp-based image URLs (ephemeral Railway filesystem, gone on redeploy)
         "UPDATE blast_drafts SET media_url='' WHERE media_url LIKE '%/operator/blast/uploads/%'",

@@ -120,6 +120,33 @@ _ENGAGEMENT_ANALYTICS_MIGRATIONS = (
     """,
 )
 
+# Quiz tables — created by main app so the inbound webhook can read them.
+_QUIZ_MIGRATIONS = (
+    """
+    CREATE TABLE IF NOT EXISTS quiz_sessions (
+        id             SERIAL PRIMARY KEY,
+        show_id        INT,
+        blast_draft_id BIGINT,
+        question_text  TEXT NOT NULL,
+        correct_answer TEXT NOT NULL,
+        created_at     TIMESTAMPTZ DEFAULT NOW(),
+        expires_at     TIMESTAMPTZ
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS quiz_responses (
+        id           BIGSERIAL PRIMARY KEY,
+        quiz_id      INT  NOT NULL REFERENCES quiz_sessions(id) ON DELETE CASCADE,
+        phone_number TEXT NOT NULL,
+        fan_answer   TEXT NOT NULL DEFAULT '',
+        answered_at  TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (quiz_id, phone_number)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_quiz_sessions_active ON quiz_sessions (expires_at, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_quiz_responses_lookup ON quiz_responses (quiz_id, phone_number)",
+)
+
 # Idempotent alters + audit log (runs after base live_shows DDL).
 _LIVE_SHOW_ADDITIVE_MIGRATIONS = (
     """
@@ -181,6 +208,8 @@ class PostgresStorage(BaseStorage):
                     for sql in _LIVE_SHOW_ADDITIVE_MIGRATIONS:
                         cur.execute(sql)
                     for sql in _ENGAGEMENT_ANALYTICS_MIGRATIONS:
+                        cur.execute(sql)
+                    for sql in _QUIZ_MIGRATIONS:
                         cur.execute(sql)
         except (psycopg2.errors.UniqueViolation, psycopg2.errors.DeadlockDetected):
             # Another worker won the race and already ran the migrations.

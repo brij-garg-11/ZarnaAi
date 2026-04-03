@@ -94,6 +94,21 @@ def execute_blast(draft_id: int):
     mark_blast_sent(draft_id, sent, failed, len(phones))
     logger.info("=== BLAST %s DONE: %s sent, %s failed of %s ===", draft_id, sent, failed, len(phones))
 
+    # If this was a quiz blast, create a quiz_sessions row now so inbound replies get context.
+    if draft.get("is_quiz") and (draft.get("quiz_correct_answer") or "").strip():
+        show_id = None
+        if draft.get("audience_type") == "show" and (draft.get("audience_filter") or "").strip():
+            try:
+                show_id = int(draft["audience_filter"])
+            except (ValueError, TypeError):
+                pass
+        _create_quiz_session(
+            show_id=show_id,
+            blast_draft_id=draft_id,
+            question_text=draft["body"],
+            correct_answer=draft["quiz_correct_answer"],
+        )
+
     # Update tracked_links.sent_to with the number of recipients this blast reached
     if tracked_link_slug and len(phones) > 0:
         try:
@@ -115,6 +130,35 @@ def execute_blast_async(draft_id: int):
     """Fire-and-forget: run execute_blast in a background thread."""
     t = threading.Thread(target=execute_blast, args=(draft_id,), daemon=True)
     t.start()
+
+
+def _create_quiz_session(
+    show_id: int | None,
+    blast_draft_id: int,
+    question_text: str,
+    correct_answer: str,
+) -> None:
+    """Insert a quiz_sessions row so the main app's inbound handler can quiz fans."""
+    try:
+        from .db import get_conn
+        conn = get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO quiz_sessions
+                      (show_id, blast_draft_id, question_text, correct_answer)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (show_id, blast_draft_id, question_text, correct_answer),
+                )
+        conn.close()
+        logger.info(
+            "_create_quiz_session: created for blast_draft_id=%s show_id=%s",
+            blast_draft_id, show_id,
+        )
+    except Exception as e:
+        logger.exception("_create_quiz_session failed: %s", e)
 
 
 def _send_one(phone: str, body: str, channel: str, *, media_url: str = "") -> bool:

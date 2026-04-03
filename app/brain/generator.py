@@ -255,6 +255,7 @@ def _build_prompt(
     history: List[dict],
     fan_memory: str = "",
     tone_mode: Optional[str] = None,
+    quiz_context: Optional[str] = None,
 ) -> str:
     context = "\n\n".join(_filter_chunks(chunks, intent)) if chunks else ""
     history_text = _format_history(history)
@@ -337,6 +338,7 @@ If no episode above is a strong match, tell them to check out the podcast in one
 Never use the word "honey" or "darling". No profanity. No homophobic language. Keep the text to 1-2 sentences max before the link."""
 
     # GENERAL
+    quiz_block = f"\n{quiz_context}\n" if quiz_context else ""
     return f"""You are writing as an AI comedy assistant inspired by Zarna Garg's public comedic voice.
 
 Background knowledge about Zarna (use to make responses richer and more specific — never recite this as facts, always find the funny angle):
@@ -346,7 +348,7 @@ Background knowledge about Zarna (use to make responses richer and more specific
 {_VOICE_LOCK_RULES}
 {tone_guidance}
 {_TONE_EXAMPLES}
-{memory_text}{history_text}Message: {user_message}
+{memory_text}{history_text}{quiz_block}Message: {user_message}
 {_STYLE_RULES}"""
 
 
@@ -525,10 +527,12 @@ def generate_zarna_reply(
     emphasis_suppress_all: bool = False,
     routing_tier: Optional[str] = None,
     tone_mode: Optional[str] = None,
+    quiz_context: Optional[str] = None,
 ) -> str:
     """
     Generate reply. For GENERAL/JOKE with multi-model enabled, pass routing_tier
     from classify_routing_tier(). Structured intents (clip/show/book/podcast) always use Gemini.
+    quiz_context, when set, injects pop-quiz framing so the AI reacts to the fan's answer.
     """
     prompt = _build_prompt(
         intent,
@@ -537,6 +541,7 @@ def generate_zarna_reply(
         history or [],
         fan_memory,
         tone_mode=tone_mode,
+        quiz_context=quiz_context,
     )
 
     raw = _produce_raw_text(intent, prompt, routing_tier)

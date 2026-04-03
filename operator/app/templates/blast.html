@@ -251,6 +251,37 @@
           </p>
         </div>
 
+        <!-- Pop Quiz mode (show audiences only) -->
+        <div class="mb-5" x-show="audienceType === 'show'" x-transition>
+          <div class="rounded-xl border p-4" style="border-color:var(--border);background:#0F0D0B;">
+            <div class="flex items-center justify-between mb-3">
+              <label class="section-label" style="color:var(--text);">🎯 Pop Quiz Mode</label>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" name="is_quiz" value="1" x-model="isQuiz"
+                       {{ 'checked' if active_draft.is_quiz else '' }}
+                       class="w-4 h-4 rounded" style="accent-color:var(--pink);">
+                <span class="text-sm" style="color:var(--text-muted);">Enable quiz</span>
+              </label>
+            </div>
+            <div x-show="isQuiz" x-transition>
+              <p class="text-xs mb-3" style="color:var(--text-muted);">
+                The message body above <strong style="color:var(--text);">is your question</strong> — fans reply with their answer
+                and the AI reacts in Zarna's voice (correct or wrong). Enter the correct answer below.
+                It's never sent to fans.
+              </p>
+              <label class="section-label mb-1 block" style="font-size:11px;">Correct answer <span style="color:var(--text-dim);">(stored privately)</span></label>
+              <input type="text" name="quiz_correct_answer" class="zarna-input"
+                     placeholder="e.g. Mumbai, 1987, Three kids…"
+                     value="{{ active_draft.quiz_correct_answer or '' }}"
+                     {{ 'readonly' if active_draft.status in ('scheduled','sending') else '' }}>
+            </div>
+            <div x-show="!isQuiz">
+              <p class="text-xs" style="color:var(--text-dim);">Turn on to send a quiz — fans reply with their answer and Zarna's AI reacts live.</p>
+            </div>
+          </div>
+          <input type="hidden" name="is_quiz_hidden" :value="isQuiz ? '1' : '0'">
+        </div>
+
         <!-- Trackable link -->
         <div class="mb-5">
           <label class="section-label mb-2 block">
@@ -501,6 +532,7 @@ function blastCompose() {
     countLoading: false,
     showSchedule: false,
     sendAt: '',
+    isQuiz: {{ 'true' if active_draft and active_draft.is_quiz else 'false' }},
 
     get resolvedFilter() {
       if (this.audienceType === 'tag') return this.audienceFilter;
