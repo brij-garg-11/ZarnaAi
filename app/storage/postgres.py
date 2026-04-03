@@ -169,6 +169,11 @@ class PostgresStorage(BaseStorage):
         try:
             with conn:
                 with conn.cursor() as cur:
+                    # Serialize migrations across gunicorn workers. Without this,
+                    # multiple workers starting simultaneously all run ALTER TABLE
+                    # on the same relations and deadlock each other.
+                    # pg_advisory_xact_lock holds until the transaction commits/rolls back.
+                    cur.execute("SELECT pg_advisory_xact_lock(1672394823)")
                     cur.execute(_DDL)
                     cur.execute(_MIGRATIONS)
                     for sql in _LIVE_SHOW_MIGRATIONS:
@@ -177,10 +182,10 @@ class PostgresStorage(BaseStorage):
                         cur.execute(sql)
                     for sql in _ENGAGEMENT_ANALYTICS_MIGRATIONS:
                         cur.execute(sql)
-        except psycopg2.errors.UniqueViolation:
-            # Race condition: two workers started simultaneously and both tried
-            # to CREATE TABLE at the same moment. The other worker already
-            # created the tables — safe to continue.
+        except (psycopg2.errors.UniqueViolation, psycopg2.errors.DeadlockDetected):
+            # Another worker won the race and already ran the migrations.
+            # All DDL is idempotent (IF NOT EXISTS / ADD COLUMN IF NOT EXISTS)
+            # so it is safe to continue — the tables exist.
             conn.rollback()
         finally:
             self._release(conn)
