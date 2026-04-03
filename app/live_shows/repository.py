@@ -207,7 +207,18 @@ def add_signup(show_id: int, phone: str, channel: str) -> bool:
                     """,
                     (show_id, norm, channel[:32]),
                 )
-                return cur.rowcount > 0
+                inserted = cur.rowcount > 0
+                # Ensure the fan exists in contacts so analytics can segment
+                # show-acquired fans from organic fans (source preserved if already set).
+                cur.execute(
+                    """
+                    INSERT INTO contacts (phone_number, source)
+                    VALUES (%s, 'live_show')
+                    ON CONFLICT (phone_number) DO NOTHING
+                    """,
+                    (norm,),
+                )
+                return inserted
     finally:
         c.close()
 

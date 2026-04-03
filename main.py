@@ -77,7 +77,7 @@ if running_in_production() and not slicktext_webhook_secret_configured():
 
 _seen_message_ids: OrderedDict = OrderedDict()
 _seen_lock = threading.Lock()
-_MAX_SEEN = 200
+_MAX_SEEN = 1000
 
 
 def _already_processed(message_id: str) -> bool:
