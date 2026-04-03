@@ -1804,9 +1804,8 @@ function toggleConvChart() {{
 @admin_bp.route("/admin/quizzes/kill-all", methods=["POST"])
 def kill_all_quizzes():
     """Immediately expire all active quiz sessions. Requires admin auth."""
-    auth = check_admin_auth(request)
-    if auth:
-        return auth
+    if not check_admin_auth():
+        return require_admin_auth_response()
     conn = get_db_connection()
     if not conn:
         return Response("DB not configured", status=503)
