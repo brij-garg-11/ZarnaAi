@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Engagement Analytics — Bot Intelligence Loop</title>
+  <style>
+    :root {
+      --bg: #0d0d12;
+      --surface: #16161e;
+      --surface2: #1e1e28;
+      --surface3: #252532;
+      --border: #2a2a38;
+      --accent: #7c6ff7;
+      --green: #4ade80;
+      --yellow: #fbbf24;
+      --red: #f87171;
+      --orange: #fb923c;
+      --blue: #60a5fa;
+      --pink: #f472b6;
+      --teal: #2dd4bf;
+      --text: #e4e4f0;
+      --muted: #7a7a90;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    header {
+      padding: 2rem 2rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(135deg, #0d0d1a 0%, #12123a 100%);
+    }
+    header h1 { font-size: 1.75rem; font-weight: 800; }
+    header h1 span { color: var(--accent); }
+    header p { color: var(--muted); margin-top: 0.3rem; font-size: 0.9rem; max-width: 700px; }
+
+    .nav-tabs {
+      display: flex;
+      gap: 0;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+    }
+    .tab {
+      padding: 0.9rem 1.5rem;
+      cursor: pointer;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--muted);
+      border-bottom: 3px solid transparent;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); background: var(--surface2); }
+
+    .page { display: none; padding: 2rem; max-width: 1100px; margin: 0 auto; }
+    .page.active { display: block; }
+
+    h2 { font-size: 1.25rem; font-weight: 700; margin-bottom: 0.5rem; }
+    h3 { font-size: 1rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--accent); }
+    p { color: var(--muted); font-size: 0.875rem; margin-bottom: 1rem; }
+
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.5rem; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.25rem; margin-bottom: 1.5rem; }
+    @media (max-width: 700px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+    }
+    .card-accent { border-left: 3px solid var(--accent); }
+    .card-green { border-left: 3px solid var(--green); }
+    .card-red { border-left: 3px solid var(--red); }
+    .card-yellow { border-left: 3px solid var(--yellow); }
+    .card-blue { border-left: 3px solid var(--blue); }
+    .card-teal { border-left: 3px solid var(--teal); }
+    .card-pink { border-left: 3px solid var(--pink); }
+    .card-orange { border-left: 3px solid var(--orange); }
+
+    .tag {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      margin: 0.15rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .tag-phase1 { background: #1a1a4a; color: var(--accent); border: 1px solid var(--accent); }
+    .tag-phase2 { background: #1a3a1a; color: var(--green); border: 1px solid var(--green); }
+    .tag-phase3 { background: #3a1a00; color: var(--orange); border: 1px solid var(--orange); }
+    .tag-phase4 { background: #3a001a; color: var(--pink); border: 1px solid var(--pink); }
+    .tag-db { background: #001a3a; color: var(--blue); border: 1px solid var(--blue); }
+    .tag-code { background: #1a1a1a; color: var(--teal); border: 1px solid var(--teal); }
+    .tag-hard { background: #3a0a0a; color: var(--red); border: 1px solid var(--red); }
+    .tag-easy { background: #0a2a0a; color: var(--green); border: 1px solid var(--green); }
+
+    code {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 0.8rem;
+      background: var(--surface3);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      color: var(--teal);
+    }
+    pre {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 0.78rem;
+      background: var(--surface3);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      overflow-x: auto;
+      line-height: 1.7;
+      margin: 0.75rem 0 1rem;
+      color: #c9d1d9;
+    }
+    pre .kw { color: #ff7b72; }
+    pre .str { color: #a5d6ff; }
+    pre .cmt { color: #8b949e; font-style: italic; }
+    pre .fn { color: #d2a8ff; }
+    pre .num { color: #79c0ff; }
+    pre .col { color: var(--teal); }
+
+    .flow {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin: 1rem 0;
+    }
+    .flow-box {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.6rem 1rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-align: center;
+    }
+    .flow-box.highlight { background: #1a1a4a; border-color: var(--accent); color: var(--accent); }
+    .flow-box.new { background: #001a3a; border-color: var(--blue); color: var(--blue); }
+    .flow-box.signal { background: #1a3a1a; border-color: var(--green); color: var(--green); }
+    .arrow { color: var(--muted); font-size: 1.1rem; }
+
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.6rem 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.85rem;
+    }
+    .metric-row:last-child { border-bottom: none; }
+    .metric-name { color: var(--text); font-weight: 500; }
+    .metric-source { color: var(--muted); font-size: 0.75rem; }
+    .metric-pill {
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 0.2rem 0.55rem;
+      border-radius: 20px;
+    }
+    .pill-green { background: #0a2a0a; color: var(--green); }
+    .pill-yellow { background: #2a1a00; color: var(--yellow); }
+    .pill-blue { background: #001a3a; color: var(--blue); }
+    .pill-red { background: #2a0a0a; color: var(--red); }
+
+    .phase-step {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 1.25rem;
+      align-items: flex-start;
+    }
+    .phase-num {
+      width: 2rem;
+      height: 2rem;
+      min-width: 2rem;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 0.85rem;
+    }
+    .phase-num.p1 { background: #1a1a4a; color: var(--accent); border: 2px solid var(--accent); }
+    .phase-num.p2 { background: #1a3a1a; color: var(--green); border: 2px solid var(--green); }
+    .phase-num.p3 { background: #3a1a00; color: var(--orange); border: 2px solid var(--orange); }
+    .phase-num.p4 { background: #3a001a; color: var(--pink); border: 2px solid var(--pink); }
+    .phase-content h4 { font-size: 0.9rem; font-weight: 700; margin-bottom: 0.3rem; }
+    .phase-content p { margin-bottom: 0; font-size: 0.83rem; }
+
+    ul.bullets { padding-left: 1.25rem; }
+    ul.bullets li { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.35rem; }
+    ul.bullets li strong { color: var(--text); }
+
+    .section-label {
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+      margin-bottom: 0.75rem;
+      margin-top: 1.5rem;
+    }
+    .divider { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
+
+    .big-stat {
+      text-align: center;
+      padding: 1.5rem 1rem;
+    }
+    .big-stat .num { font-size: 2.5rem; font-weight: 900; }
+    .big-stat .label { font-size: 0.78rem; color: var(--muted); margin-top: 0.25rem; }
+
+    .highlight-box {
+      background: #0d0d2a;
+      border: 1px solid var(--accent);
+      border-radius: 10px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+    .highlight-box h3 { color: var(--text); margin-bottom: 0.5rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Bot <span>Engagement Analytics</span> — The Intelligence Loop</h1>
+  <p>Track what Meta tracks. Every bot message becomes a signal. Build a feedback loop that continuously makes the AI smarter at keeping fans hooked.</p>
+</header>
+
+<div class="nav-tabs">
+  <div class="tab active" onclick="showPage('overview')">Overview</div>
+  <div class="tab" onclick="showPage('signals')">What to Track</div>
+  <div class="tab" onclick="showPage('schema')">DB Schema</div>
+  <div class="tab" onclick="showPage('code')">Code Changes</div>
+  <div class="tab" onclick="showPage('dashboard')">Dashboard Metrics</div>
+  <div class="tab" onclick="showPage('loop')">Feedback Loop</div>
+  <div class="tab" onclick="showPage('phases')">Build Phases</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ OVERVIEW -->
+<div id="page-overview" class="page active">
+  <h2>The Core Idea</h2>
+  <p>Right now the bot sends replies but you get no signal on how those replies performed. Adding an analytics layer turns every message exchange into training data — not for the AI model itself, but for you to know exactly which bot behaviors drive engagement vs. kill it.</p>
+
+  <div class="highlight-box">
+    <h3>The Meta Analogy</h3>
+    <p style="margin-bottom:0; color: var(--muted);">Instagram tracks: did you keep scrolling after this post? Did you DM someone about it? Did you visit a profile? Every interaction is a signal that feeds back into what gets shown next. <strong style="color:var(--text);">We do the same thing for SMS conversations.</strong> Did the fan reply after this bot text? How fast? Did they click the link? Did they go quiet? Every bot message has an engagement outcome — we just need to start recording it.</p>
+  </div>
+
+  <div class="section-label">The 5 questions you want answered</div>
+  <div class="grid-2">
+    <div class="card card-blue">
+      <h3>1. Session depth</h3>
+      <p>How many messages do fans send per conversation? Which conversations go deep (10+ messages) vs. die after 1–2?</p>
+      <span class="tag tag-db">messages table</span> <span class="tag tag-code">session tracker</span>
+    </div>
+    <div class="card card-red">
+      <h3>2. Drop-off triggers</h3>
+      <p>What was the last thing the bot said before a fan went silent for 24+ hours? What intents / tones / phrasings kill conversations?</p>
+      <span class="tag tag-db">message_outcomes</span> <span class="tag tag-code">silence detection</span>
+    </div>
+    <div class="card card-green">
+      <h3>3. Engagement drivers</h3>
+      <p>What does the bot say that makes a fan reply within seconds? What tone, intent, or type of content drives the fastest and most replies?</p>
+      <span class="tag tag-db">reply_delay_seconds</span> <span class="tag tag-code">outcome scorer</span>
+    </div>
+    <div class="card card-yellow">
+      <h3>4. Link CTR</h3>
+      <p>Of all bot messages that included a link, what % actually got clicked? Which message contexts (intent, tone) produce the highest click rates?</p>
+      <span class="tag tag-db">tracked_links (exists)</span> <span class="tag tag-code">link_tracker.py (exists)</span>
+    </div>
+    <div class="card card-pink">
+      <h3>5. Re-engagement</h3>
+      <p>How many fans come back after 7 days of silence? Which fans are "warm" vs. "cold" and how do first-message quality and early bot replies predict retention?</p>
+      <span class="tag tag-db">conversation_sessions</span> <span class="tag tag-code">cohort analysis</span>
+    </div>
+  </div>
+
+  <div class="section-label">What you already have (free head start)</div>
+  <div class="card">
+    <div class="flow" style="flex-wrap:wrap; gap:0.75rem;">
+      <div class="flow-box highlight">✅ messages table<br/><span style="font-weight:400;color:var(--muted);font-size:0.72rem;">every fan + bot msg stored</span></div>
+      <div class="arrow">→</div>
+      <div class="flow-box highlight">✅ intent classifier<br/><span style="font-weight:400;color:var(--muted);font-size:0.72rem;">JOKE, SHOW, CLIP, etc</span></div>
+      <div class="arrow">→</div>
+      <div class="flow-box highlight">✅ tone classifier<br/><span style="font-weight:400;color:var(--muted);font-size:0.72rem;">vulnerable, excited, etc</span></div>
+      <div class="arrow">→</div>
+      <div class="flow-box highlight">✅ link_tracker<br/><span style="font-weight:400;color:var(--muted);font-size:0.72rem;">clicks already recorded</span></div>
+      <div class="arrow">→</div>
+      <div class="flow-box highlight">✅ reply_metrics logs<br/><span style="font-weight:400;color:var(--muted);font-size:0.72rem;">gen_ms, tier, provider</span></div>
+    </div>
+    <p style="margin-top:0.75rem; margin-bottom:0;">You already have most of the raw ingredients. The work is adding a thin analytics layer on top — a few new DB columns, a scoring function that runs after each reply, and some dashboard queries.</p>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ SIGNALS -->
+<div id="page-signals" class="page">
+  <h2>Every Signal to Capture</h2>
+  <p>These are the data points to record per bot message. Most are derived — computed from existing data, not from any new input.</p>
+
+  <div class="section-label">Per bot message — engagement outcome</div>
+  <div class="card" style="margin-bottom:1.25rem;">
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">did_user_reply</div>
+        <div class="metric-source">Boolean — did the fan send any message after this bot reply?</div>
+      </div>
+      <span class="metric-pill pill-green">easiest signal</span>
+    </div>
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">reply_delay_seconds</div>
+        <div class="metric-source">How many seconds between bot message and next fan message (NULL = no reply)</div>
+      </div>
+      <span class="metric-pill pill-green">derived from timestamps</span>
+    </div>
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">fan_went_silent_after</div>
+        <div class="metric-source">Boolean — was this the last bot msg before 24h+ of no fan activity?</div>
+      </div>
+      <span class="metric-pill pill-yellow">needs a daily job</span>
+    </div>
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">link_clicked_within_1h</div>
+        <div class="metric-source">Did any tracked link in this message get clicked within 60 min?</div>
+      </div>
+      <span class="metric-pill pill-blue">join with tracked_links</span>
+    </div>
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">fan_msgs_after_this_bot_msg</div>
+        <div class="metric-source">How many more fan messages came after this one (in the same session)?</div>
+      </div>
+      <span class="metric-pill pill-green">derived from history</span>
+    </div>
+  </div>
+
+  <div class="section-label">Per bot message — context metadata (what the bot was doing when it sent this)</div>
+  <div class="card" style="margin-bottom:1.25rem;">
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">intent</div>
+        <div class="metric-source">GENERAL, JOKE, SHOW, CLIP, PODCAST, BOOK — already classified in handler.py</div>
+      </div>
+      <span class="metric-pill pill-green">already computed</span>
+    </div>
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">tone_mode</div>
+        <div class="metric-source">playful, warm, roast, vulnerable — already computed in handler.py</div>
+      </div>
+      <span class="metric-pill pill-green">already computed</span>
+    </div>
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">routing_tier</div>
+        <div class="metric-source">low / high / null — which AI tier was used</div>
+      </div>
+      <span class="metric-pill pill-green">already computed</span>
+    </div>
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">reply_length_chars</div>
+        <div class="metric-source">How long was the bot's reply? Short punchy vs. long thoughtful?</div>
+      </div>
+      <span class="metric-pill pill-green">len(reply)</span>
+    </div>
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">has_link</div>
+        <div class="metric-source">Did the bot include a tracked link in this reply?</div>
+      </div>
+      <span class="metric-pill pill-green">regex on reply text</span>
+    </div>
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">conversation_turn_number</div>
+        <div class="metric-source">Was this the 1st reply, 5th, 10th? Engagement at turn N matters differently</div>
+      </div>
+      <span class="metric-pill pill-green">count from history</span>
+    </div>
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">gen_ms</div>
+        <div class="metric-source">How long did this reply take to generate? Already logged, move to DB</div>
+      </div>
+      <span class="metric-pill pill-yellow">move from log to DB</span>
+    </div>
+  </div>
+
+  <div class="section-label">Per conversation session</div>
+  <div class="card" style="margin-bottom:1.25rem;">
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">session_duration_minutes</div>
+        <div class="metric-source">From first to last message in a session (gap > 24h = new session)</div>
+      </div>
+      <span class="metric-pill pill-yellow">needs session boundary logic</span>
+    </div>
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">total_user_messages</div>
+        <div class="metric-source">Fan messages in this session — depth of engagement</div>
+      </div>
+      <span class="metric-pill pill-green">count from messages</span>
+    </div>
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">ended_by</div>
+        <div class="metric-source">"user_silence" (no reply 24h) | "user_stop" (STOP keyword) | "ongoing"</div>
+      </div>
+      <span class="metric-pill pill-yellow">async detection job</span>
+    </div>
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">came_back</div>
+        <div class="metric-source">Did this fan start a new session within 7 days? Strong retention signal</div>
+      </div>
+      <span class="metric-pill pill-blue">computed later</span>
+    </div>
+  </div>
+
+  <div class="section-label">Per fan (lifetime)</div>
+  <div class="card">
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">total_sessions</div>
+        <div class="metric-source">How many separate conversation sessions has this fan had?</div>
+      </div>
+      <span class="metric-pill pill-green">count(sessions)</span>
+    </div>
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">avg_session_depth</div>
+        <div class="metric-source">Average messages per session — high = fan is obsessed</div>
+      </div>
+      <span class="metric-pill pill-green">avg aggregate</span>
+    </div>
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">link_clicks_total</div>
+        <div class="metric-source">Total tracked link clicks by this fan across all time</div>
+      </div>
+      <span class="metric-pill pill-blue">join with tracked_links</span>
+    </div>
+    <div class="metric-row">
+      <div>
+        <div class="metric-name">engagement_tier</div>
+        <div class="metric-source">Computed label: "superfan" | "engaged" | "casual" | "dormant"</div>
+      </div>
+      <span class="metric-pill pill-yellow">business logic</span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ SCHEMA -->
+<div id="page-schema" class="page">
+  <h2>Database Schema Changes</h2>
+  <p>Three additions to your existing Postgres database. All additive — existing tables untouched except for new columns on <code>messages</code>.</p>
+
+  <div class="section-label">1. Augment the existing messages table</div>
+  <div class="card card-blue" style="margin-bottom:1.25rem;">
+    <h3>ALTER TABLE messages (new columns)</h3>
+    <pre><span class="cmt">-- Add to _MIGRATIONS in postgres.py (idempotent, safe to redeploy)</span>
+<span class="kw">ALTER TABLE</span> messages
+  <span class="kw">ADD COLUMN IF NOT EXISTS</span> intent              <span class="col">TEXT</span>,
+  <span class="kw">ADD COLUMN IF NOT EXISTS</span> tone_mode           <span class="col">TEXT</span>,
+  <span class="kw">ADD COLUMN IF NOT EXISTS</span> routing_tier        <span class="col">TEXT</span>,
+  <span class="kw">ADD COLUMN IF NOT EXISTS</span> reply_length_chars  <span class="col">INT</span>,
+  <span class="kw">ADD COLUMN IF NOT EXISTS</span> has_link            <span class="col">BOOLEAN</span>  <span class="kw">DEFAULT</span> <span class="num">FALSE</span>,
+  <span class="kw">ADD COLUMN IF NOT EXISTS</span> conversation_turn   <span class="col">INT</span>,
+  <span class="kw">ADD COLUMN IF NOT EXISTS</span> gen_ms              <span class="col">FLOAT</span>,
+  <span class="kw">ADD COLUMN IF NOT EXISTS</span> <span class="cmt">-- engagement outcomes (backfilled async)</span>
+                            did_user_reply      <span class="col">BOOLEAN</span>,
+  <span class="kw">ADD COLUMN IF NOT EXISTS</span> reply_delay_seconds <span class="col">INT</span>,
+  <span class="kw">ADD COLUMN IF NOT EXISTS</span> went_silent_after   <span class="col">BOOLEAN</span>,
+  <span class="kw">ADD COLUMN IF NOT EXISTS</span> link_clicked_1h     <span class="col">BOOLEAN</span>,
+  <span class="kw">ADD COLUMN IF NOT EXISTS</span> msgs_after_this     <span class="col">INT</span>;</pre>
+    <p style="margin-bottom:0; font-size:0.8rem;">The context columns (intent, tone, routing_tier) are written at reply time. The outcome columns (did_user_reply, reply_delay_seconds, etc.) are backfilled by a background job after the next fan message arrives.</p>
+  </div>
+
+  <div class="section-label">2. New conversation_sessions table</div>
+  <div class="card card-accent" style="margin-bottom:1.25rem;">
+    <h3>CREATE TABLE conversation_sessions</h3>
+    <pre><span class="kw">CREATE TABLE IF NOT EXISTS</span> conversation_sessions (
+  id                    <span class="col">BIGSERIAL PRIMARY KEY</span>,
+  phone_number          <span class="col">TEXT</span>    <span class="kw">NOT NULL</span> <span class="kw">REFERENCES</span> contacts(phone_number),
+  started_at            <span class="col">TIMESTAMPTZ</span> <span class="kw">DEFAULT</span> <span class="fn">NOW</span>(),
+  last_active_at        <span class="col">TIMESTAMPTZ</span> <span class="kw">DEFAULT</span> <span class="fn">NOW</span>(),
+  ended_at              <span class="col">TIMESTAMPTZ</span>,
+  user_message_count    <span class="col">INT</span>     <span class="kw">DEFAULT</span> <span class="num">0</span>,
+  bot_message_count     <span class="col">INT</span>     <span class="kw">DEFAULT</span> <span class="num">0</span>,
+  ended_by              <span class="col">TEXT</span>,    <span class="cmt">-- 'user_silence' | 'user_stop' | ongoing=NULL</span>
+  came_back_within_7d   <span class="col">BOOLEAN</span>,
+  first_intent          <span class="col">TEXT</span>     <span class="cmt">-- what was the fan's opening intent?</span>
+);
+
+<span class="kw">CREATE INDEX IF NOT EXISTS</span> idx_sessions_phone
+  <span class="kw">ON</span> conversation_sessions(phone_number, started_at <span class="kw">DESC</span>);
+
+<span class="kw">CREATE INDEX IF NOT EXISTS</span> idx_sessions_ended
+  <span class="kw">ON</span> conversation_sessions(ended_at, ended_by)
+  <span class="kw">WHERE</span> ended_at <span class="kw">IS NOT NULL</span>;</pre>
+    <p style="margin-bottom:0; font-size:0.8rem;">A "session" = contiguous conversation window. A new session starts when a fan messages after 24h of silence. Link the message rows to a session via the session ID.</p>
+  </div>
+
+  <div class="section-label">3. New bot_reply_analytics view (computed, no extra storage)</div>
+  <div class="card card-teal">
+    <h3>CREATE VIEW bot_reply_analytics</h3>
+    <pre><span class="kw">CREATE OR REPLACE VIEW</span> bot_reply_analytics <span class="kw">AS</span>
+<span class="kw">SELECT</span>
+  intent,
+  tone_mode,
+  routing_tier,
+  <span class="fn">COUNT</span>(*) <span class="kw">AS</span> total_bot_messages,
+  <span class="fn">ROUND</span>(<span class="fn">AVG</span>(did_user_reply::int) * <span class="num">100</span>, <span class="num">1</span>)   <span class="kw">AS</span> reply_rate_pct,
+  <span class="fn">ROUND</span>(<span class="fn">AVG</span>(went_silent_after::int) * <span class="num">100</span>, <span class="num">1</span>) <span class="kw">AS</span> dropoff_rate_pct,
+  <span class="fn">ROUND</span>(<span class="fn">AVG</span>(link_clicked_1h::int) * <span class="num">100</span>, <span class="num">1</span>)  <span class="kw">AS</span> link_ctr_pct,
+  <span class="fn">ROUND</span>(<span class="fn">AVG</span>(reply_delay_seconds), <span class="num">0</span>)          <span class="kw">AS</span> avg_reply_delay_s,
+  <span class="fn">ROUND</span>(<span class="fn">AVG</span>(msgs_after_this), <span class="num">1</span>)              <span class="kw">AS</span> avg_msgs_after,
+  <span class="fn">ROUND</span>(<span class="fn">AVG</span>(reply_length_chars), <span class="num">0</span>)           <span class="kw">AS</span> avg_bot_reply_length
+<span class="kw">FROM</span> messages
+<span class="kw">WHERE</span> role = <span class="str">'assistant'</span>
+  <span class="kw">AND</span> did_user_reply <span class="kw">IS NOT NULL</span>  <span class="cmt">-- only scored rows</span>
+<span class="kw">GROUP BY</span> intent, tone_mode, routing_tier
+<span class="kw">ORDER BY</span> reply_rate_pct <span class="kw">DESC</span>;</pre>
+    <p style="margin-bottom:0; font-size:0.8rem;">This view is the core of your analytics dashboard. Query it and you immediately know which intent+tone combinations drive the most continued conversation vs. drop-off.</p>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ CODE -->
+<div id="page-code" class="page">
+  <h2>Code Changes — What to Build</h2>
+  <p>Three focused changes to the existing codebase. No rewrites — purely additive.</p>
+
+  <div class="section-label">Change 1: handler.py — write context metadata at reply time</div>
+  <div class="card card-accent" style="margin-bottom:1.25rem;">
+    <h3>In ZarnaBrain.handle_incoming_message()</h3>
+    <p>Right after <code>self.storage.save_message(phone_number, "assistant", reply)</code>, save the context that was used to generate it:</p>
+    <pre><span class="cmt"># After save_message for the assistant reply:</span>
+self.storage.<span class="fn">save_reply_context</span>(
+    phone_number=phone_number,
+    reply_text=reply,
+    intent=intent.value,
+    tone_mode=tone_mode,
+    routing_tier=routing_tier,
+    gen_ms=gen_ms,
+    conversation_turn=<span class="fn">len</span>(history) // <span class="num">2</span> + <span class="num">1</span>,   <span class="cmt"># turn number</span>
+)</pre>
+    <p style="margin-bottom:0; font-size:0.8rem;">Add <code>save_reply_context()</code> to BaseStorage and PostgresStorage — it UPDATEs the latest assistant message row with these columns. No new row, just enriching the one just saved.</p>
+  </div>
+
+  <div class="section-label">Change 2: New outcome_scorer.py — backfill signals when next message arrives</div>
+  <div class="card card-green" style="margin-bottom:1.25rem;">
+    <h3>app/analytics/outcome_scorer.py (new file)</h3>
+    <p>Called at the top of every inbound message handler — scores the <em>previous</em> bot reply now that we know the fan replied (or didn't):</p>
+    <pre><span class="kw">def</span> <span class="fn">score_previous_bot_reply</span>(phone_number: str, new_user_msg_time) -> <span class="kw">None</span>:
+    <span class="str">"""
+    When a fan sends a new message, we now know the outcome of the
+    previous bot reply. Update that row with engagement signals.
+    Fire-and-forget — never blocks reply generation.
+    """</span>
+    conn = <span class="fn">get_db</span>()
+    <span class="kw">with</span> conn.cursor() <span class="kw">as</span> cur:
+        <span class="cmt"># Find the last bot message for this fan</span>
+        cur.<span class="fn">execute</span>(<span class="str">"""
+            SELECT id, created_at FROM messages
+            WHERE phone_number = %s AND role = 'assistant'
+            ORDER BY created_at DESC LIMIT 1
+        """</span>, (phone_number,))
+        last_bot = cur.<span class="fn">fetchone</span>()
+        <span class="kw">if not</span> last_bot: <span class="kw">return</span>
+
+        bot_id, bot_time = last_bot
+        delay = <span class="fn">int</span>((new_user_msg_time - bot_time).<span class="fn">total_seconds</span>())
+
+        cur.<span class="fn">execute</span>(<span class="str">"""
+            UPDATE messages SET
+                did_user_reply      = TRUE,
+                reply_delay_seconds = %s
+            WHERE id = %s
+        """</span>, (delay, bot_id))
+    conn.<span class="fn">commit</span>()</pre>
+    <p style="margin-bottom:0; font-size:0.8rem;">A separate daily cron job handles the "went_silent_after" backfill for messages that never got a reply — looks for bot messages older than 24h with no subsequent fan message.</p>
+  </div>
+
+  <div class="section-label">Change 3: New analytics API endpoints</div>
+  <div class="card card-blue">
+    <h3>app/analytics/blueprint.py (new file)</h3>
+    <p>Add these routes under <code>/analytics</code> (admin-auth protected, same as the existing admin panel):</p>
+    <pre><span class="kw">GET</span> /analytics/engagement-summary
+<span class="cmt">→ reply_rate, dropoff_rate, link_ctr, avg_session_depth — last 30 days</span>
+
+<span class="kw">GET</span> /analytics/top-bot-replies?metric=reply_rate&limit=20
+<span class="cmt">→ actual bot reply texts ranked by which ones got the fastest/most replies</span>
+
+<span class="kw">GET</span> /analytics/intent-breakdown
+<span class="cmt">→ by intent: JOKE replies have 72% reply rate, SHOW replies have 41%, etc.</span>
+
+<span class="kw">GET</span> /analytics/dropoff-triggers?days=7
+<span class="cmt">→ the last bot message text before each fan went silent — patterns emerge</span>
+
+<span class="kw">GET</span> /analytics/session-depth-histogram
+<span class="cmt">→ how many conversations are 1 msg, 2-3 msgs, 4-9, 10+?</span>
+
+<span class="kw">GET</span> /analytics/link-ctr-by-context
+<span class="cmt">→ link CTR grouped by intent + tone — when is the best time to drop a link?</span></pre>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ DASHBOARD -->
+<div id="page-dashboard" class="page">
+  <h2>Dashboard Metrics — What You'll See</h2>
+  <p>These are the numbers that will appear in the admin dashboard once the analytics layer is live. Think of this as your Meta creator insights panel, but for SMS.</p>
+
+  <div class="grid-3">
+    <div class="card big-stat">
+      <div class="num" style="color:var(--green);">68%</div>
+      <div class="label">Reply Rate<br/><span style="color:var(--muted);font-size:0.7rem;">% of bot msgs that got a reply</span></div>
+    </div>
+    <div class="card big-stat">
+      <div class="num" style="color:var(--red);">23%</div>
+      <div class="label">Drop-off Rate<br/><span style="color:var(--muted);font-size:0.7rem;">% that led to 24h+ silence</span></div>
+    </div>
+    <div class="card big-stat">
+      <div class="num" style="color:var(--yellow);">8.2%</div>
+      <div class="label">Link CTR<br/><span style="color:var(--muted);font-size:0.7rem;">% of link msgs that got clicked</span></div>
+    </div>
+    <div class="card big-stat">
+      <div class="num" style="color:var(--accent);">4.7</div>
+      <div class="label">Avg Session Depth<br/><span style="color:var(--muted);font-size:0.7rem;">msgs per conversation</span></div>
+    </div>
+    <div class="card big-stat">
+      <div class="num" style="color:var(--blue);">47s</div>
+      <div class="label">Median Reply Delay<br/><span style="color:var(--muted);font-size:0.7rem;">how fast fans text back</span></div>
+    </div>
+    <div class="card big-stat">
+      <div class="num" style="color:var(--teal);">31%</div>
+      <div class="label">7-Day Return Rate<br/><span style="color:var(--muted);font-size:0.7rem;">fans who come back after silence</span></div>
+    </div>
+  </div>
+
+  <div class="section-label">Breakdown by intent — which conversation type performs best</div>
+  <div class="card" style="margin-bottom:1.25rem;">
+    <div class="metric-row">
+      <div><div class="metric-name">JOKE / ROAST</div><div class="metric-source">Fan asks for a joke, roast, or banter</div></div>
+      <div style="display:flex;gap:0.5rem;align-items:center;">
+        <div style="font-size:0.78rem;color:var(--green);">Reply rate: 81%</div>
+        <div style="font-size:0.78rem;color:var(--muted);">Drop-off: 12%</div>
+        <div style="font-size:0.78rem;color:var(--yellow);">CTR: 3%</div>
+      </div>
+    </div>
+    <div class="metric-row">
+      <div><div class="metric-name">GENERAL / PERSONAL</div><div class="metric-source">Fan shares something personal, casual chat</div></div>
+      <div style="display:flex;gap:0.5rem;align-items:center;">
+        <div style="font-size:0.78rem;color:var(--green);">Reply rate: 74%</div>
+        <div style="font-size:0.78rem;color:var(--muted);">Drop-off: 18%</div>
+        <div style="font-size:0.78rem;color:var(--yellow);">CTR: 2%</div>
+      </div>
+    </div>
+    <div class="metric-row">
+      <div><div class="metric-name">SHOW</div><div class="metric-source">Fan asks about upcoming shows / tickets</div></div>
+      <div style="display:flex;gap:0.5rem;align-items:center;">
+        <div style="font-size:0.78rem;color:var(--green);">Reply rate: 41%</div>
+        <div style="font-size:0.78rem;color:var(--muted);">Drop-off: 34%</div>
+        <div style="font-size:0.78rem;color:var(--yellow);">CTR: 28%</div>
+      </div>
+    </div>
+    <div class="metric-row">
+      <div><div class="metric-name">PODCAST / CLIP</div><div class="metric-source">Fan asks about the podcast or clips</div></div>
+      <div style="display:flex;gap:0.5rem;align-items:center;">
+        <div style="font-size:0.78rem;color:var(--green);">Reply rate: 52%</div>
+        <div style="font-size:0.78rem;color:var(--muted);">Drop-off: 29%</div>
+        <div style="font-size:0.78rem;color:var(--yellow);">CTR: 19%</div>
+      </div>
+    </div>
+    <p style="margin-top:0.75rem; margin-bottom:0; font-size:0.8rem;">⚡ Insight example: JOKE has high reply rate but low CTR — don't push links during banter. SHOW has low reply rate but very high CTR — that's the right moment to drop the ticket link.</p>
+  </div>
+
+  <div class="section-label">Drop-off trigger patterns — what kills conversations</div>
+  <div class="card card-red">
+    <p style="margin-bottom:0.75rem;">These are example patterns that emerge when you look at the last bot message before silence. Real data will be specific to Zarna's responses, but these types of patterns appear in every bot:</p>
+    <ul class="bullets">
+      <li><strong>Long replies (300+ chars):</strong> Drop-off rate spikes when bot sends a wall of text — fans feel lectured, not chatted with</li>
+      <li><strong>Too many questions in one message:</strong> "What city are you in? Have you been to a show before? What's your favorite bit?" — overwhelming, fans freeze</li>
+      <li><strong>Deflection phrasing:</strong> "I don't have info on that" or generic fallback responses kill engagement immediately</li>
+      <li><strong>Back-to-back links:</strong> Sending a link two messages in a row — fans feel sold to and leave</li>
+      <li><strong>Tone mismatch:</strong> Fan shares something vulnerable, bot replies with a joke — immediate conversation ender</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ LOOP -->
+<div id="page-loop" class="page">
+  <h2>The Feedback Loop — How It Gets Smarter</h2>
+  <p>Data collection is only valuable if it feeds back into improving the bot. Here's the full intelligence loop.</p>
+
+  <div class="section-label">The flywheel</div>
+  <div style="margin-bottom:1.5rem;">
+    <div class="flow">
+      <div class="flow-box highlight">Bot sends reply<br/><span style="font-weight:400;color:var(--muted);font-size:0.72rem;">intent + tone + text recorded</span></div>
+      <div class="arrow">→</div>
+      <div class="flow-box new">Fan reacts<br/><span style="font-weight:400;color:var(--muted);font-size:0.72rem;">replies, clicks link, or goes silent</span></div>
+      <div class="arrow">→</div>
+      <div class="flow-box signal">Outcome scored<br/><span style="font-weight:400;color:var(--muted);font-size:0.72rem;">reply_rate, delay, ctr, dropoff</span></div>
+      <div class="arrow">→</div>
+      <div class="flow-box highlight">Patterns surface<br/><span style="font-weight:400;color:var(--muted);font-size:0.72rem;">analytics API + dashboard</span></div>
+      <div class="arrow">→</div>
+      <div class="flow-box signal">Voice config updated<br/><span style="font-weight:400;color:var(--muted);font-size:0.72rem;">Brij tweaks system prompt</span></div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card card-green">
+      <h3>Short-term loop (manual, weekly)</h3>
+      <p>Review the analytics dashboard every week. Look at:</p>
+      <ul class="bullets">
+        <li>Which intents have high drop-off this week?</li>
+        <li>Any specific bot replies with 0% continued conversation?</li>
+        <li>Are link CTRs going up or down after voice config changes?</li>
+      </ul>
+      <p style="margin-bottom:0; font-size:0.8rem;">→ Tweak <code>creator_config/zarna.json</code> based on what you find. This is the weekly Brij workflow.</p>
+    </div>
+    <div class="card card-accent">
+      <h3>Medium-term loop (automated alerts)</h3>
+      <p>Build simple threshold alerts:</p>
+      <ul class="bullets">
+        <li>Drop-off rate this week > 35% → Slack alert to Brij</li>
+        <li>A specific intent's reply_rate drops > 15% from last week</li>
+        <li>Link CTR drops below 5% in last 48h</li>
+      </ul>
+      <p style="margin-bottom:0; font-size:0.8rem;">→ Add a Railway cron job that runs these checks nightly and posts to a Slack webhook.</p>
+    </div>
+    <div class="card card-yellow">
+      <h3>Long-term loop (A/B testing bot variants)</h3>
+      <p>Once you have enough signal, run soft experiments:</p>
+      <ul class="bullets">
+        <li>For 10% of SHOW intent messages, use shorter replies — does CTR improve?</li>
+        <li>Test ending general replies with a question vs. not — does it increase session depth?</li>
+        <li>Test different link placement (at end vs. mid-message) — which gets more clicks?</li>
+      </ul>
+      <p style="margin-bottom:0; font-size:0.8rem;">→ Track by variant in the messages table. You're doing real algorithm optimization now.</p>
+    </div>
+    <div class="card card-pink">
+      <h3>Future loop (LLM-assisted optimization)</h3>
+      <p>Once you have 10k+ scored messages, you can feed the analytics to an LLM and ask it:</p>
+      <ul class="bullets">
+        <li>"Here are the top 20 bot replies by reply_rate. What do they have in common?"</li>
+        <li>"Here are the 20 worst drop-off triggers. What patterns do you see?"</li>
+        <li>"Suggest voice config changes based on this week's engagement data"</li>
+      </ul>
+      <p style="margin-bottom:0; font-size:0.8rem;">→ Literally paste the analytics output into Claude or GPT. This is the automated Brij workflow of the future.</p>
+    </div>
+  </div>
+
+  <div class="section-label">What you can immediately optimize with this data</div>
+  <div class="card">
+    <ul class="bullets">
+      <li><strong>Reply length:</strong> Find the optimal character count for maximum continued engagement. (Hypothesis: 80–140 chars wins every time)</li>
+      <li><strong>Question ending:</strong> Does ending a bot reply with a question increase session depth? Data will answer this definitively.</li>
+      <li><strong>Link timing:</strong> Which conversation turn has the highest CTR? Don't push links on turn 1 if turn 3 converts 3x better.</li>
+      <li><strong>Tone matching:</strong> When fans signal vulnerability, does the bot actually respond with the vulnerable tone? Is the tone classifier doing its job? Check with data.</li>
+      <li><strong>Session starters:</strong> What does the bot say in reply #1 that leads to 10+ message sessions vs. 1-and-done? That's your most valuable signal.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ PHASES -->
+<div id="page-phases" class="page">
+  <h2>Build Phases</h2>
+  <p>Ordered by value delivered vs. effort. Start with Phase 1 — you'll have real signal data within days of deploying.</p>
+
+  <div class="section-label">Phase 1 — Data foundation (1–2 days) <span class="tag tag-phase1">highest priority</span></div>
+  <div class="phase-step">
+    <div class="phase-num p1">1</div>
+    <div class="phase-content">
+      <h4>Add columns to messages table</h4>
+      <p>Migrate intent, tone_mode, routing_tier, reply_length_chars, has_link, conversation_turn, gen_ms onto the messages table. These are all values already computed in handler.py — just need to persist them. 1 migration + 1 <code>save_reply_context()</code> method in postgres.py.</p>
+    </div>
+  </div>
+  <div class="phase-step">
+    <div class="phase-num p1">2</div>
+    <div class="phase-content">
+      <h4>Write context at reply time in handler.py</h4>
+      <p>After <code>save_message(assistant, reply)</code>, call <code>save_reply_context()</code> with the intent/tone/tier/gen_ms values. Fire-and-forget in the executor so zero latency impact on reply.</p>
+    </div>
+  </div>
+  <div class="phase-step">
+    <div class="phase-num p1">3</div>
+    <div class="phase-content">
+      <h4>Score previous bot reply on each inbound message</h4>
+      <p>At the start of <code>handle_incoming_message()</code>, before anything else, fire a background thread that updates the previous bot reply row with <code>did_user_reply=TRUE</code> and <code>reply_delay_seconds</code>. This is retroactive scoring — every new fan message scores the bot's last reply.</p>
+    </div>
+  </div>
+  <div class="phase-step">
+    <div class="phase-num p1">4</div>
+    <div class="phase-content">
+      <h4>Daily "silence" backfill cron job</h4>
+      <p>A Railway cron job runs every night. For each bot reply older than 24h with <code>did_user_reply IS NULL</code>, set <code>did_user_reply=FALSE</code> and <code>went_silent_after=TRUE</code>. This fills in the drop-off signal.</p>
+    </div>
+  </div>
+
+  <hr class="divider"/>
+
+  <div class="section-label">Phase 2 — Analytics API (2–3 days) <span class="tag tag-phase2">high value</span></div>
+  <div class="phase-step">
+    <div class="phase-num p2">5</div>
+    <div class="phase-content">
+      <h4>Create bot_reply_analytics view in Postgres</h4>
+      <p>The SQL view from the Schema tab. Runs on the DB side — no application code needed. Query it and you get reply_rate, dropoff_rate, link_ctr broken down by intent + tone in one fast query.</p>
+    </div>
+  </div>
+  <div class="phase-step">
+    <div class="phase-num p2">6</div>
+    <div class="phase-content">
+      <h4>Add /analytics/* API endpoints</h4>
+      <p>New Flask blueprint in <code>app/analytics/blueprint.py</code>, protected by the existing admin auth. Expose the engagement summary, intent breakdown, drop-off triggers, and session depth histogram.</p>
+    </div>
+  </div>
+  <div class="phase-step">
+    <div class="phase-num p2">7</div>
+    <div class="phase-content">
+      <h4>Add an Analytics tab to the admin dashboard</h4>
+      <p>Extend the existing admin UI with a new tab showing the core metrics. Charts for reply_rate by intent, session depth histogram, link CTR trend. Could be a simple HTML/JS tab using the existing admin_bp structure.</p>
+    </div>
+  </div>
+
+  <hr class="divider"/>
+
+  <div class="section-label">Phase 3 — Conversation sessions (3–5 days) <span class="tag tag-phase3">medium priority</span></div>
+  <div class="phase-step">
+    <div class="phase-num p3">8</div>
+    <div class="phase-content">
+      <h4>Create conversation_sessions table and session manager</h4>
+      <p>Add the table from the Schema tab. Write a <code>SessionManager</code> class that finds or creates a session for an inbound message (24h gap = new session). Track session depth and ended_by signals.</p>
+    </div>
+  </div>
+  <div class="phase-step">
+    <div class="phase-num p3">9</div>
+    <div class="phase-content">
+      <h4>Session-level metrics in dashboard</h4>
+      <p>Avg session depth, session duration distribution, 7-day return rate. These answer "are fans coming back?" which is the core retention metric for a subscription text service.</p>
+    </div>
+  </div>
+
+  <hr class="divider"/>
+
+  <div class="section-label">Phase 4 — Feedback loop automation (ongoing) <span class="tag tag-phase4">future</span></div>
+  <div class="phase-step">
+    <div class="phase-num p4">10</div>
+    <div class="phase-content">
+      <h4>Automated weekly digest</h4>
+      <p>A Railway cron job emails Brij every Monday with: top 5 performing bot reply patterns, top 5 drop-off triggers, link CTR for the week, and session depth trend vs. prior week.</p>
+    </div>
+  </div>
+  <div class="phase-step">
+    <div class="phase-num p4">11</div>
+    <div class="phase-content">
+      <h4>A/B variant tracking</h4>
+      <p>Add a <code>variant</code> column to the messages table. When testing a voice config change, tag those sessions with a variant ID. Compare engagement metrics between control and variant groups.</p>
+    </div>
+  </div>
+  <div class="phase-step">
+    <div class="phase-num p4">12</div>
+    <div class="phase-content">
+      <h4>LLM-assisted pattern analysis</h4>
+      <p>Build a script that pulls the top/bottom performing bot replies from the DB and feeds them to the Gemini API with a prompt like: "What patterns make these high-performing? What changes should we make to the voice config?" Turns data into actionable recommendations.</p>
+    </div>
+  </div>
+
+  <hr class="divider"/>
+
+  <div class="highlight-box">
+    <h3>What to build first (this week)</h3>
+    <p style="margin-bottom:0.5rem;">Steps 1–4 are the entire foundation. They take ~1–2 days and immediately start accumulating real engagement data. Within a week of deploying Phase 1, you'll have enough data to see which intents and tones drive drop-off vs. engagement for Zarna's specific fanbase.</p>
+    <p style="margin-bottom:0; font-size:0.83rem; color: var(--muted);">The codebase is already set up well for this — <code>handler.py</code> already has intent, tone, routing_tier, and gen_ms computed in every reply. It's just a matter of persisting them and adding the scoring step. Estimated total: ~200 lines of new code across 3–4 files.</p>
+  </div>
+</div>
+
+<script>
+  function showPage(id) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.getElementById('page-' + id).classList.add('active');
+    event.target.classList.add('active');
+  }
+</script>
+</body>
+</html>

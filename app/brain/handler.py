@@ -4,6 +4,11 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from app.analytics.outcome_scorer import (
+    save_reply_context_async,
+    score_previous_bot_reply_async,
+)
+from app.analytics.session_manager import get_or_create_session
 from app.brain.conversation_end import is_conversation_ender
 from app.brain.emphasis import should_suppress_all_emphasis
 from app.brain.generator import generate_zarna_reply, infer_reply_provider
@@ -51,6 +56,13 @@ class ZarnaBrain:
     def handle_incoming_message(self, phone_number: str, message_text: str) -> str:
         # 1. Ensure contact exists
         self.storage.save_contact(phone_number)
+
+        # 1b. Score the previous bot reply now that the fan has replied —
+        #     fire-and-forget so it never adds latency to this reply.
+        score_previous_bot_reply_async(_executor, self.storage, phone_number)
+
+        # 1c. Track conversation session — fire-and-forget
+        _executor.submit(get_or_create_session, phone_number, "user")
 
         # 2. Persist the user's message
         self.storage.save_message(phone_number, "user", message_text)
@@ -162,8 +174,24 @@ class ZarnaBrain:
                 phone_number[-4:] if len(phone_number) >= 4 else "****",
             )
 
-        # 8. Persist the assistant's reply
-        self.storage.save_message(phone_number, "assistant", reply)
+        # 8. Persist the assistant's reply (returns the row id for analytics)
+        saved_reply = self.storage.save_message(phone_number, "assistant", reply)
+
+        # 8b. Track bot turn in session
+        _executor.submit(get_or_create_session, phone_number, "assistant")
+
+        # 8c. Write engagement context onto that row in the background
+        save_reply_context_async(
+            executor=_executor,
+            storage=self.storage,
+            message_id=saved_reply.id,
+            reply_text=reply,
+            intent=intent.value if intent else None,
+            tone_mode=str(tone_mode) if tone_mode is not None else None,
+            routing_tier=routing_tier,
+            gen_ms=gen_ms,
+            conversation_turn=len(history) // 2 + 1,
+        )
 
         # 9. Update fan memory in the background — no latency impact on reply
         _executor.submit(self._update_memory, phone_number, message_text, fan_memory)

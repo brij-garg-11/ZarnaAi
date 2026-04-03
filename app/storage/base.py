@@ -37,3 +37,31 @@ class BaseStorage(ABC):
 
     def get_fans_by_location(self, location: str) -> list:
         return []
+
+    # ------------------------------------------------------------------
+    # Engagement analytics
+    # ------------------------------------------------------------------
+
+    def save_reply_context(
+        self,
+        message_id: Optional[int],
+        intent: Optional[str] = None,
+        tone_mode: Optional[str] = None,
+        routing_tier: Optional[str] = None,
+        reply_length_chars: Optional[int] = None,
+        has_link: bool = False,
+        conversation_turn: Optional[int] = None,
+        gen_ms: Optional[float] = None,
+    ) -> None:
+        """
+        Persist context metadata for an assistant message so engagement
+        outcomes can later be correlated against it.  Default is a no-op —
+        override in concrete implementations.
+        """
+
+    def score_previous_bot_reply(self, phone_number: str) -> None:
+        """
+        Called when a new *user* message arrives.  Finds the most recent
+        unscored assistant message for this phone and marks it as replied-to,
+        recording how many seconds the fan took to reply.  No-op by default.
+        """

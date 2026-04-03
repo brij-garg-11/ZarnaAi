@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Dict, List, Optional
 
 from .base import BaseStorage
@@ -17,6 +18,9 @@ class InMemoryStorage(BaseStorage):
         self._memory: Dict[str, str] = {}
         self._tags: Dict[str, list] = {}
         self._location: Dict[str, str] = {}
+        self._next_id: int = 1
+        # engagement context stored by message id
+        self._reply_context: Dict[int, dict] = {}
 
     def save_contact(self, phone_number: str, source: Optional[str] = None) -> Contact:
         if phone_number not in self._contacts:
@@ -30,7 +34,8 @@ class InMemoryStorage(BaseStorage):
         return self._contacts.get(phone_number)
 
     def save_message(self, phone_number: str, role: str, text: str) -> Message:
-        msg = Message(phone_number=phone_number, role=role, text=text)
+        msg = Message(phone_number=phone_number, role=role, text=text, id=self._next_id)
+        self._next_id += 1
         self._messages.setdefault(phone_number, []).append(msg)
         return msg
 
@@ -69,3 +74,54 @@ class InMemoryStorage(BaseStorage):
                     "fan_location": loc,
                 })
         return results
+
+    # ------------------------------------------------------------------
+    # Engagement analytics
+    # ------------------------------------------------------------------
+
+    def save_reply_context(
+        self,
+        message_id: Optional[int],
+        intent: Optional[str] = None,
+        tone_mode: Optional[str] = None,
+        routing_tier: Optional[str] = None,
+        reply_length_chars: Optional[int] = None,
+        has_link: bool = False,
+        conversation_turn: Optional[int] = None,
+        gen_ms: Optional[float] = None,
+    ) -> None:
+        if message_id is None:
+            return
+        self._reply_context[message_id] = {
+            "intent": intent,
+            "tone_mode": tone_mode,
+            "routing_tier": routing_tier,
+            "reply_length_chars": reply_length_chars,
+            "has_link": has_link,
+            "conversation_turn": conversation_turn,
+            "gen_ms": gen_ms,
+            "did_user_reply": None,
+            "reply_delay_seconds": None,
+            "went_silent_after": None,
+        }
+
+    def score_previous_bot_reply(self, phone_number: str) -> None:
+        """Find the last unscored assistant message and mark it as replied-to."""
+        msgs = self._messages.get(phone_number, [])
+        now = datetime.utcnow()
+        for msg in reversed(msgs):
+            if msg.role != "assistant":
+                continue
+            ctx = self._reply_context.get(msg.id or -1)
+            if ctx is None:
+                continue
+            if ctx.get("did_user_reply") is not None:
+                break  # already scored
+            delay = int((now - msg.created_at).total_seconds())
+            ctx["did_user_reply"] = True
+            ctx["reply_delay_seconds"] = max(0, delay)
+            return
+
+    def get_reply_context(self, message_id: int) -> Optional[dict]:
+        """Test helper — returns the stored context for a message ID."""
+        return self._reply_context.get(message_id)

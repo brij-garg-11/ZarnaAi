@@ -559,6 +559,130 @@ def _fetch_dashboard(
                 except Exception:
                     conv_clicks_by_day = []
 
+            # ── Insights tab ──────────────────────────────────────────────
+            insights_summary = {}
+            insights_intent = []
+            insights_tone = []
+            insights_dropoff = []
+            insights_session = {}
+            insights_scored_total = 0
+            if tab == "insights":
+                try:
+                    cur.execute(
+                        """
+                        SELECT
+                          COUNT(*)                                           AS scored_bot_replies,
+                          ROUND(AVG(did_user_reply::int) * 100, 1)          AS reply_rate_pct,
+                          ROUND(AVG(went_silent_after::int) * 100, 1)       AS dropoff_rate_pct,
+                          ROUND(AVG(reply_delay_seconds), 0)                 AS avg_reply_delay_s,
+                          ROUND(AVG(reply_length_chars), 0)                  AS avg_bot_reply_length
+                        FROM messages
+                        WHERE role = 'assistant'
+                          AND did_user_reply IS NOT NULL
+                          AND created_at >= NOW() - INTERVAL '30 days'
+                        """
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        insights_summary = dict(zip(
+                            ["scored_bot_replies", "reply_rate_pct", "dropoff_rate_pct",
+                             "avg_reply_delay_s", "avg_bot_reply_length"],
+                            row,
+                        ))
+                        insights_scored_total = insights_summary.get("scored_bot_replies") or 0
+                except Exception:
+                    pass
+
+                try:
+                    cur.execute(
+                        """
+                        SELECT
+                          COALESCE(intent, 'unknown')                   AS intent,
+                          COUNT(*)                                       AS total,
+                          ROUND(AVG(did_user_reply::int) * 100, 1)      AS reply_rate_pct,
+                          ROUND(AVG(went_silent_after::int) * 100, 1)   AS dropoff_rate_pct,
+                          ROUND(AVG(reply_delay_seconds), 0)             AS avg_delay_s
+                        FROM messages
+                        WHERE role = 'assistant'
+                          AND did_user_reply IS NOT NULL
+                          AND created_at >= NOW() - INTERVAL '30 days'
+                        GROUP BY COALESCE(intent, 'unknown')
+                        ORDER BY reply_rate_pct DESC NULLS LAST
+                        """
+                    )
+                    insights_intent = [
+                        dict(zip(["intent", "total", "reply_rate_pct", "dropoff_rate_pct", "avg_delay_s"], r))
+                        for r in cur.fetchall()
+                    ]
+                except Exception:
+                    pass
+
+                try:
+                    cur.execute(
+                        """
+                        SELECT
+                          COALESCE(tone_mode, 'unknown')                AS tone_mode,
+                          COUNT(*)                                       AS total,
+                          ROUND(AVG(did_user_reply::int) * 100, 1)      AS reply_rate_pct,
+                          ROUND(AVG(went_silent_after::int) * 100, 1)   AS dropoff_rate_pct
+                        FROM messages
+                        WHERE role = 'assistant'
+                          AND did_user_reply IS NOT NULL
+                          AND created_at >= NOW() - INTERVAL '30 days'
+                        GROUP BY COALESCE(tone_mode, 'unknown')
+                        ORDER BY reply_rate_pct DESC NULLS LAST
+                        """
+                    )
+                    insights_tone = [
+                        dict(zip(["tone_mode", "total", "reply_rate_pct", "dropoff_rate_pct"], r))
+                        for r in cur.fetchall()
+                    ]
+                except Exception:
+                    pass
+
+                try:
+                    cur.execute(
+                        """
+                        SELECT LEFT(text, 180) AS preview, intent, tone_mode, reply_length_chars
+                        FROM messages
+                        WHERE role = 'assistant'
+                          AND went_silent_after = TRUE
+                          AND created_at >= NOW() - INTERVAL '30 days'
+                        ORDER BY created_at DESC
+                        LIMIT 15
+                        """
+                    )
+                    insights_dropoff = [
+                        dict(zip(["preview", "intent", "tone_mode", "reply_length_chars"], r))
+                        for r in cur.fetchall()
+                    ]
+                except Exception:
+                    pass
+
+                try:
+                    cur.execute(
+                        """
+                        SELECT
+                          COUNT(*)                                                AS total_sessions,
+                          ROUND(AVG(user_message_count), 1)                      AS avg_user_msgs,
+                          MAX(user_message_count + bot_message_count)             AS max_depth,
+                          COUNT(*) FILTER (WHERE came_back_within_7d = TRUE)      AS came_back_7d,
+                          COUNT(*) FILTER (WHERE ended_at IS NOT NULL)            AS closed_sessions
+                        FROM conversation_sessions
+                        WHERE started_at >= NOW() - INTERVAL '30 days'
+                        """
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        insights_session = dict(zip(
+                            ["total_sessions", "avg_user_msgs", "max_depth",
+                             "came_back_7d", "closed_sessions"], row,
+                        ))
+                    else:
+                        insights_session = {}
+                except Exception:
+                    insights_session = {}
+
             # ── Conversations tab ─────────────────────────────────────────
             if tab == "convos":
                 inbox_off = max(0, inbox_page) * INBOX_PAGE_SIZE
@@ -638,6 +762,13 @@ def _fetch_dashboard(
             "tracked_links_rows": tracked_links_rows,
             "conv_clicks_by_day": conv_clicks_by_day,
             "conv_summary": conv_summary,
+            # insights
+            "insights_summary": insights_summary,
+            "insights_intent": insights_intent,
+            "insights_tone": insights_tone,
+            "insights_dropoff": insights_dropoff,
+            "insights_scored_total": insights_scored_total,
+            "insights_session": insights_session,
         }
     finally:
         conn.close()
@@ -662,6 +793,223 @@ def _range_links(active: int) -> str:
         cls = "range-pill-active" if d == active else "range-pill"
         parts.append(f'<a class="{cls}" href="/admin?tab=overview&range={d}">{d}d</a>')
     return " ".join(parts)
+
+
+def _render_insights_tab(stats: dict) -> str:
+    """Return the inner HTML for the 🧠 Insights tab."""
+    s = stats["insights_summary"]
+    scored = stats["insights_scored_total"]
+
+    if not scored:
+        return """
+        <div style="background:#111827;border:1px solid #1f2937;border-radius:12px;
+                    padding:40px;text-align:center;color:#6b7280;margin-top:8px;">
+          <div style="font-size:32px;margin-bottom:12px;">🧠</div>
+          <div style="font-size:16px;font-weight:600;color:#9ca3af;margin-bottom:8px;">
+            No engagement data yet
+          </div>
+          <p style="font-size:13px;max-width:420px;margin:0 auto;line-height:1.6;">
+            Data starts accumulating as fans text in. After the first fan sends a follow-up
+            message, the bot's previous reply gets scored. Come back after your next show.
+          </p>
+          <p style="font-size:12px;color:#4b5563;margin-top:12px;">
+            Run <code style="color:#a5b4fc">python scripts/backfill_silence.py</code> nightly to score
+            messages where fans never replied.
+          </p>
+        </div>"""
+
+    def _pct_color(v):
+        if v is None:
+            return "#6b7280"
+        return "#4ade80" if v >= 60 else ("#fbbf24" if v >= 40 else "#f87171")
+
+    def _drop_color(v):
+        if v is None:
+            return "#6b7280"
+        return "#f87171" if v >= 30 else ("#fbbf24" if v >= 15 else "#4ade80")
+
+    reply_rate = s.get("reply_rate_pct")
+    dropoff    = s.get("dropoff_rate_pct")
+    delay      = s.get("avg_reply_delay_s")
+    avg_len    = s.get("avg_bot_reply_length")
+
+    summary_html = f"""
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px;">
+      <div class="stat-card">
+        <div class="stat-label">Scored Replies</div>
+        <div class="stat-value">{scored:,}</div>
+        <div class="stat-trend" style="color:#64748b;font-size:12px">last 30 days</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Reply Rate</div>
+        <div class="stat-value" style="color:{_pct_color(reply_rate)}">{reply_rate if reply_rate is not None else '—'}{'%' if reply_rate is not None else ''}</div>
+        <div class="stat-trend" style="color:#64748b;font-size:12px">fans who texted back</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Drop-off Rate</div>
+        <div class="stat-value" style="color:{_drop_color(dropoff)}">{dropoff if dropoff is not None else '—'}{'%' if dropoff is not None else ''}</div>
+        <div class="stat-trend" style="color:#64748b;font-size:12px">bot msg then silence</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Avg Reply Delay</div>
+        <div class="stat-value purple">{int(delay) if delay is not None else '—'}{'s' if delay is not None else ''}</div>
+        <div class="stat-trend" style="color:#64748b;font-size:12px">fan response time</div>
+      </div>
+    </div>"""
+
+    # Intent breakdown table
+    intent_rows_html = ""
+    for r in stats["insights_intent"]:
+        rr = r.get("reply_rate_pct")
+        dr = r.get("dropoff_rate_pct")
+        d  = r.get("avg_delay_s")
+        intent_rows_html += f"""
+        <tr>
+          <td style="padding:10px 14px;font-weight:600;color:#e2e8f0;">{_esc(str(r.get("intent","?")).upper())}</td>
+          <td style="padding:10px 14px;text-align:center;color:#94a3b8;">{r.get("total",0):,}</td>
+          <td style="padding:10px 14px;text-align:center;font-weight:700;color:{_pct_color(rr)}">{rr if rr is not None else '—'}{'%' if rr is not None else ''}</td>
+          <td style="padding:10px 14px;text-align:center;font-weight:700;color:{_drop_color(dr)}">{dr if dr is not None else '—'}{'%' if dr is not None else ''}</td>
+          <td style="padding:10px 14px;text-align:center;color:#94a3b8;">{int(d) if d is not None else '—'}{'s' if d is not None else ''}</td>
+        </tr>"""
+    if not intent_rows_html:
+        intent_rows_html = '<tr><td colspan="5" style="padding:24px;text-align:center;color:#6b7280;font-style:italic;">No data yet for last 30 days.</td></tr>'
+
+    intent_table = f"""
+    <div class="card" style="margin-bottom:20px;padding:0;overflow:hidden;">
+      <div style="padding:16px 20px 12px;border-bottom:1px solid #1f2937;">
+        <div class="card-title" style="margin:0;">Engagement by Intent — Last 30 Days</div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="border-bottom:1px solid #1f2937;">
+            <th style="padding:10px 14px;text-align:left;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Intent</th>
+            <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Scored</th>
+            <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Reply Rate ↑</th>
+            <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Drop-off ↓</th>
+            <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Avg Delay</th>
+          </tr>
+        </thead>
+        <tbody>{intent_rows_html}</tbody>
+      </table>
+    </div>"""
+
+    # Tone breakdown table
+    tone_rows_html = ""
+    for r in stats["insights_tone"]:
+        rr = r.get("reply_rate_pct")
+        dr = r.get("dropoff_rate_pct")
+        tone_rows_html += f"""
+        <tr>
+          <td style="padding:10px 14px;font-weight:600;color:#e2e8f0;">{_esc(str(r.get("tone_mode","?"))).title()}</td>
+          <td style="padding:10px 14px;text-align:center;color:#94a3b8;">{r.get("total",0):,}</td>
+          <td style="padding:10px 14px;text-align:center;font-weight:700;color:{_pct_color(rr)}">{rr if rr is not None else '—'}{'%' if rr is not None else ''}</td>
+          <td style="padding:10px 14px;text-align:center;font-weight:700;color:{_drop_color(dr)}">{dr if dr is not None else '—'}{'%' if dr is not None else ''}</td>
+        </tr>"""
+    if not tone_rows_html:
+        tone_rows_html = '<tr><td colspan="4" style="padding:24px;text-align:center;color:#6b7280;font-style:italic;">No data yet.</td></tr>'
+
+    tone_table = f"""
+    <div class="card" style="margin-bottom:20px;padding:0;overflow:hidden;">
+      <div style="padding:16px 20px 12px;border-bottom:1px solid #1f2937;">
+        <div class="card-title" style="margin:0;">Engagement by Tone — Last 30 Days</div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="border-bottom:1px solid #1f2937;">
+            <th style="padding:10px 14px;text-align:left;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Tone</th>
+            <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Scored</th>
+            <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Reply Rate ↑</th>
+            <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Drop-off ↓</th>
+          </tr>
+        </thead>
+        <tbody>{tone_rows_html}</tbody>
+      </table>
+    </div>"""
+
+    # Drop-off trigger list
+    dropoff_items_html = ""
+    for r in stats["insights_dropoff"]:
+        preview = _esc(str(r.get("preview") or ""))
+        intent  = _esc(str(r.get("intent") or "—").upper())
+        tone    = _esc(str(r.get("tone_mode") or "—"))
+        chars   = r.get("reply_length_chars")
+        dropoff_items_html += f"""
+        <div style="padding:12px 0;border-bottom:1px solid #1f2937;">
+          <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+            <span style="background:#1f2937;color:#94a3b8;padding:2px 8px;border-radius:8px;font-size:11px;">{intent}</span>
+            <span style="background:#1f2937;color:#94a3b8;padding:2px 8px;border-radius:8px;font-size:11px;">{tone}</span>
+            {'<span style="background:#1f2937;color:#94a3b8;padding:2px 8px;border-radius:8px;font-size:11px;">' + str(chars) + ' chars</span>' if chars else ''}
+          </div>
+          <div style="color:#d1d5db;font-size:13px;line-height:1.45;">{preview}</div>
+        </div>"""
+
+    if not dropoff_items_html:
+        dropoff_items_html = '<p class="empty-note">No drop-off triggers recorded yet. Run the nightly backfill script to score older messages.</p>'
+
+    dropoff_section = f"""
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-title">Drop-off Triggers — Last Bot Message Before Fan Went Silent (last 30d)</div>
+      <p style="color:#94a3b8;font-size:13px;margin-bottom:12px;">These are the bot messages that ended in silence — patterns here tell you what to avoid.</p>
+      {dropoff_items_html}
+    </div>"""
+
+    # Session stats section
+    sess = stats.get("insights_session", {})
+    total_sess = sess.get("total_sessions") or 0
+    avg_msgs   = sess.get("avg_user_msgs")
+    max_depth  = sess.get("max_depth")
+    came_back  = sess.get("came_back_7d") or 0
+    closed_s   = sess.get("closed_sessions") or 0
+    ret_7d     = round(came_back / closed_s * 100, 1) if closed_s else None
+
+    session_html = ""
+    if total_sess:
+        session_html = f"""
+        <div class="card" style="margin-bottom:20px;">
+          <div class="card-title">Conversation Sessions — Last 30 Days</div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:4px;">
+            <div class="stat-card" style="padding:14px 16px;">
+              <div class="stat-label">Total Sessions</div>
+              <div class="stat-value">{total_sess:,}</div>
+            </div>
+            <div class="stat-card" style="padding:14px 16px;">
+              <div class="stat-label">Avg Fan Messages</div>
+              <div class="stat-value purple">{avg_msgs if avg_msgs is not None else '—'}</div>
+              <div style="color:#64748b;font-size:12px">per session</div>
+            </div>
+            <div class="stat-card" style="padding:14px 16px;">
+              <div class="stat-label">Deepest Session</div>
+              <div class="stat-value teal">{max_depth if max_depth is not None else '—'}</div>
+              <div style="color:#64748b;font-size:12px">total messages</div>
+            </div>
+            <div class="stat-card" style="padding:14px 16px;">
+              <div class="stat-label">7-Day Return Rate</div>
+              <div class="stat-value" style="color:{_pct_color(ret_7d)}">{ret_7d if ret_7d is not None else '—'}{'%' if ret_7d is not None else ''}</div>
+              <div style="color:#64748b;font-size:12px">fans who came back</div>
+            </div>
+          </div>
+          <p style="color:#64748b;font-size:12px;margin-top:12px;">
+            Session = contiguous conversation. New session after {_esc(str(os.getenv('SESSION_GAP_HOURS', '24')))}h of silence.
+            Run <code style="color:#a5b4fc">python scripts/backfill_silence.py</code> nightly to close stale sessions.
+          </p>
+        </div>"""
+
+    api_hint = f"""
+    <div class="card" style="margin-bottom:0;background:#0d0d1a;border-color:#1a1a3a;">
+      <div class="card-title">JSON API — programmatic access</div>
+      <p style="color:#94a3b8;font-size:13px;margin-bottom:10px;">Same data in JSON format, useful for scripts and external tools. All require HTTP Basic Auth (same password).</p>
+      <div style="display:flex;flex-direction:column;gap:6px;font-size:12px;">
+        <code style="color:#a5b4fc;">/analytics/engagement-summary</code>
+        <code style="color:#a5b4fc;">/analytics/intent-breakdown</code>
+        <code style="color:#a5b4fc;">/analytics/tone-breakdown</code>
+        <code style="color:#a5b4fc;">/analytics/dropoff-triggers</code>
+        <code style="color:#a5b4fc;">/analytics/top-bot-replies</code>
+        <code style="color:#a5b4fc;">/analytics/reply-length-buckets</code>
+      </div>
+      <p style="color:#4b5563;font-size:11px;margin-top:10px;">Append <code>?days=7</code> (or 14, 30, 90) to any endpoint to change the window.</p>
+    </div>"""
+
+    return summary_html + intent_table + tone_table + session_html + dropoff_section + api_hint
 
 
 @admin_bp.route("/admin")
@@ -1159,6 +1507,7 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
   <a href="/admin?tab=audience" class="nav-tab {'active' if tab == 'audience' else ''}">👥 Audience</a>
   <a href="/admin?tab=convos" class="nav-tab {'active' if tab == 'convos' else ''}">💬 Conversations</a>
   <a href="/admin?tab=conversions" class="nav-tab {'active' if tab == 'conversions' else ''}">🔗 Conversions</a>
+  <a href="/admin?tab=insights" class="nav-tab {'active' if tab == 'insights' else ''}">🧠 Insights</a>
   <a href="/admin/live-shows" class="nav-tab">🎤 Live shows</a>
 </nav>
 
@@ -1270,6 +1619,10 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
 
   <div class="tab-content {'active' if tab == 'convos' else ''}" id="tab-convos">
     {convos_inner_html}
+  </div>
+
+  <div class="tab-content {'active' if tab == 'insights' else ''}" id="tab-insights">
+    {_render_insights_tab(stats)}
   </div>
 
   <div class="tab-content {'active' if tab == 'conversions' else ''}" id="tab-conversions">

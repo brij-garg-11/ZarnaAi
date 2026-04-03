@@ -22,6 +22,7 @@ from app.brain.handler import create_brain
 from app.messaging.slicktext_adapter import create_slicktext_adapter
 from app.messaging.twilio_adapter import create_twilio_adapter
 from app.admin import admin_bp
+from app.analytics.blueprint import analytics_bp
 from app.live_shows.blueprint import live_shows_bp
 from app.live_shows.signup import LiveShowSignupResult, try_live_show_signup
 from app.ops_metrics import ai_reply_enter, ai_reply_leave, bump as ops_bump
@@ -56,6 +57,7 @@ def _send_join_confirmation_async(phone: str, channel: str, body: str) -> None:
 
 app = Flask(__name__)
 app.register_blueprint(admin_bp)
+app.register_blueprint(analytics_bp)
 app.register_blueprint(live_shows_bp)
 
 brain     = create_brain()

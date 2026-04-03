@@ -16,3 +16,4 @@ class Message:
     role: str  # "user" or "assistant"
     text: str
     created_at: datetime = field(default_factory=datetime.utcnow)
+    id: Optional[int] = None  # DB row ID — populated by PostgresStorage, sequential int by InMemoryStorage

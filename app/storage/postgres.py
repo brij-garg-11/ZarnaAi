@@ -96,6 +96,30 @@ _LIVE_SHOW_MIGRATIONS = (
     """,
 )
 
+# Engagement analytics — idempotent column additions on messages.
+_ENGAGEMENT_ANALYTICS_MIGRATIONS = (
+    # Context columns written at reply generation time
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS intent              TEXT",
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS tone_mode           TEXT",
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS routing_tier        TEXT",
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_length_chars  INT",
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS has_link            BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS conversation_turn   INT",
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS gen_ms              FLOAT",
+    # Outcome columns backfilled asynchronously
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS did_user_reply      BOOLEAN",
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_delay_seconds INT",
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS went_silent_after   BOOLEAN",
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS link_clicked_1h     BOOLEAN",
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS msgs_after_this     INT",
+    # Index for fast analytics queries (filter to scored assistant rows)
+    """
+    CREATE INDEX IF NOT EXISTS idx_messages_analytics
+        ON messages (role, intent, tone_mode, routing_tier)
+        WHERE role = 'assistant' AND did_user_reply IS NOT NULL
+    """,
+)
+
 # Idempotent alters + audit log (runs after base live_shows DDL).
 _LIVE_SHOW_ADDITIVE_MIGRATIONS = (
     """
@@ -151,6 +175,8 @@ class PostgresStorage(BaseStorage):
                         cur.execute(sql)
                     for sql in _LIVE_SHOW_ADDITIVE_MIGRATIONS:
                         cur.execute(sql)
+                    for sql in _ENGAGEMENT_ANALYTICS_MIGRATIONS:
+                        cur.execute(sql)
         except psycopg2.errors.UniqueViolation:
             # Race condition: two workers started simultaneously and both tried
             # to CREATE TABLE at the same moment. The other worker already
@@ -201,12 +227,13 @@ class PostgresStorage(BaseStorage):
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO messages (phone_number, role, text) VALUES (%s, %s, %s)",
+                        "INSERT INTO messages (phone_number, role, text) VALUES (%s, %s, %s) RETURNING id",
                         (phone_number, role, text),
                     )
+                    row_id = cur.fetchone()[0]
         finally:
             self._release(conn)
-        return Message(phone_number=phone_number, role=role, text=text)
+        return Message(phone_number=phone_number, role=role, text=text, id=row_id)
 
     def get_conversation_history(self, phone_number: str, limit: int = 10) -> List[Message]:
         conn = self._acquire()
@@ -306,5 +333,89 @@ class PostgresStorage(BaseStorage):
                     (f"%{location.lower()}%",),
                 )
                 return [dict(r) for r in cur.fetchall()]
+        finally:
+            self._release(conn)
+
+    # ------------------------------------------------------------------
+    # Engagement analytics
+    # ------------------------------------------------------------------
+
+    def save_reply_context(
+        self,
+        message_id,
+        intent=None,
+        tone_mode=None,
+        routing_tier=None,
+        reply_length_chars=None,
+        has_link=False,
+        conversation_turn=None,
+        gen_ms=None,
+    ) -> None:
+        """Write bot-reply context columns onto an existing message row."""
+        if message_id is None:
+            return
+        conn = self._acquire()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE messages
+                        SET intent             = %s,
+                            tone_mode          = %s,
+                            routing_tier       = %s,
+                            reply_length_chars = %s,
+                            has_link           = %s,
+                            conversation_turn  = %s,
+                            gen_ms             = %s
+                        WHERE id = %s
+                        """,
+                        (
+                            intent,
+                            tone_mode,
+                            routing_tier,
+                            reply_length_chars,
+                            has_link,
+                            conversation_turn,
+                            gen_ms,
+                            message_id,
+                        ),
+                    )
+        except Exception:
+            logger.exception("save_reply_context failed for message_id=%s", message_id)
+        finally:
+            self._release(conn)
+
+    def score_previous_bot_reply(self, phone_number: str) -> None:
+        """
+        Called when a new user message arrives.  Finds the most recent
+        unscored assistant message for this fan and marks it as replied-to,
+        recording the reply delay in seconds.
+        """
+        conn = self._acquire()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE messages
+                        SET did_user_reply      = TRUE,
+                            reply_delay_seconds = GREATEST(
+                                0,
+                                EXTRACT(EPOCH FROM (NOW() - created_at))::INT
+                            )
+                        WHERE id = (
+                            SELECT id FROM messages
+                            WHERE phone_number   = %s
+                              AND role           = 'assistant'
+                              AND did_user_reply IS NULL
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                        )
+                        """,
+                        (phone_number,),
+                    )
+        except Exception:
+            logger.exception("score_previous_bot_reply failed for ...%s", phone_number[-4:] if phone_number else "?")
         finally:
             self._release(conn)
