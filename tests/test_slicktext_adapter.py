@@ -142,6 +142,37 @@ def test_send_reply_api_failure():
     print("✓ send_reply: returns False on 409 (unpaid plan)")
 
 
+def test_send_reply_retries_on_429_then_succeeds():
+    """429 on first attempt, 200 on second — should return True and call POST twice."""
+    adapter = _v2_adapter(api_key="testkey", brand_id="99999")
+
+    responses = [
+        MagicMock(status_code=429, text="rate limited"),
+        MagicMock(status_code=200),
+    ]
+    with patch("app.messaging.slicktext_adapter.requests.post", side_effect=responses) as mock_post, \
+         patch("app.messaging.slicktext_adapter.time.sleep"):
+        result = adapter.send_reply("+15554449998", "test")
+
+    assert result is True
+    assert mock_post.call_count == 2
+    print("✓ send_reply: retries on 429, succeeds on second attempt")
+
+
+def test_send_reply_fails_after_three_429s():
+    """Three consecutive 429s — should return False after exhausting all retries."""
+    adapter = _v2_adapter(api_key="testkey", brand_id="99999")
+
+    responses = [MagicMock(status_code=429, text="rate limited")] * 3
+    with patch("app.messaging.slicktext_adapter.requests.post", side_effect=responses) as mock_post, \
+         patch("app.messaging.slicktext_adapter.time.sleep"):
+        result = adapter.send_reply("+15554449998", "test")
+
+    assert result is False
+    assert mock_post.call_count == 3
+    print("✓ send_reply: returns False after 3 rate-limit retries")
+
+
 # ---------------------------------------------------------------------------
 # Flask webhook endpoint (end-to-end)
 # ---------------------------------------------------------------------------

@@ -172,3 +172,34 @@ def test_try_live_show_signup_no_shows():
     with patch.object(ls.repo, "active_live_shows", return_value=[]):
         r = ls.try_live_show_signup("+15551234567", "blue", "slicktext")
         assert r.suppress_ai is False
+
+
+def test_confirmation_uses_pool_not_bare_thread():
+    """Signup confirmations must be submitted to the bounded pool, not raw threads."""
+    pytest.importorskip("twilio")
+    import main as app_module
+    from concurrent.futures import ThreadPoolExecutor
+
+    assert isinstance(app_module._confirm_pool, ThreadPoolExecutor), \
+        "_confirm_pool should be a ThreadPoolExecutor"
+
+    submitted = []
+    original_submit = app_module._confirm_pool.submit
+
+    show = {
+        "id": 1,
+        "keyword": "chicago",
+        "use_keyword_only": True,
+        "window_start": None,
+        "window_end": None,
+        "event_category": "comedy",
+    }
+    with patch.object(ls.repo, "active_live_shows", return_value=[show]), \
+         patch.object(ls.repo, "add_signup", return_value=True), \
+         patch.object(app_module._confirm_pool, "submit", side_effect=lambda fn, *a, **kw: submitted.append(fn) or original_submit(fn, *a, **kw)):
+        r = ls.try_live_show_signup("+15551234567", "chicago", "slicktext")
+        app_module._send_join_confirmation_async(
+            r.confirmation_phone, r.confirmation_channel, r.join_confirmation_sms
+        )
+
+    assert len(submitted) == 1, "Expected exactly one pool submission for the confirmation"

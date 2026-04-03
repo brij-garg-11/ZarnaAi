@@ -15,9 +15,11 @@ requests (optional but recommended in production).
 
 import logging
 import os
+import time
 import unicodedata
 from typing import Optional, Tuple
 
+from twilio.base.exceptions import TwilioRestException
 from twilio.request_validator import RequestValidator
 from twilio.rest import Client
 
@@ -167,35 +169,44 @@ class TwilioAdapter:
             logger.warning("TWILIO_PHONE_NUMBER not configured — reply not sent.")
             return False
 
-        try:
-            is_whatsapp = _is_whatsapp_number(to_number)
+        is_whatsapp = _is_whatsapp_number(to_number)
+        if is_whatsapp:
+            whatsapp_from = os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
+            final_to = _ensure_whatsapp_prefix(to_number)
+            final_from = _ensure_whatsapp_prefix(whatsapp_from)
+        else:
+            final_to = _strip_whatsapp_prefix(to_number)
+            final_from = _strip_whatsapp_prefix(self._from_number)
 
-            if is_whatsapp:
-                whatsapp_from = os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
-                final_to = _ensure_whatsapp_prefix(to_number)
-                final_from = _ensure_whatsapp_prefix(whatsapp_from)
-            else:
-                final_to = _strip_whatsapp_prefix(to_number)
-                final_from = _strip_whatsapp_prefix(self._from_number)
+        logger.info(
+            "Sending Twilio reply via channel=%s from=%s to=%s",
+            "whatsapp" if is_whatsapp else "sms",
+            final_from,
+            final_to,
+        )
 
-            logger.info(
-                "Sending Twilio reply via channel=%s from=%s to=%s",
-                "whatsapp" if is_whatsapp else "sms",
-                final_from,
-                final_to,
-            )
-
-            msg = self._client.messages.create(
-                to=final_to,
-                from_=final_from,
-                body=body,
-            )
-            logger.info("Twilio reply sent: SID=%s", msg.sid)
-            return True
-
-        except Exception as e:
-            logger.error("Twilio send error: %s", e)
-            return False
+        for attempt in range(3):
+            try:
+                msg = self._client.messages.create(
+                    to=final_to,
+                    from_=final_from,
+                    body=body,
+                )
+                logger.info("Twilio reply sent: SID=%s", msg.sid)
+                return True
+            except TwilioRestException as e:
+                if e.status == 429:
+                    wait = 2 ** attempt
+                    logger.warning("Twilio rate-limited (attempt %d/3) — retrying in %ds", attempt + 1, wait)
+                    time.sleep(wait)
+                    continue
+                logger.error("Twilio send error: %s", e)
+                return False
+            except Exception as e:
+                logger.error("Twilio send error: %s", e)
+                return False
+        logger.error("Twilio send failed after 3 attempts (rate limited): %s", to_number)
+        return False
 
 
 def create_twilio_adapter() -> TwilioAdapter:

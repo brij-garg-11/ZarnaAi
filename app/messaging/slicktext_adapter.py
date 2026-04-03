@@ -20,6 +20,7 @@ Auto-detects version based on which credentials are set in .env:
 
 import logging
 import re
+import time
 import unicodedata
 from typing import Optional, Tuple
 
@@ -250,19 +251,28 @@ class SlickTextAdapter:
             "number":   to_number,
             "body":     body,
         }
-        try:
-            resp = requests.post(
-                url,
-                data=data,
-                auth=(self._public_key, self._private_key),
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                logger.info(f"Reply sent to {to_number} (v1)")
-                return True
-            logger.error(f"SlickText v1 send failed: {resp.status_code} — {resp.text}")
-        except requests.RequestException as e:
-            logger.error(f"SlickText v1 request error: {e}")
+        for attempt in range(3):
+            try:
+                resp = requests.post(
+                    url,
+                    data=data,
+                    auth=(self._public_key, self._private_key),
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    logger.info(f"Reply sent to {to_number} (v1)")
+                    return True
+                if resp.status_code == 429:
+                    wait = 2 ** attempt
+                    logger.warning(f"SlickText v1 rate-limited (attempt {attempt+1}/3) — retrying in {wait}s")
+                    time.sleep(wait)
+                    continue
+                logger.error(f"SlickText v1 send failed: {resp.status_code} — {resp.text}")
+                return False
+            except requests.RequestException as e:
+                logger.error(f"SlickText v1 request error: {e}")
+                return False
+        logger.error(f"SlickText v1 send failed after 3 attempts (rate limited): {to_number}")
         return False
 
     def _send_v2(self, to_number: str, body: str) -> bool:
@@ -271,22 +281,31 @@ class SlickTextAdapter:
             return False
 
         url = f"{_V2_BASE}/brands/{self._brand_id}/messages"
-        try:
-            resp = requests.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type":  "application/json",
-                },
-                json={"mobile_number": to_number, "body": body},
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                logger.info(f"Reply sent to {to_number} (v2)")
-                return True
-            logger.error(f"SlickText v2 send failed: {resp.status_code} — {resp.text}")
-        except requests.RequestException as e:
-            logger.error(f"SlickText v2 request error: {e}")
+        for attempt in range(3):
+            try:
+                resp = requests.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type":  "application/json",
+                    },
+                    json={"mobile_number": to_number, "body": body},
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    logger.info(f"Reply sent to {to_number} (v2)")
+                    return True
+                if resp.status_code == 429:
+                    wait = 2 ** attempt
+                    logger.warning(f"SlickText v2 rate-limited (attempt {attempt+1}/3) — retrying in {wait}s")
+                    time.sleep(wait)
+                    continue
+                logger.error(f"SlickText v2 send failed: {resp.status_code} — {resp.text}")
+                return False
+            except requests.RequestException as e:
+                logger.error(f"SlickText v2 request error: {e}")
+                return False
+        logger.error(f"SlickText v2 send failed after 3 attempts (rate limited): {to_number}")
         return False
 
 

@@ -4,6 +4,7 @@ import os
 import threading
 import time
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -40,8 +41,15 @@ def _safe_try_live_show_signup(phone_number: str, message_text: str, channel: st
         return LiveShowSignupResult()
 
 
+# Bounded pool for signup confirmation texts.
+# 20 workers → ~20 concurrent API calls; excess jobs queue automatically.
+# Handles 500-1000 signups without opening thousands of threads or overwhelming
+# the SlickText / Twilio APIs. Each adapter already retries on 429.
+_confirm_pool = ThreadPoolExecutor(max_workers=20, thread_name_prefix="confirm")
+
+
 def _send_join_confirmation_async(phone: str, channel: str, body: str) -> None:
-    """Fire-and-forget SMS so webhook stays fast."""
+    """Queue a confirmation SMS through the bounded pool so webhooks stay fast."""
 
     def run():
         try:
@@ -53,7 +61,7 @@ def _send_join_confirmation_async(phone: str, channel: str, body: str) -> None:
         except Exception as e:
             logging.error("Join confirmation SMS failed (...%s): %s", phone[-4:] if phone else "?", e)
 
-    threading.Thread(target=run, daemon=True).start()
+    _confirm_pool.submit(run)
 
 
 app = Flask(__name__)
