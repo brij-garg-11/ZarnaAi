@@ -1799,3 +1799,27 @@ function toggleConvChart() {{
 </html>"""
 
     return html
+
+
+@admin_bp.route("/admin/quizzes/kill-all", methods=["POST"])
+def kill_all_quizzes():
+    """Immediately expire all active quiz sessions. Requires admin auth."""
+    auth = check_admin_auth(request)
+    if auth:
+        return auth
+    conn = get_db_connection()
+    if not conn:
+        return Response("DB not configured", status=503)
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE quiz_sessions SET expires_at = NOW() - INTERVAL '1 second' "
+                    "WHERE expires_at IS NULL OR expires_at > NOW()"
+                )
+                killed = cur.rowcount
+        conn.close()
+        return Response(f"Killed {killed} active quiz session(s).", status=200, mimetype="text/plain")
+    except Exception as e:
+        conn.close()
+        return Response(f"Error: {e}", status=500, mimetype="text/plain")
