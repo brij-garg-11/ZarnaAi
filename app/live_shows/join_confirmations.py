@@ -37,7 +37,7 @@ _COMEDY_NEW = [
     (
         "In! Done! You're on the guest list! "
         "I asked my husband to 'watch the kids' — he watched. That's it. Just watched. "
-        "Enjoy the show — tonight WE get watched (by an audience that paid). "
+        "Enjoy the show! "
     ),
     (
         "You're officially in — let's GO! "
