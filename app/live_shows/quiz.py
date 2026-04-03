@@ -51,10 +51,18 @@ def get_active_quiz_for_fan(phone_number: str) -> Optional[dict]:
                       WHERE  qr.quiz_id      = qs.id
                         AND  qr.phone_number = %s
                   )
+                  AND (
+                      qs.show_id IS NULL
+                      OR EXISTS (
+                          SELECT 1 FROM live_show_signups lss
+                          WHERE  lss.show_id      = qs.show_id
+                            AND  lss.phone_number = %s
+                      )
+                  )
                 ORDER BY qs.created_at DESC
                 LIMIT 1
                 """,
-                (phone_number,),
+                (phone_number, phone_number),
             )
             row = cur.fetchone()
             return dict(row) if row else None
