@@ -750,6 +750,8 @@ def _fetch_dashboard(
                         FROM messages
                         WHERE role = 'assistant'
                           AND did_user_reply IS NOT NULL
+                          AND source IS DISTINCT FROM 'csv_import'
+                          AND source IS DISTINCT FROM 'blast'
                           AND {_date_filter}
                         GROUP BY COALESCE(intent, 'unknown')
                         ORDER BY reply_rate_pct DESC NULLS LAST
@@ -777,6 +779,8 @@ def _fetch_dashboard(
                         FROM messages
                         WHERE role = 'assistant'
                           AND did_user_reply IS NOT NULL
+                          AND source IS DISTINCT FROM 'csv_import'
+                          AND source IS DISTINCT FROM 'blast'
                           AND {_date_filter}
                         GROUP BY COALESCE(tone_mode, 'unknown')
                         ORDER BY reply_rate_pct DESC NULLS LAST

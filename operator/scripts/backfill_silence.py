@@ -314,6 +314,8 @@ def backfill_intent(conn) -> int:
                        ) AS user_text
                 FROM messages a
                 WHERE a.role = 'assistant'
+                  AND a.source IS DISTINCT FROM 'csv_import'
+                  AND a.source IS DISTINCT FROM 'blast'
                   AND (a.intent IS NULL OR a.intent = 'general')
                 """
             )
