@@ -575,38 +575,52 @@ def _fetch_dashboard(
                     cur.execute(
                         """
                         SELECT
-                          (SELECT COUNT(*) FROM contacts)                      AS total_list,
+                          -- Pre-bot list (subscribed before launch)
+                          (SELECT COUNT(*) FROM contacts
+                           WHERE created_at < %s)                              AS pre_bot_list,
+
+                          -- Pre-bot fans who ever texted in (before launch)
                           (SELECT COUNT(DISTINCT phone_number) FROM messages
-                           WHERE role = 'user')                                AS fans_texted_bot,
+                           WHERE role = 'user' AND created_at < %s)           AS pre_bot_texted,
+
+                          -- Post-bot: unique fans who texted the bot
+                          (SELECT COUNT(DISTINCT phone_number) FROM messages
+                           WHERE role = 'user' AND created_at >= %s)          AS post_bot_fans,
+
+                          -- Post-bot: fans with 3+ user messages (real conversation)
                           (SELECT COUNT(*) FROM (
                                SELECT phone_number FROM messages
-                               WHERE role = 'user'
+                               WHERE role = 'user' AND created_at >= %s
                                GROUP BY phone_number HAVING COUNT(*) >= 3
                            ) AS deep_fans)                                    AS deep_convo_fans,
+
+                          -- Post-bot: unique fans who received a bot reply
                           (SELECT COUNT(DISTINCT phone_number) FROM messages
-                           WHERE role = 'assistant')                           AS bot_replied_fans,
-                          (SELECT ROUND(AVG(msg_count), 1) FROM (
-                               SELECT COUNT(*) AS msg_count FROM messages
-                               WHERE role = 'user'
-                               GROUP BY phone_number
-                           ) AS counts)                                        AS avg_msgs_per_fan
-                        """
+                           WHERE role = 'assistant' AND created_at >= %s)     AS bot_replied_fans,
+
+                          -- Total list size
+                          (SELECT COUNT(*) FROM contacts)                      AS total_list
+                        """,
+                        (_BOT_LAUNCH, _BOT_LAUNCH, _BOT_LAUNCH, _BOT_LAUNCH, _BOT_LAUNCH),
                     )
                     row = cur.fetchone()
                     if row:
-                        total_list  = row[0] or 1
-                        fans_texted = row[1] or 0
-                        deep_convos = row[2] or 0
-                        bot_replied = row[3] or 1
-                        avg_msgs    = float(row[4] or 0)
+                        pre_list    = row[0] or 0
+                        pre_texted  = row[1] or 0
+                        post_fans   = row[2] or 0
+                        deep_convos = row[3] or 0
+                        bot_replied = row[4] or 1
+                        total_list  = row[5] or 1
                         insights_impact = {
-                            "total_list": total_list,
-                            "fans_texted_bot": fans_texted,
-                            "penetration_pct": round(fans_texted / max(total_list, 1) * 100, 1),
+                            "pre_bot_list": pre_list,
+                            "pre_bot_texted": pre_texted,
+                            "pre_engagement_pct": round(pre_texted / max(pre_list, 1) * 100, 1),
+                            "post_bot_fans": post_fans,
                             "deep_convo_fans": deep_convos,
                             "deep_convo_pct": round(deep_convos / max(bot_replied, 1) * 100, 1),
                             "bot_replied_fans": bot_replied,
-                            "avg_msgs_per_fan": avg_msgs,
+                            "total_list": total_list,
+                            "penetration_pct": round(post_fans / max(total_list, 1) * 100, 1),
                         }
                 except Exception:
                     conn.rollback()
@@ -856,16 +870,18 @@ def _range_links(active: int) -> str:
 
 
 def _render_impact_section(impact: dict) -> str:
-    """Bot engagement impact banner."""
+    """Before/after bot impact banner."""
     if not impact:
         return ""
-    total_list   = impact.get("total_list", 0)
-    fans_texted  = impact.get("fans_texted_bot", 0)
-    penetration  = impact.get("penetration_pct", 0)
-    deep_pct     = impact.get("deep_convo_pct", 0)
-    deep_fans    = impact.get("deep_convo_fans", 0)
-    bot_replied  = impact.get("bot_replied_fans", 0)
-    avg_msgs     = impact.get("avg_msgs_per_fan", 0)
+    pre_list        = impact.get("pre_bot_list", 0)
+    pre_texted      = impact.get("pre_bot_texted", 0)
+    pre_pct         = impact.get("pre_engagement_pct", 0)
+    post_fans       = impact.get("post_bot_fans", 0)
+    deep_pct        = impact.get("deep_convo_pct", 0)
+    deep_fans       = impact.get("deep_convo_fans", 0)
+    bot_replied     = impact.get("bot_replied_fans", 0)
+    penetration_pct = impact.get("penetration_pct", 0)
+    total_list      = impact.get("total_list", 0)
 
     def _bar(pct, color):
         w = min(100, max(0, float(pct or 0)))
@@ -880,29 +896,30 @@ def _render_impact_section(impact: dict) -> str:
                 border:1px solid #312e81;border-radius:14px;padding:22px 24px;margin-bottom:22px;">
       <div style="font-size:11px;font-weight:700;letter-spacing:.1em;color:#818cf8;
                   text-transform:uppercase;margin-bottom:14px;">
-        Bot Engagement — Since Launch
+        Bot Impact — Before vs After March 27
       </div>
       <div style="display:grid;grid-template-columns:1fr 1px 1fr 1px 1fr 1px 1fr;gap:0;align-items:start;">
 
         <div style="padding-right:20px;">
           <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;
-                      margin-bottom:4px;">List penetration</div>
-          <div style="font-size:28px;font-weight:800;color:#4ade80;">{penetration}%</div>
+                      margin-bottom:4px;">Pre-bot engagement</div>
+          <div style="font-size:28px;font-weight:800;color:#f87171;">{pre_pct}%</div>
           <div style="font-size:12px;color:#6b7280;margin-top:2px;">
-            {fans_texted:,} of {total_list:,} subscribers texted the bot
+            {pre_texted:,} of {pre_list:,} subscribers ever replied
           </div>
-          {_bar(penetration, "#4ade80")}
+          {_bar(pre_pct, "#f87171")}
         </div>
 
         <div style="background:#1f2937;"></div>
 
         <div style="padding:0 20px;">
           <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;
-                      margin-bottom:4px;">Bot replies sent to</div>
-          <div style="font-size:28px;font-weight:800;color:#60a5fa;">{bot_replied:,}</div>
+                      margin-bottom:4px;">Post-bot penetration</div>
+          <div style="font-size:28px;font-weight:800;color:#4ade80;">{penetration_pct}%</div>
           <div style="font-size:12px;color:#6b7280;margin-top:2px;">
-            unique fans
+            {post_fans:,} of {total_list:,} subscribers texted the bot
           </div>
+          {_bar(penetration_pct, "#4ade80")}
         </div>
 
         <div style="background:#1f2937;"></div>
@@ -921,17 +938,17 @@ def _render_impact_section(impact: dict) -> str:
 
         <div style="padding-left:20px;">
           <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;
-                      margin-bottom:4px;">Avg msgs per fan</div>
-          <div style="font-size:28px;font-weight:800;color:#fbbf24;">{avg_msgs}</div>
+                      margin-bottom:4px;">Bot replied to</div>
+          <div style="font-size:28px;font-weight:800;color:#60a5fa;">{bot_replied:,}</div>
           <div style="font-size:12px;color:#6b7280;margin-top:2px;">
-            messages per engaged fan
+            unique fans since launch
           </div>
         </div>
 
       </div>
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid #1f2937;
                   font-size:11px;color:#4b5563;">
-        Goal: penetration % up, deep convo % up, avg msgs per fan up — show over show.
+        Goal: pre-bot % stays low, post-bot penetration % and deep convo % grow show over show.
       </div>
     </div>"""
 
