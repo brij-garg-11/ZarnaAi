@@ -251,12 +251,16 @@ def backfill_intent(conn) -> int:
 
         return "general"
 
-    # Pull assistant messages with NULL intent + preceding user message
+    # Pull assistant messages with NULL intent OR legacy 'general' label
+    # + the preceding user message text for each.
+    # For 'general' rows we only overwrite when the classifier finds a more
+    # specific bucket — if it resolves back to 'general' we leave it alone.
     with conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT a.id,
+                       a.intent AS current_intent,
                        (SELECT u.text FROM messages u
                         WHERE u.phone_number = a.phone_number
                           AND u.role = 'user'
@@ -266,7 +270,7 @@ def backfill_intent(conn) -> int:
                        ) AS user_text
                 FROM messages a
                 WHERE a.role = 'assistant'
-                  AND a.intent IS NULL
+                  AND (a.intent IS NULL OR a.intent = 'general')
                 """
             )
             rows = cur.fetchall()
@@ -275,8 +279,11 @@ def backfill_intent(conn) -> int:
         return 0
 
     updates: dict[str, list[int]] = {}
-    for msg_id, user_text in rows:
+    for msg_id, current_intent, user_text in rows:
         intent = _classify(user_text)
+        # For previously-labeled 'general' rows, only upgrade to a specific bucket
+        if current_intent == "general" and intent == "general":
+            continue
         updates.setdefault(intent, []).append(msg_id)
 
     total = 0
