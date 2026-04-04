@@ -802,12 +802,13 @@ def _fetch_dashboard(
                           bd.tracked_link_slug,
                           COALESCE(bd.opt_out_count, 0) AS opt_out_count,
                           bd.manual_link_clicks,
-                          -- replies within 24h, only from contacts who existed at blast time
+                          -- replies within 24h, only from contacts who existed at blast time.
+                          -- csv_import is included so pre-bot blasts count replies from the CSV history.
                           (SELECT COUNT(DISTINCT m.phone_number)
                            FROM messages m
                            JOIN contacts c ON c.phone_number = m.phone_number
                            WHERE m.role = 'user'
-                             AND m.source IS DISTINCT FROM 'csv_import'
+                             AND m.source IS DISTINCT FROM 'blast'
                              AND m.created_at >= bd.sent_at
                              AND m.created_at <  bd.sent_at + INTERVAL '24 hours'
                              AND c.created_at  <= bd.sent_at
