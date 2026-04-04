@@ -16,6 +16,7 @@ and a single-pass window for msgs_after_this (not per-row correlated counts).
 import logging
 import os
 import sys
+import time
 
 try:
     from dotenv import load_dotenv
@@ -26,8 +27,20 @@ try:
 except ImportError:
     pass
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [backfill_silence] %(message)s",
+    stream=sys.stdout,
+    force=True,
+)
 _logger = logging.getLogger(__name__)
+
+
+def _banner(msg: str) -> None:
+    """Loud lines for Railway / cron logs (stdout + logger)."""
+    line = f"=== BACKFILL_CRON {msg} ==="
+    print(line, flush=True)
+    _logger.info(msg)
 
 SILENCE_HOURS: int = int(os.getenv("SILENCE_HOURS", "24"))
 SESSION_GAP_HOURS: int = int(os.getenv("SESSION_GAP_HOURS", "24"))
@@ -157,30 +170,74 @@ def backfill_came_back_within_7d(conn) -> int:
 
 
 def main():
+    t0 = time.perf_counter()
+    _banner("START (scripts/backfill_silence.py)")
+    _logger.info(
+        "config silence_hours=%s session_gap_hours=%s cwd=%s",
+        SILENCE_HOURS,
+        SESSION_GAP_HOURS,
+        os.getcwd(),
+    )
     conn = _get_conn()
     try:
+        _logger.info("database connected")
+
+        t = time.perf_counter()
+        _banner("phase: ensure_perf_indexes")
         _ensure_perf_indexes(conn)
+        _logger.info("ensure_perf_indexes done in %.2fs", time.perf_counter() - t)
+
+        t = time.perf_counter()
+        _banner("phase: backfill_silence")
         silence_count = backfill_silence(conn)
-        _logger.info("backfill_silence: marked %d bot replies as went_silent_after=TRUE", silence_count)
+        _logger.info(
+            "backfill_silence: marked %d bot replies as went_silent_after=TRUE (%.2fs)",
+            silence_count,
+            time.perf_counter() - t,
+        )
 
+        t = time.perf_counter()
+        _banner("phase: backfill_msgs_after_this (window query)")
         msgs_count = backfill_msgs_after_this(conn)
-        _logger.info("backfill_msgs_after_this: filled msgs_after_this for %d rows", msgs_count)
+        _logger.info(
+            "backfill_msgs_after_this: filled msgs_after_this for %d rows (%.2fs)",
+            msgs_count,
+            time.perf_counter() - t,
+        )
 
+        t = time.perf_counter()
+        _banner("phase: close_stale_sessions")
         closed = close_stale_sessions(conn)
-        _logger.info("close_stale_sessions: closed %d sessions", closed)
+        _logger.info("close_stale_sessions: closed %d sessions (%.2fs)", closed, time.perf_counter() - t)
 
+        t = time.perf_counter()
+        _banner("phase: backfill_came_back_within_7d")
         came_back = backfill_came_back_within_7d(conn)
-        _logger.info("backfill_came_back_within_7d: updated %d sessions", came_back)
+        _logger.info(
+            "backfill_came_back_within_7d: updated %d sessions (%.2fs)",
+            came_back,
+            time.perf_counter() - t,
+        )
 
+        t = time.perf_counter()
+        _banner("phase: ANALYZE")
         with conn:
             with conn.cursor() as cur:
                 cur.execute("ANALYZE messages")
                 cur.execute("ANALYZE conversation_sessions")
-        _logger.info("ANALYZE messages, conversation_sessions — planner stats refreshed.")
+        _logger.info("ANALYZE done (%.2fs)", time.perf_counter() - t)
 
-        _logger.info("Backfill complete.")
+        _banner(
+            f"DONE total_wall_s={time.perf_counter() - t0:.2f}s "
+            f"(silence={silence_count} msgs_after={msgs_count} closed={closed} came_back={came_back})"
+        )
+    except Exception:
+        _logger.exception("BACKFILL_CRON FATAL — uncaught exception")
+        print("=== BACKFILL_CRON FATAL (see log above) ===", flush=True)
+        raise
     finally:
         conn.close()
+        _logger.info("connection closed")
 
 
 if __name__ == "__main__":

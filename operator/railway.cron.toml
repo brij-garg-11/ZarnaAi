@@ -9,4 +9,5 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "python scripts/backfill_silence.py"
+# -u = unbuffered stdout/stderr so Railway shows logs line-by-line before exit
+startCommand = "python -u scripts/backfill_silence.py"
