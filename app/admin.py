@@ -674,6 +674,7 @@ def _fetch_dashboard(
                         FROM messages
                         WHERE role = 'assistant'
                           AND did_user_reply IS NOT NULL
+                          AND COALESCE(intent, 'general') != 'general'
                           AND {_date_filter}
                         """
                     )
@@ -1129,17 +1130,17 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
       <div class="stat-card">
         <div class="stat-label">Scored Replies</div>
         <div class="stat-value">{scored:,}</div>
-        <div class="stat-trend" style="color:#64748b;font-size:12px">{"before Mar 27" if insights_era == "pre" else f"last {insights_days} days"}</div>
+        <div class="stat-trend" style="color:#64748b;font-size:12px">{"before Mar 27" if insights_era == "pre" else f"last {insights_days} days"} · excl. unclassified</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Reply Rate</div>
         <div class="stat-value" style="color:{_pct_color(reply_rate)}">{reply_rate if reply_rate is not None else '—'}{'%' if reply_rate is not None else ''}</div>
-        <div class="stat-trend" style="color:#64748b;font-size:12px">fans who texted back</div>
+        <div class="stat-trend" style="color:#64748b;font-size:12px">fans who texted back · excl. unclassified</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Drop-off Rate</div>
         <div class="stat-value" style="color:{_drop_color(dropoff)}">{dropoff if dropoff is not None else '—'}{'%' if dropoff is not None else ''}</div>
-        <div class="stat-trend" style="color:#64748b;font-size:12px">bot msg then silence</div>
+        <div class="stat-trend" style="color:#64748b;font-size:12px">bot msg then silence · excl. unclassified</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Avg Reply Delay</div>
