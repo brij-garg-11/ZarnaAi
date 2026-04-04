@@ -1,3 +1,4 @@
+# Operator dashboard (ZarnaAi HQ). For nightly backfill cron, use railway.cron.toml.
 [build]
 builder = "nixpacks"
 

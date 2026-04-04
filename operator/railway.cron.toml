@@ -1,0 +1,12 @@
+# Nightly analytics backfill — NOT the operator dashboard.
+#
+# Point the "incredible-reprieve" (or similar) Railway service at this file:
+#   Service → Settings → Railway config file → operator/railway.cron.toml
+#
+# Do NOT use this for ZarnaAi HQ — that service uses railway.toml (gunicorn).
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python scripts/backfill_silence.py"
