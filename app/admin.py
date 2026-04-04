@@ -569,6 +569,7 @@ def _fetch_dashboard(
             insights_session = {}
             insights_scored_total = 0
             insights_impact = {}
+            insights_blasts = []
             _BOT_LAUNCH = "2026-03-27"  # first bot reply date — used for pre/post comparison
             if tab == "insights":
                 # ── Bot engagement impact ─────────────────────────────────
