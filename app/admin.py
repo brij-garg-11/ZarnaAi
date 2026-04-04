@@ -579,9 +579,9 @@ def _fetch_dashboard(
                           (SELECT COUNT(*) FROM contacts
                            WHERE created_at < %s)                              AS pre_bot_list,
 
-                          -- Pre-bot fans who ever texted in (before launch)
-                          (SELECT COUNT(DISTINCT phone_number) FROM messages
-                           WHERE role = 'user' AND created_at < %s)           AS pre_bot_texted,
+                          -- Post-bot list (subscribed on/after launch)
+                          (SELECT COUNT(*) FROM contacts
+                           WHERE created_at >= %s)                             AS post_bot_list,
 
                           -- Post-bot: unique fans who texted the bot
                           (SELECT COUNT(DISTINCT phone_number) FROM messages
@@ -605,22 +605,21 @@ def _fetch_dashboard(
                     )
                     row = cur.fetchone()
                     if row:
-                        pre_list    = row[0] or 0
-                        pre_texted  = row[1] or 0
-                        post_fans   = row[2] or 0
-                        deep_convos = row[3] or 0
-                        bot_replied = row[4] or 1
-                        total_list  = row[5] or 1
+                        pre_list     = row[0] or 0
+                        post_list    = row[1] or 1
+                        post_fans    = row[2] or 0
+                        deep_convos  = row[3] or 0
+                        bot_replied  = row[4] or 1
+                        total_list   = row[5] or 1
                         insights_impact = {
                             "pre_bot_list": pre_list,
-                            "pre_bot_texted": pre_texted,
-                            "pre_engagement_pct": round(pre_texted / max(pre_list, 1) * 100, 1),
+                            "post_bot_list": post_list,
                             "post_bot_fans": post_fans,
                             "deep_convo_fans": deep_convos,
                             "deep_convo_pct": round(deep_convos / max(bot_replied, 1) * 100, 1),
                             "bot_replied_fans": bot_replied,
                             "total_list": total_list,
-                            "penetration_pct": round(post_fans / max(total_list, 1) * 100, 1),
+                            "penetration_pct": round(post_fans / max(post_list, 1) * 100, 1),
                         }
                 except Exception:
                     conn.rollback()
@@ -874,8 +873,7 @@ def _render_impact_section(impact: dict) -> str:
     if not impact:
         return ""
     pre_list        = impact.get("pre_bot_list", 0)
-    pre_texted      = impact.get("pre_bot_texted", 0)
-    pre_pct         = impact.get("pre_engagement_pct", 0)
+    post_list       = impact.get("post_bot_list", 0)
     post_fans       = impact.get("post_bot_fans", 0)
     deep_pct        = impact.get("deep_convo_pct", 0)
     deep_fans       = impact.get("deep_convo_fans", 0)
@@ -902,12 +900,14 @@ def _render_impact_section(impact: dict) -> str:
 
         <div style="padding-right:20px;">
           <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;
-                      margin-bottom:4px;">Pre-bot engagement</div>
-          <div style="font-size:28px;font-weight:800;color:#f87171;">{pre_pct}%</div>
+                      margin-bottom:4px;">Pre-bot subscribers</div>
+          <div style="font-size:28px;font-weight:800;color:#f87171;">{pre_list:,}</div>
           <div style="font-size:12px;color:#6b7280;margin-top:2px;">
-            {pre_texted:,} of {pre_list:,} subscribers ever replied
+            subscribed before March 27 · SMS-only era
           </div>
-          {_bar(pre_pct, "#f87171")}
+          <div style="font-size:11px;color:#4b5563;margin-top:8px;">
+            {total_list:,} total on list today
+          </div>
         </div>
 
         <div style="background:#1f2937;"></div>
@@ -917,7 +917,7 @@ def _render_impact_section(impact: dict) -> str:
                       margin-bottom:4px;">Post-bot penetration</div>
           <div style="font-size:28px;font-weight:800;color:#4ade80;">{penetration_pct}%</div>
           <div style="font-size:12px;color:#6b7280;margin-top:2px;">
-            {post_fans:,} of {total_list:,} subscribers texted the bot
+            {post_fans:,} of {post_list:,} new subscribers texted the bot
           </div>
           {_bar(penetration_pct, "#4ade80")}
         </div>
