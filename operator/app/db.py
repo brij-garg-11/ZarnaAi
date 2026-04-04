@@ -137,6 +137,9 @@ def init_db():
         "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS is_quiz BOOLEAN DEFAULT FALSE",
         "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS quiz_correct_answer TEXT DEFAULT ''",
 
+        # ── Analytics columns on blast_drafts ──────────────────────────────
+        "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS opt_out_count INT DEFAULT 0",
+
         # ── Data-cleanup on every startup ──────────────────────────────────
         # 1. Clear /tmp-based image URLs (ephemeral Railway filesystem, gone on redeploy)
         "UPDATE blast_drafts SET media_url='' WHERE media_url LIKE '%/operator/blast/uploads/%'",

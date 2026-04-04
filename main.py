@@ -32,6 +32,33 @@ from app.ops_metrics import ai_reply_enter, ai_reply_leave, bump as ops_bump
 logging.basicConfig(level=logging.INFO)
 
 
+def _record_blast_optout() -> None:
+    """Increment opt_out_count on the most recent sent blast (within 7 days)."""
+    try:
+        from app.admin_auth import get_db_connection
+        conn = get_db_connection()
+        if not conn:
+            return
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE blast_drafts
+                    SET opt_out_count = COALESCE(opt_out_count, 0) + 1
+                    WHERE id = (
+                        SELECT id FROM blast_drafts
+                        WHERE status = 'sent'
+                          AND sent_at >= NOW() - INTERVAL '7 days'
+                        ORDER BY sent_at DESC
+                        LIMIT 1
+                    )
+                    """
+                )
+        conn.close()
+    except Exception:
+        logging.exception("Failed to record blast opt-out")
+
+
 def _safe_try_live_show_signup(phone_number: str, message_text: str, channel: str) -> LiveShowSignupResult:
     """Never let live-show DB logic break inbound webhooks."""
     try:
@@ -236,6 +263,11 @@ def slicktext_webhook():
             signup_res.confirmation_channel or "slicktext",
             signup_res.join_confirmation_sms,
         )
+
+    # Track opt-outs on the most recent blast (within 7 days)
+    _OPT_OUT_KEYWORDS = {"stop", "stopall", "unsubscribe", "cancel", "end", "quit"}
+    if raw_phone and raw_body and raw_body.strip().lower() in _OPT_OUT_KEYWORDS:
+        threading.Thread(target=_record_blast_optout, daemon=True).start()
 
     phone_number, message_text = slicktext.filter_inbound_for_ai(raw_phone, raw_body)
 

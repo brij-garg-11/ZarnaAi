@@ -19,7 +19,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from urllib.parse import quote, urlencode
 
-from flask import Blueprint, Response, redirect as _redirect, request
+from flask import Blueprint, Response, jsonify, redirect as _redirect, request
 
 from app.admin_auth import (
     admin_password_configured,
@@ -799,6 +799,7 @@ def _fetch_dashboard(
                           bd.sent_at,
                           bd.sent_count,
                           bd.tracked_link_slug,
+                          COALESCE(bd.opt_out_count, 0) AS opt_out_count,
                           -- replies within 24h, only from contacts who existed at blast time
                           (SELECT COUNT(DISTINCT m.phone_number)
                            FROM messages m
@@ -829,16 +830,18 @@ def _fetch_dashboard(
                         LIMIT 50
                         """
                     )
-                    cols = ["id", "name", "sent_at", "sent_count",
-                            "tracked_link_slug", "replies_24h", "link_clicks", "link_sent_to"]
+                    cols = ["id", "name", "sent_at", "sent_count", "tracked_link_slug",
+                            "opt_out_count", "replies_24h", "link_clicks", "link_sent_to"]
                     for r in cur.fetchall():
                         row = dict(zip(cols, r))
                         sc  = row["sent_count"] or 0
                         rep = min(row["replies_24h"] or 0, sc)  # cap at sent_count
-                        row["replies_24h"]   = rep
+                        row["replies_24h"]    = rep
                         row["reply_rate_pct"] = round(rep / sc * 100, 1) if sc else 0
                         denom = row["link_sent_to"] or sc
                         row["ctr_pct"] = round(row["link_clicks"] / denom * 100, 1) if (denom and row["tracked_link_slug"]) else None
+                        oc = row["opt_out_count"] or 0
+                        row["unsub_rate_pct"] = round(oc / sc * 100, 2) if sc else None
                         row["sent_at_str"] = row["sent_at"].strftime("%b %-d, %Y") if row["sent_at"] else "—"
                         insights_blasts.append(row)
                 except Exception:
@@ -1303,6 +1306,79 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
 
     # ── Blasts section ────────────────────────────────────────────────────
     blasts = stats.get("insights_blasts", [])
+    _admin_b64 = __import__('base64').b64encode(f'admin:{os.getenv("ADMIN_PASSWORD","")}'.encode()).decode()
+    _add_blast_form = f"""
+    <div id="add-blast-panel" style="display:none;padding:16px 20px;border-top:1px solid #1f2937;background:#0f172a;">
+      <div style="font-size:13px;color:#94a3b8;margin-bottom:12px;">Add an external blast (e.g. from SlickText)</div>
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr;gap:10px;align-items:end;">
+        <div>
+          <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px;">Blast Name</label>
+          <input id="eb-name" type="text" placeholder="e.g. Zarna Voice Note #1"
+            style="width:100%;background:#1e293b;border:1px solid #374151;color:#e2e8f0;
+                   padding:6px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;">
+        </div>
+        <div>
+          <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px;">Date Sent</label>
+          <input id="eb-date" type="date"
+            style="width:100%;background:#1e293b;border:1px solid #374151;color:#e2e8f0;
+                   padding:6px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;">
+        </div>
+        <div>
+          <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px;">Sent Count</label>
+          <input id="eb-sent" type="number" min="0" placeholder="4238"
+            style="width:100%;background:#1e293b;border:1px solid #374151;color:#e2e8f0;
+                   padding:6px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;">
+        </div>
+        <div>
+          <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px;">Opt-outs</label>
+          <input id="eb-optouts" type="number" min="0" placeholder="0"
+            style="width:100%;background:#1e293b;border:1px solid #374151;color:#e2e8f0;
+                   padding:6px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;">
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button onclick="submitExternalBlast()"
+            style="flex:1;background:#4f46e5;border:none;color:#fff;padding:7px 14px;
+                   border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;">
+            Add
+          </button>
+          <button onclick="document.getElementById('add-blast-panel').style.display='none'"
+            style="background:transparent;border:1px solid #374151;color:#6b7280;padding:7px 12px;
+                   border-radius:6px;font-size:13px;cursor:pointer;">
+            ✕
+          </button>
+        </div>
+      </div>
+    </div>
+    <script>
+    function submitExternalBlast() {{
+      const name = document.getElementById('eb-name').value.trim();
+      const date = document.getElementById('eb-date').value;
+      const sent = parseInt(document.getElementById('eb-sent').value) || 0;
+      const optouts = parseInt(document.getElementById('eb-optouts').value) || 0;
+      if (!name || !date || !sent) {{ alert('Name, date, and sent count are required.'); return; }}
+      fetch('/admin/actions/add-external-blast', {{
+        method: 'POST',
+        headers: {{
+          'Content-Type': 'application/json',
+          'Authorization': 'Basic {_admin_b64}',
+        }},
+        body: JSON.stringify({{ name, date, sent_count: sent, opt_out_count: optouts }}),
+      }}).then(r => r.json()).then(d => {{
+        if (d.ok) {{ location.reload(); }}
+        else {{ alert('Error: ' + (d.error || 'unknown')); }}
+      }});
+    }}
+    </script>"""
+
+    blast_header_btn = """
+      <button onclick="document.getElementById('add-blast-panel').style.display='block'"
+        style="margin-left:auto;background:#1e293b;border:1px solid #374151;color:#94a3b8;
+               padding:5px 12px;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;"
+        onmouseover="this.style.borderColor='#4f46e5';this.style.color='#818cf8'"
+        onmouseout="this.style.borderColor='#374151';this.style.color='#94a3b8'">
+        + Add external blast
+      </button>"""
+
     if blasts:
         blast_rows_html = ""
         for b in blasts:
@@ -1312,7 +1388,10 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
             replies = b.get("replies_24h") or 0
             clicks  = b.get("link_clicks") or 0
             bid     = b.get("id")
+            unsub   = b.get("unsub_rate_pct")
+            oc      = b.get("opt_out_count") or 0
             rr_color = _pct_color(rr)
+            unsub_cell = "—" if unsub is None else f'<span style="font-weight:700;color:#f87171">{unsub}%</span> <span style="color:#4b5563;font-size:11px">({oc:,})</span>'
             blast_rows_html += f"""
             <tr id="blast-row-{bid}">
               <td style="padding:10px 14px;font-weight:600;color:#e2e8f0;">{_esc(b.get("name","—"))}</td>
@@ -1323,6 +1402,7 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
               <td style="padding:10px 14px;text-align:center;color:#94a3b8;">
                 {"—" if ctr is None else f'<span style="font-weight:700;color:#818cf8">{ctr}%</span> <span style="color:#4b5563;font-size:11px">({clicks:,} clicks)</span>'}
               </td>
+              <td style="padding:10px 14px;text-align:center;color:#94a3b8;">{unsub_cell}</td>
               <td style="padding:10px 14px;text-align:center;">
                 <button onclick="deleteBlast({bid})"
                   style="background:transparent;border:1px solid #374151;color:#6b7280;padding:3px 10px;
@@ -1351,10 +1431,12 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
         }}
         </script>
         <div class="card" style="margin-bottom:20px;padding:0;overflow:hidden;">
-          <div style="padding:16px 20px 12px;border-bottom:1px solid #1f2937;display:flex;align-items:center;gap:12px;">
+          <div style="padding:16px 20px 12px;border-bottom:1px solid #1f2937;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
             <div class="card-title" style="margin:0;">📣 Blast Performance</div>
             <span style="font-size:12px;color:#6b7280;">reply rate = subscribers who texted back within 24h of blast</span>
+            {blast_header_btn}
           </div>
+          {_add_blast_form}
           <table style="width:100%;border-collapse:collapse;">
             <thead>
               <tr style="border-bottom:1px solid #1f2937;">
@@ -1364,6 +1446,7 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
                 <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Replies (24h)</th>
                 <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Reply Rate</th>
                 <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Link CTR</th>
+                <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Unsub Rate</th>
                 <th style="padding:10px 14px;"></th>
               </tr>
             </thead>
@@ -1372,9 +1455,13 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
         </div>"""
     else:
         blast_section = f"""
-        <div class="card" style="margin-bottom:20px;">
-          <div class="card-title">📣 Blast Performance</div>
-          <p style="color:#6b7280;font-size:13px;">No sent blasts found. Blasts sent via the operator panel will appear here with reply rate and CTR.</p>
+        <div class="card" style="margin-bottom:20px;padding:0;overflow:hidden;">
+          <div style="padding:16px 20px 12px;border-bottom:1px solid #1f2937;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <div class="card-title" style="margin:0;">📣 Blast Performance</div>
+            <span style="font-size:12px;color:#6b7280;">No sent blasts yet.</span>
+            {blast_header_btn}
+          </div>
+          {_add_blast_form}
         </div>"""
 
     return summary_html + intent_table + tone_table + session_html + dropoff_section + blast_section + api_hint
@@ -2308,6 +2395,46 @@ def delete_blast(blast_id: int):
         conn.rollback()
         conn.close()
         return Response(f"Error: {e}", status=500, mimetype="text/plain")
+
+
+@admin_bp.route("/admin/actions/add-external-blast", methods=["POST"])
+def add_external_blast():
+    """Insert a manually-entered blast record (e.g. from SlickText) into blast_drafts."""
+    if not check_admin_auth():
+        return require_admin_auth_response()
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"ok": False, "error": "DB not configured"}), 503
+    try:
+        data = request.get_json(force=True)
+        name          = (data.get("name") or "").strip()
+        date_str      = (data.get("date") or "").strip()
+        sent_count    = int(data.get("sent_count") or 0)
+        opt_out_count = int(data.get("opt_out_count") or 0)
+        if not name or not date_str or sent_count <= 0:
+            return jsonify({"ok": False, "error": "name, date, and sent_count are required"}), 400
+        # Parse the date and treat it as noon UTC so it shows the right calendar day
+        from datetime import datetime as _dt
+        sent_at = _dt.strptime(date_str, "%Y-%m-%d").replace(hour=12)
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO blast_drafts
+                      (name, body, status, sent_at, sent_count, total_recipients,
+                       opt_out_count, created_by, channel)
+                    VALUES (%s, '', 'sent', %s, %s, %s, %s, 'external', 'slicktext')
+                    RETURNING id
+                    """,
+                    (name, sent_at, sent_count, sent_count, opt_out_count),
+                )
+                new_id = cur.fetchone()[0]
+        conn.close()
+        return jsonify({"ok": True, "id": new_id})
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @admin_bp.route("/admin/actions/mark-blasts", methods=["POST"])
