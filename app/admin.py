@@ -380,7 +380,7 @@ def _fetch_dashboard(
     msg_body_q: str,
     inbox_page: int,
     thread_page: int,
-    insights_days: int = 14,
+    insights_days: int = 30,
 ):
     conn = _get_db()
     if not conn:
@@ -814,7 +814,7 @@ def _range_links(active: int) -> str:
     return " ".join(parts)
 
 
-def _render_insights_tab(stats: dict, insights_days: int = 14) -> str:
+def _render_insights_tab(stats: dict, insights_days: int = 30) -> str:
     """Return the inner HTML for the 🧠 Insights tab."""
     s = stats["insights_summary"]
     scored = stats["insights_scored_total"]
@@ -1059,11 +1059,11 @@ def admin():
     inbox_phone_q = request.args.get("phone", "").strip()
     msg_body_q = request.args.get("q", "").strip()
     try:
-        insights_days = int(request.args.get("days", "14"))
+        insights_days = int(request.args.get("days", "30"))
         if insights_days not in (7, 14, 30):
-            insights_days = 14
+            insights_days = 30
     except ValueError:
-        insights_days = 14
+        insights_days = 30
     try:
         inbox_page = max(0, int(request.args.get("inbox_page", "0")))
     except ValueError:
