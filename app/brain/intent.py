@@ -1,4 +1,5 @@
 from enum import Enum
+import re
 
 from google import genai
 
@@ -6,25 +7,31 @@ from app.config import GEMINI_API_KEY, INTENT_MODEL
 
 
 class Intent(str, Enum):
-    JOKE    = "joke"
-    CLIP    = "clip"
-    SHOW    = "show"
-    BOOK    = "book"
-    PODCAST = "podcast"
-    GENERAL = "general"
+    JOKE     = "joke"
+    CLIP     = "clip"
+    SHOW     = "show"
+    BOOK     = "book"
+    PODCAST  = "podcast"
+    GREETING = "greeting"
+    PERSONAL = "personal"
+    FEEDBACK = "feedback"
+    QUESTION = "question"
+    GENERAL  = "general"
 
 
 _client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Keywords that unambiguously signal an intent — no API call needed for these.
+# ---------------------------------------------------------------------------
+# Keyword / heuristic tables
+# ---------------------------------------------------------------------------
+
 _SHOW_KEYWORDS = {
     "ticket", "tickets", "tour", "touring",
     "performing", "performance", "come see",
     "where are you", "when are you", "tour dates", "venue",
 }
-# Do not include lol/haha/lmao — those are often conversation-enders, not joke requests.
 _JOKE_KEYWORDS = {
-    "joke", "jokes", "funny", "laugh", "laughter", "comedy", "comic",
+    "joke", "jokes", "laugh", "laughter", "comedy", "comic",
     "make me laugh", "tell me something funny", "tell me a joke",
     "humor", "humour",
     "roast", "one liner", "one-liner", "hilarious", "witty",
@@ -55,9 +62,42 @@ _BOOK_PHRASES = (
 )
 _BOOK_EXTRA_WORDS = frozenset({"kindle", "hardcover", "paperback"})
 
+# Greeting: very short, low-ambiguity openers
+_GREETING_EXACT = frozenset({
+    "hi", "hey", "hello", "hola", "yo", "howdy", "sup",
+    "hii", "hiii", "heyyy", "heyy", "hiiii",
+})
+_GREETING_PHRASES = (
+    "what's up", "whats up", "wassup", "whaddup", "good morning",
+    "good afternoon", "good evening", "good night",
+    "how are you", "how's it going", "how you doing",
+)
+_GREETING_MAX_WORDS = 6
+
+# Feedback: post-show compliments, reactions to Zarna's performance
+_FEEDBACK_PHRASES = (
+    "great show", "amazing show", "awesome show", "best show",
+    "loved the show", "loved your show", "loved it tonight",
+    "you were amazing", "you were great", "you were incredible",
+    "you killed it", "you crushed it", "you were hilarious",
+    "so funny tonight", "had a blast", "best night ever",
+    "such a great time", "what a show", "incredible performance",
+    "funniest show", "thank you for the show",
+)
+
+# Personal: fan sharing biographical info about themselves
+_PERSONAL_PHRASES = re.compile(
+    r"\b("
+    r"i'm a |i am a |i'm from |i am from |i live in |i work |"
+    r"my name is |my husband |my wife |my kids |my daughter |my son |"
+    r"i have \d+ kids|i'm \d+ years|i am \d+ years|"
+    r"i just moved|i grew up|born in |raised in "
+    r")",
+    re.IGNORECASE,
+)
+
 
 def _fast_book_intent(lower: str, words: set) -> bool:
-    """Avoid classifying every 'buy' / 'order' as book (e.g. 'buy milk')."""
     if any(p in lower for p in _BOOK_PHRASES):
         return True
     if words & _BOOK_EXTRA_WORDS:
@@ -72,8 +112,22 @@ def _fast_classify(message: str) -> Intent | None:
     Cheap keyword scan — returns an Intent immediately if the message is
     unambiguous, or None to fall through to the Gemini classifier.
     """
-    lower = message.lower()
+    lower = message.lower().strip()
     words = set(lower.split())
+
+    # Greeting — very short openers, check before anything else
+    if len(words) <= _GREETING_MAX_WORDS:
+        stripped = lower.rstrip("!.? ")
+        if stripped in _GREETING_EXACT:
+            return Intent.GREETING
+        if any(lower.startswith(p) for p in _GREETING_PHRASES):
+            return Intent.GREETING
+
+    # Feedback — post-show praise (check before JOKE to avoid "funny" overlap)
+    if any(p in lower for p in _FEEDBACK_PHRASES):
+        return Intent.FEEDBACK
+
+    # Structured intents
     if words & _SHOW_KEYWORDS or any(k in lower for k in _SHOW_KEYWORDS if " " in k):
         return Intent.SHOW
     if words & _JOKE_KEYWORDS or any(k in lower for k in _JOKE_KEYWORDS if " " in k):
@@ -84,29 +138,36 @@ def _fast_classify(message: str) -> Intent | None:
         return Intent.PODCAST
     if _fast_book_intent(lower, words):
         return Intent.BOOK
+
+    # Personal — fan sharing bio info (conservative: phrase-based)
+    if _PERSONAL_PHRASES.search(lower) and "?" not in lower:
+        return Intent.PERSONAL
+
     return None
 
 
 def classify_intent(message: str) -> Intent:
-    # Try free keyword classification first — saves ~1-2s on clear cases
     fast = _fast_classify(message)
     if fast is not None:
         return fast
 
-    # Fall back to Gemini for ambiguous messages
     prompt = f"""Classify this user message into exactly one intent.
 
 Intents:
+- greeting: casual opener like hi, hello, hey, how are you — with no real question or topic yet
 - joke: user wants a joke, something funny, or comedy content
 - clip: user wants a video or clip recommendation
 - show: user is EXPLICITLY asking for ticket links, tour dates, or where to see Zarna perform. Personal stories, fun facts about themselves, or general conversation are NEVER show intent.
 - book: user is asking about Zarna's book "This American Woman", where to buy it, or how to get it
 - podcast: user is EXPLICITLY asking about the podcast by name, asking if there's a podcast episode on a specific topic, or asking where to listen. Questions about Zarna's family members (husband, kids, Shalabh, Veer, Brij, Zoya) are NOT podcast intent — they are general.
-- general: general conversation, questions about Zarna or her family, or anything else
+- personal: fan sharing facts about themselves — their name, job, city, family, hobbies, life story. NOT asking a question.
+- feedback: fan giving a review, compliment, or reaction to Zarna's show or content (e.g. "great show!", "you were so funny tonight")
+- question: fan asking Zarna a question about her life, family, opinions, or advice — a direct question expecting a real answer
+- general: anything else — banter, one-word reactions, random topics
 
 Message: "{message}"
 
-Reply with only one word: joke, clip, show, book, podcast, or general"""
+Reply with only one word: greeting, joke, clip, show, book, podcast, personal, feedback, question, or general"""
 
     try:
         response = _client.models.generate_content(

@@ -148,6 +148,152 @@ def close_stale_sessions(conn) -> int:
             return cur.rowcount
 
 
+def backfill_intent(conn) -> int:
+    """Fill intent for assistant messages that have NULL intent.
+
+    Finds each assistant row's preceding user message, runs keyword
+    classification (no API calls), and sets the intent. Remaining NULLs
+    are set to 'general'.
+    """
+    import re as _re
+
+    # Inline keyword tables (mirror app/brain/intent.py — no app imports in cron)
+    _SHOW_KW = {
+        "ticket", "tickets", "tour", "touring",
+        "performing", "performance", "come see",
+        "where are you", "when are you", "tour dates", "venue",
+    }
+    _JOKE_KW = {
+        "joke", "jokes", "laugh", "laughter", "comedy", "comic",
+        "make me laugh", "tell me something funny", "tell me a joke",
+        "humor", "humour",
+        "roast", "one liner", "one-liner", "hilarious", "witty",
+        "crack me up", "make me smile",
+    }
+    _CLIP_KW = {
+        "video", "videos", "clip", "clips", "youtube", "watch",
+        "special", "stand up", "standup", "stand-up", "reel", "reels",
+    }
+    _PODCAST_KW = {"podcast", "episode", "listen", "audio show"}
+    _BOOK_PHRASES = (
+        "this american woman", "your book", "the book", "read your book",
+        "buy your book", "buy the book", "order your book", "order the book",
+        "zarna's book", "zarnas book", "zarna book", "get your book",
+        "where to buy", "amazon.com/dp",
+    )
+    _BOOK_EXTRA = {"kindle", "hardcover", "paperback"}
+    _GREETING_EXACT = {
+        "hi", "hey", "hello", "hola", "yo", "howdy", "sup",
+        "hii", "hiii", "heyyy", "heyy", "hiiii",
+    }
+    _GREETING_PHRASES = (
+        "what's up", "whats up", "wassup", "whaddup", "good morning",
+        "good afternoon", "good evening", "good night",
+        "how are you", "how's it going", "how you doing",
+    )
+    _FEEDBACK_PHRASES = (
+        "great show", "amazing show", "awesome show", "best show",
+        "loved the show", "loved your show", "loved it tonight",
+        "you were amazing", "you were great", "you were incredible",
+        "you killed it", "you crushed it", "you were hilarious",
+        "so funny tonight", "had a blast", "best night ever",
+        "such a great time", "what a show", "incredible performance",
+        "funniest show", "thank you for the show",
+    )
+    _PERSONAL_RE = _re.compile(
+        r"\b(i'm a |i am a |i'm from |i am from |i live in |i work |"
+        r"my name is |my husband |my wife |my kids |my daughter |my son |"
+        r"i have \d+ kids|i'm \d+ years|i am \d+ years|"
+        r"i just moved|i grew up|born in |raised in )",
+        _re.IGNORECASE,
+    )
+
+    def _classify(text: str) -> str:
+        lower = (text or "").lower().strip()
+        if not lower:
+            return "general"
+        words = set(lower.split())
+
+        # Greeting
+        if len(words) <= 6:
+            stripped = lower.rstrip("!.? ")
+            if stripped in _GREETING_EXACT:
+                return "greeting"
+            if any(lower.startswith(p) for p in _GREETING_PHRASES):
+                return "greeting"
+
+        # Feedback (before joke — avoids "funny" overlap)
+        if any(p in lower for p in _FEEDBACK_PHRASES):
+            return "feedback"
+
+        # Structured
+        if words & _SHOW_KW or any(k in lower for k in _SHOW_KW if " " in k):
+            return "show"
+        if words & _JOKE_KW or any(k in lower for k in _JOKE_KW if " " in k):
+            return "joke"
+        if words & _CLIP_KW or any(k in lower for k in _CLIP_KW if " " in k):
+            return "clip"
+        if words & _PODCAST_KW or any(k in lower for k in _PODCAST_KW if " " in k):
+            return "podcast"
+        # Book
+        if any(p in lower for p in _BOOK_PHRASES) or words & _BOOK_EXTRA:
+            return "book"
+        if "book" in words and ("zarna" in lower or "american woman" in lower):
+            return "book"
+
+        # Personal
+        if _PERSONAL_RE.search(lower) and "?" not in lower:
+            return "personal"
+
+        # Question
+        if "?" in lower:
+            return "question"
+
+        return "general"
+
+    # Pull assistant messages with NULL intent + preceding user message
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT a.id,
+                       (SELECT u.text FROM messages u
+                        WHERE u.phone_number = a.phone_number
+                          AND u.role = 'user'
+                          AND u.created_at <= a.created_at
+                        ORDER BY u.created_at DESC
+                        LIMIT 1
+                       ) AS user_text
+                FROM messages a
+                WHERE a.role = 'assistant'
+                  AND a.intent IS NULL
+                """
+            )
+            rows = cur.fetchall()
+
+    if not rows:
+        return 0
+
+    updates: dict[str, list[int]] = {}
+    for msg_id, user_text in rows:
+        intent = _classify(user_text)
+        updates.setdefault(intent, []).append(msg_id)
+
+    total = 0
+    with conn:
+        with conn.cursor() as cur:
+            for intent_val, ids in updates.items():
+                batch_size = 500
+                for i in range(0, len(ids), batch_size):
+                    batch = ids[i:i + batch_size]
+                    cur.execute(
+                        "UPDATE messages SET intent = %s WHERE id = ANY(%s)",
+                        (intent_val, batch),
+                    )
+                    total += cur.rowcount
+    return total
+
+
 def backfill_came_back_within_7d(conn) -> int:
     """For closed sessions, fill came_back_within_7d based on subsequent sessions."""
     with conn:
@@ -206,6 +352,15 @@ def main():
         )
 
         t = time.perf_counter()
+        _banner("phase: backfill_intent (keyword classifier)")
+        intent_count = backfill_intent(conn)
+        _logger.info(
+            "backfill_intent: classified %d rows (%.2fs)",
+            intent_count,
+            time.perf_counter() - t,
+        )
+
+        t = time.perf_counter()
         _banner("phase: close_stale_sessions")
         closed = close_stale_sessions(conn)
         _logger.info("close_stale_sessions: closed %d sessions (%.2fs)", closed, time.perf_counter() - t)
@@ -229,7 +384,8 @@ def main():
 
         _banner(
             f"DONE total_wall_s={time.perf_counter() - t0:.2f}s "
-            f"(silence={silence_count} msgs_after={msgs_count} closed={closed} came_back={came_back})"
+            f"(silence={silence_count} msgs_after={msgs_count} intent={intent_count} "
+            f"closed={closed} came_back={came_back})"
         )
     except Exception:
         _logger.exception("BACKFILL_CRON FATAL — uncaught exception")

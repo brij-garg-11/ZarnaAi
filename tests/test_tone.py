@@ -25,3 +25,18 @@ def test_tone_celebratory_for_show_praise():
 def test_tone_direct_answer_for_plain_question():
     mode = classify_tone_mode("Where can I watch your clips?", Intent.GENERAL, [])
     assert mode == "direct_answer"
+
+
+def test_tone_celebratory_for_feedback_intent():
+    mode = classify_tone_mode("Great show tonight", Intent.FEEDBACK, [])
+    assert mode == "celebratory"
+
+
+def test_tone_direct_for_question_intent():
+    mode = classify_tone_mode("How many kids do you have", Intent.QUESTION, [])
+    assert mode == "direct_answer"
+
+
+def test_tone_roast_for_greeting_intent():
+    mode = classify_tone_mode("Hi", Intent.GREETING, [])
+    assert mode == "roast_playful"

@@ -52,12 +52,14 @@ def classify_tone_mode(
 
     if _VULNERABLE_RE.search(text):
         return "sensitive_care"
-    if _CELEBRATORY_RE.search(text):
+    if intent == Intent.FEEDBACK or _CELEBRATORY_RE.search(text):
         return "celebratory"
     if intent == Intent.JOKE or _ROAST_FAMILY_RE.search(text):
         return "roast_playful"
-    if _DIRECT_Q_RE.search(text):
+    if intent == Intent.QUESTION or _DIRECT_Q_RE.search(text):
         return "direct_answer"
+    if intent == Intent.GREETING:
+        return "roast_playful"
     if _THANKS_RE.search(text):
         return "warm_supportive"
 
