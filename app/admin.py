@@ -573,7 +573,12 @@ def _fetch_dashboard(
                         SELECT
                           COUNT(*)                                           AS scored_bot_replies,
                           ROUND(AVG(did_user_reply::int) * 100, 1)          AS reply_rate_pct,
-                          ROUND(AVG(went_silent_after::int) * 100, 1)       AS dropoff_rate_pct,
+                          /* AVG(went_silent_after) skipped NULLs and made drop-off ~100% misleading */
+                          ROUND(
+                            100.0 * COUNT(*) FILTER (WHERE went_silent_after = TRUE)::numeric
+                            / NULLIF(COUNT(*), 0),
+                            1
+                          )                                                  AS dropoff_rate_pct,
                           ROUND(AVG(reply_delay_seconds), 0)                 AS avg_reply_delay_s,
                           ROUND(AVG(reply_length_chars), 0)                  AS avg_bot_reply_length
                         FROM messages
@@ -600,7 +605,11 @@ def _fetch_dashboard(
                           COALESCE(intent, 'unknown')                   AS intent,
                           COUNT(*)                                       AS total,
                           ROUND(AVG(did_user_reply::int) * 100, 1)      AS reply_rate_pct,
-                          ROUND(AVG(went_silent_after::int) * 100, 1)   AS dropoff_rate_pct,
+                          ROUND(
+                            100.0 * COUNT(*) FILTER (WHERE went_silent_after = TRUE)::numeric
+                            / NULLIF(COUNT(*), 0),
+                            1
+                          )                                              AS dropoff_rate_pct,
                           ROUND(AVG(reply_delay_seconds), 0)             AS avg_delay_s
                         FROM messages
                         WHERE role = 'assistant'
@@ -624,7 +633,11 @@ def _fetch_dashboard(
                           COALESCE(tone_mode, 'unknown')                AS tone_mode,
                           COUNT(*)                                       AS total,
                           ROUND(AVG(did_user_reply::int) * 100, 1)      AS reply_rate_pct,
-                          ROUND(AVG(went_silent_after::int) * 100, 1)   AS dropoff_rate_pct
+                          ROUND(
+                            100.0 * COUNT(*) FILTER (WHERE went_silent_after = TRUE)::numeric
+                            / NULLIF(COUNT(*), 0),
+                            1
+                          )                                              AS dropoff_rate_pct
                         FROM messages
                         WHERE role = 'assistant'
                           AND did_user_reply IS NOT NULL

@@ -78,7 +78,11 @@ def engagement_summary():
                 SELECT
                   COUNT(*)                                           AS scored_bot_replies,
                   ROUND(AVG(did_user_reply::int) * 100, 1)          AS reply_rate_pct,
-                  ROUND(AVG(went_silent_after::int) * 100, 1)       AS dropoff_rate_pct,
+                  ROUND(
+                    100.0 * COUNT(*) FILTER (WHERE went_silent_after = TRUE)::numeric
+                    / NULLIF(COUNT(*), 0),
+                    1
+                  )                                                  AS dropoff_rate_pct,
                   ROUND(AVG(reply_delay_seconds), 0)                 AS avg_reply_delay_s,
                   PERCENTILE_CONT(0.5) WITHIN GROUP
                     (ORDER BY reply_delay_seconds)                   AS median_reply_delay_s,
@@ -136,7 +140,11 @@ def intent_breakdown():
                   COALESCE(intent, 'unknown')                   AS intent,
                   COUNT(*)                                       AS total_bot_replies,
                   ROUND(AVG(did_user_reply::int) * 100, 1)      AS reply_rate_pct,
-                  ROUND(AVG(went_silent_after::int) * 100, 1)   AS dropoff_rate_pct,
+                  ROUND(
+                    100.0 * COUNT(*) FILTER (WHERE went_silent_after = TRUE)::numeric
+                    / NULLIF(COUNT(*), 0),
+                    1
+                  )                                              AS dropoff_rate_pct,
                   ROUND(AVG(reply_delay_seconds), 0)             AS avg_reply_delay_s,
                   ROUND(AVG(reply_length_chars), 0)              AS avg_reply_length,
                   COUNT(*) FILTER (WHERE has_link = TRUE
@@ -190,7 +198,11 @@ def tone_breakdown():
                   COALESCE(tone_mode, 'unknown')                AS tone_mode,
                   COUNT(*)                                       AS total_bot_replies,
                   ROUND(AVG(did_user_reply::int) * 100, 1)      AS reply_rate_pct,
-                  ROUND(AVG(went_silent_after::int) * 100, 1)   AS dropoff_rate_pct,
+                  ROUND(
+                    100.0 * COUNT(*) FILTER (WHERE went_silent_after = TRUE)::numeric
+                    / NULLIF(COUNT(*), 0),
+                    1
+                  )                                              AS dropoff_rate_pct,
                   ROUND(AVG(reply_delay_seconds), 0)             AS avg_reply_delay_s
                 FROM messages
                 WHERE role            = 'assistant'
@@ -430,7 +442,11 @@ def reply_length_buckets():
                   MIN(reply_length_chars)                        AS bucket_min,
                   COUNT(*)                                       AS total,
                   ROUND(AVG(did_user_reply::int) * 100, 1)      AS reply_rate_pct,
-                  ROUND(AVG(went_silent_after::int) * 100, 1)   AS dropoff_rate_pct,
+                  ROUND(
+                    100.0 * COUNT(*) FILTER (WHERE went_silent_after = TRUE)::numeric
+                    / NULLIF(COUNT(*), 0),
+                    1
+                  )                                              AS dropoff_rate_pct,
                   ROUND(AVG(reply_delay_seconds), 0)             AS avg_delay_s
                 FROM messages
                 WHERE role            = 'assistant'
