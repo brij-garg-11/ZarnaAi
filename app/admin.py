@@ -597,23 +597,41 @@ def _fetch_dashboard(
                            WHERE m.role = 'user' AND m.created_at >= %s
                              AND c.created_at >= %s)                          AS new_sub_engaged,
 
-                          -- Fans with 3+ user messages (real conversation)
+                          -- Pre-bot: fans with 3+ user messages
+                          (SELECT COUNT(*) FROM (
+                               SELECT phone_number FROM messages
+                               WHERE role = 'user' AND created_at < %s
+                               GROUP BY phone_number HAVING COUNT(*) >= 3
+                           ) AS pre_deep_fans)                                AS pre_deep_convo_fans,
+
+                          -- Post-bot: fans with 3+ user messages
                           (SELECT COUNT(*) FROM (
                                SELECT phone_number FROM messages
                                WHERE role = 'user' AND created_at >= %s
                                GROUP BY phone_number HAVING COUNT(*) >= 3
-                           ) AS deep_fans)                                    AS deep_convo_fans,
+                           ) AS post_deep_fans)                               AS post_deep_convo_fans,
 
-                          -- Fans with 5+ user messages (super deep conversation)
+                          -- Pre-bot: fans with 5+ user messages
+                          (SELECT COUNT(*) FROM (
+                               SELECT phone_number FROM messages
+                               WHERE role = 'user' AND created_at < %s
+                               GROUP BY phone_number HAVING COUNT(*) >= 5
+                           ) AS pre_super_fans)                               AS pre_super_deep_convo_fans,
+
+                          -- Post-bot: fans with 5+ user messages
                           (SELECT COUNT(*) FROM (
                                SELECT phone_number FROM messages
                                WHERE role = 'user' AND created_at >= %s
                                GROUP BY phone_number HAVING COUNT(*) >= 5
-                           ) AS super_deep_fans)                              AS super_deep_convo_fans,
+                           ) AS post_super_fans)                              AS post_super_deep_convo_fans,
 
-                          -- Unique fans who sent at least 1 message back (true engagers, excludes blast-only recipients)
+                          -- Pre-bot: unique fans who sent at least 1 message
                           (SELECT COUNT(DISTINCT phone_number) FROM messages
-                           WHERE role = 'user' AND created_at >= %s)          AS engaging_fans,
+                           WHERE role = 'user' AND created_at < %s)           AS pre_engaging_fans,
+
+                          -- Post-bot: unique fans who sent at least 1 message
+                          (SELECT COUNT(DISTINCT phone_number) FROM messages
+                           WHERE role = 'user' AND created_at >= %s)          AS post_engaging_fans,
 
                           -- Unique fans who received a bot reply
                           (SELECT COUNT(DISTINCT phone_number) FROM messages
@@ -628,6 +646,7 @@ def _fetch_dashboard(
                             _BOT_LAUNCH, _BOT_LAUNCH,
                             _BOT_LAUNCH, _BOT_LAUNCH,
                             _BOT_LAUNCH, _BOT_LAUNCH,
+                            _BOT_LAUNCH, _BOT_LAUNCH,
                         ),
                     )
                     row = cur.fetchone()
@@ -636,12 +655,15 @@ def _fetch_dashboard(
                         post_list       = row[1] or 1
                         legacy_engaged  = row[2] or 0
                         new_engaged     = row[3] or 0
-                        deep_convos        = row[4] or 0
-                        super_deep_convos  = row[5] or 0
-                        engaging_fans      = row[6] or 1
-                        bot_replied        = row[7] or 1
-                        earliest_date      = row[8]
-                        earliest_year      = earliest_date.year if earliest_date else 2022
+                        pre_deep_convos       = row[4] or 0
+                        post_deep_convos      = row[5] or 0
+                        pre_super_convos      = row[6] or 0
+                        post_super_convos     = row[7] or 0
+                        pre_engaging_fans     = row[8] or 1
+                        post_engaging_fans    = row[9] or 1
+                        bot_replied           = row[10] or 1
+                        earliest_date         = row[11]
+                        earliest_year         = earliest_date.year if earliest_date else 2022
                         insights_impact = {
                             "pre_bot_list": pre_list,
                             "post_bot_list": post_list,
@@ -649,11 +671,16 @@ def _fetch_dashboard(
                             "new_engaged": new_engaged,
                             "legacy_pct": round(legacy_engaged / max(pre_list, 1) * 100, 1),
                             "new_pct": round(new_engaged / max(post_list, 1) * 100, 1),
-                            "deep_convo_fans": deep_convos,
-                            "deep_convo_pct": round(deep_convos / max(engaging_fans, 1) * 100, 1),
-                            "super_deep_convo_fans": super_deep_convos,
-                            "super_deep_convo_pct": round(super_deep_convos / max(engaging_fans, 1) * 100, 1),
-                            "engaging_fans": engaging_fans,
+                            "pre_deep_convo_fans": pre_deep_convos,
+                            "post_deep_convo_fans": post_deep_convos,
+                            "pre_deep_convo_pct": round(pre_deep_convos / max(pre_engaging_fans, 1) * 100, 1),
+                            "post_deep_convo_pct": round(post_deep_convos / max(post_engaging_fans, 1) * 100, 1),
+                            "pre_super_deep_fans": pre_super_convos,
+                            "post_super_deep_fans": post_super_convos,
+                            "pre_super_deep_pct": round(pre_super_convos / max(pre_engaging_fans, 1) * 100, 1),
+                            "post_super_deep_pct": round(post_super_convos / max(post_engaging_fans, 1) * 100, 1),
+                            "pre_engaging_fans": pre_engaging_fans,
+                            "post_engaging_fans": post_engaging_fans,
                             "bot_replied_fans": bot_replied,
                             "earliest_year": earliest_year,
                         }
@@ -1004,11 +1031,16 @@ def _render_impact_section(impact: dict) -> str:
     new_engaged     = impact.get("new_engaged", 0)
     legacy_pct      = impact.get("legacy_pct", 0)
     new_pct         = impact.get("new_pct", 0)
-    deep_pct             = impact.get("deep_convo_pct", 0)
-    deep_fans            = impact.get("deep_convo_fans", 0)
-    super_deep_pct       = impact.get("super_deep_convo_pct", 0)
-    super_deep_fans      = impact.get("super_deep_convo_fans", 0)
-    engaging_fans        = impact.get("engaging_fans", 0)
+    pre_deep_pct         = impact.get("pre_deep_convo_pct", 0)
+    post_deep_pct        = impact.get("post_deep_convo_pct", 0)
+    pre_deep_fans        = impact.get("pre_deep_convo_fans", 0)
+    post_deep_fans       = impact.get("post_deep_convo_fans", 0)
+    pre_super_pct        = impact.get("pre_super_deep_pct", 0)
+    post_super_pct       = impact.get("post_super_deep_pct", 0)
+    pre_super_fans       = impact.get("pre_super_deep_fans", 0)
+    post_super_fans      = impact.get("post_super_deep_fans", 0)
+    pre_engaging_fans    = impact.get("pre_engaging_fans", 0)
+    post_engaging_fans   = impact.get("post_engaging_fans", 0)
     bot_replied          = impact.get("bot_replied_fans", 0)
     earliest_year   = impact.get("earliest_year", 2022)
 
@@ -1056,11 +1088,15 @@ def _render_impact_section(impact: dict) -> str:
         <div style="padding:0 20px;">
           <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;
                       margin-bottom:4px;">Deep convos (3+ msgs)</div>
-          <div style="font-size:28px;font-weight:800;color:#a78bfa;">{deep_pct}%</div>
-          <div style="font-size:12px;color:#6b7280;margin-top:2px;">
-            {deep_fans:,} of {engaging_fans:,} fans who replied
+          <div style="display:flex;align-items:baseline;gap:6px;">
+            <span style="font-size:20px;font-weight:700;color:#6b7280;">{pre_deep_pct}%</span>
+            <span style="font-size:16px;color:#4b5563;">→</span>
+            <span style="font-size:28px;font-weight:800;color:#a78bfa;">{post_deep_pct}%</span>
           </div>
-          {_bar(deep_pct, "#a78bfa")}
+          <div style="font-size:12px;color:#6b7280;margin-top:2px;">
+            {pre_deep_fans:,}/{pre_engaging_fans:,} before · {post_deep_fans:,}/{post_engaging_fans:,} after
+          </div>
+          {_bar(post_deep_pct, "#a78bfa")}
         </div>
 
         <div style="background:#1f2937;"></div>
@@ -1068,11 +1104,15 @@ def _render_impact_section(impact: dict) -> str:
         <div style="padding:0 20px;">
           <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;
                       margin-bottom:4px;">Super deep convos (5+ msgs)</div>
-          <div style="font-size:28px;font-weight:800;color:#f472b6;">{super_deep_pct}%</div>
-          <div style="font-size:12px;color:#6b7280;margin-top:2px;">
-            {super_deep_fans:,} of {engaging_fans:,} fans who replied
+          <div style="display:flex;align-items:baseline;gap:6px;">
+            <span style="font-size:20px;font-weight:700;color:#6b7280;">{pre_super_pct}%</span>
+            <span style="font-size:16px;color:#4b5563;">→</span>
+            <span style="font-size:28px;font-weight:800;color:#f472b6;">{post_super_pct}%</span>
           </div>
-          {_bar(super_deep_pct, "#f472b6")}
+          <div style="font-size:12px;color:#6b7280;margin-top:2px;">
+            {pre_super_fans:,}/{pre_engaging_fans:,} before · {post_super_fans:,}/{post_engaging_fans:,} after
+          </div>
+          {_bar(post_super_pct, "#f472b6")}
         </div>
 
         <div style="background:#1f2937;"></div>
