@@ -164,11 +164,10 @@ def backfill_intent(conn) -> int:
         "where are you", "when are you", "tour dates", "venue",
     }
     _JOKE_KW = {
-        "joke", "jokes", "laugh", "laughter", "comedy", "comic",
+        "joke", "jokes", "laughter", "comedy", "comic",
         "make me laugh", "tell me something funny", "tell me a joke",
-        "humor", "humour",
-        "roast", "one liner", "one-liner", "hilarious", "witty",
-        "crack me up", "make me smile",
+        "humor", "humour", "roast", "one liner", "one-liner", "witty",
+        "make me smile",
     }
     _CLIP_KW = {
         "video", "videos", "clip", "clips", "youtube", "watch",
@@ -185,11 +184,26 @@ def backfill_intent(conn) -> int:
     _GREETING_EXACT = {
         "hi", "hey", "hello", "hola", "yo", "howdy", "sup",
         "hii", "hiii", "heyyy", "heyy", "hiiii",
+        "namaste", "namasté", "good night", "goodnight", "night night",
     }
     _GREETING_PHRASES = (
-        "what's up", "whats up", "wassup", "whaddup", "good morning",
-        "good afternoon", "good evening", "good night",
+        "what's up", "whats up", "wassup", "whaddup",
+        "good morning", "good afternoon", "good evening",
         "how are you", "how's it going", "how you doing",
+        "are you there", "is anyone there", "you there",
+        "what's going on", "whats going on", "what's happening",
+        "hi zarna", "hey zarna", "hello zarna",
+        "hi there", "hey there", "hello there",
+    )
+    _LAUGH_EXACT = {
+        "lol", "lmao", "lmfao", "rofl", "haha", "hahaha", "hahahaha",
+        "hahahahaha", "ha", "hah", "hehe", "heehee", "😂", "😆", "🤣",
+        "dead", "💀", "omg", "omfg", "lololol", "lolol",
+    }
+    _MIL_ANSWERS = (
+        "mother in law", "mother-in-law", "mil ", " mil",
+        "her mother in law", "your mother in law", "mom in law",
+        "the mother in law", "mother in laws",
     )
     _FEEDBACK_PHRASES = (
         "great show", "amazing show", "awesome show", "best show",
@@ -199,12 +213,29 @@ def backfill_intent(conn) -> int:
         "so funny tonight", "had a blast", "best night ever",
         "such a great time", "what a show", "incredible performance",
         "funniest show", "thank you for the show",
+        "so funny", "that's so funny", "that is so funny",
+        "hilarious", "you're hilarious", "you are hilarious",
+        "you crack me up", "cracking me up", "cracking up",
+        "i'm dying", "i am dying", "dying laughing",
+        "tears down my face", "laughing so hard", "in stitches",
+        "love this", "love it", "love you zarna", "love zarna",
+        "you're amazing", "you are amazing", "you're the best",
+        "preach", "so true", "exactly",
+        "this is gold", "well said", "couldn't agree more",
+        "thank you zarna", "thanks zarna", "good night was fun",
+        "you were awesome tonight", "we have seen you",
     )
     _PERSONAL_RE = _re.compile(
-        r"\b(i'm a |i am a |i'm from |i am from |i live in |i work |"
-        r"my name is |my husband |my wife |my kids |my daughter |my son |"
-        r"i have \d+ kids|i'm \d+ years|i am \d+ years|"
-        r"i just moved|i grew up|born in |raised in )",
+        r"\b(i'?m a |i am a |i'?m from |i am from |i live in |i work(ed)? (as|at|for|in)|"
+        r"my name is |my husband |my wife |my kids |my daughter |my son |my family |"
+        r"i have \d+ kids|i'?m \d+ years|i am \d+ years|i just turned \d+|"
+        r"i just moved|i grew up|born in |raised in |"
+        r"i'?m (a |an |the )?(mom|dad|mother|father|teacher|nurse|doctor|lawyer|engineer|"
+        r"therapist|chef|artist|writer|student|retired)|"
+        r"three facts|3 facts|\d+ facts about (me|myself)|facts about me|"
+        r"fun fact.{0,5}(i |about me)|"
+        r"introvert|extrovert|i'?m (jewish|hindu|muslim|catholic|christian|sikh|desi|indian|"
+        r"south asian|gori|white|black|latina|asian))",
         _re.IGNORECASE,
     )
 
@@ -212,17 +243,30 @@ def backfill_intent(conn) -> int:
         lower = (text or "").lower().strip()
         if not lower:
             return "general"
-        words = set(lower.split())
+        # Strip punctuation for word-set matching
+        words = set(_re.sub(r"[^\w\s]", "", lower).split())
+
+        # Emoji-only laugh reactions (stripped before word split)
+        if lower.strip() in _LAUGH_EXACT:
+            return "feedback"
 
         # Greeting
-        if len(words) <= 6:
+        if len(words) <= 7:
             stripped = lower.rstrip("!.? ")
             if stripped in _GREETING_EXACT:
                 return "greeting"
             if any(lower.startswith(p) for p in _GREETING_PHRASES):
                 return "greeting"
 
-        # Feedback (before joke — avoids "funny" overlap)
+        # Personal first for longer messages (before feedback)
+        if len(words) > 4 and _PERSONAL_RE.search(lower) and "?" not in lower:
+            return "personal"
+
+        # Feedback: laugh reactions for short messages, MIL answers, praise
+        if len(words) <= 4 and words & _LAUGH_EXACT:
+            return "feedback"
+        if any(p in lower for p in _MIL_ANSWERS):
+            return "feedback"
         if any(p in lower for p in _FEEDBACK_PHRASES):
             return "feedback"
 
@@ -241,7 +285,7 @@ def backfill_intent(conn) -> int:
         if "book" in words and ("zarna" in lower or "american woman" in lower):
             return "book"
 
-        # Personal
+        # Personal (short messages)
         if _PERSONAL_RE.search(lower) and "?" not in lower:
             return "personal"
 
