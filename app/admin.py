@@ -646,7 +646,8 @@ def _fetch_dashboard(
                 _BOT_LAUNCH_STR = "2026-03-27"
                 _idays = int(insights_days)
                 if insights_era == "pre":
-                    _date_filter = f"created_at < '{_BOT_LAUNCH_STR}'"
+                    # Pre-bot: use CSV-imported rows (source = csv_import covers the date automatically)
+                    _date_filter = "source = 'csv_import'"
                     _session_date_filter = f"started_at < '{_BOT_LAUNCH_STR}'"
                 else:
                     _date_filter = f"created_at >= NOW() - INTERVAL '{_idays} days'"
@@ -2142,6 +2143,153 @@ def sync_slicktext_dates():
         yield f"\nInserted / updated : {inserted:,}\n"
         yield f"Already correct    : {skipped:,}\n"
         yield "\nDone. Reload the Insights tab to see updated pre-bot metrics.\n"
+
+    return Response(_stream(), mimetype="text/plain")
+
+
+@admin_bp.route("/admin/actions/import-chat-transcripts", methods=["GET", "POST"])
+def import_chat_transcripts():
+    """Upload SlickText CSV and import pre-bot chat history into messages table."""
+    if not check_admin_auth():
+        return require_admin_auth_response()
+
+    if request.method == "GET":
+        return Response(
+            """<!doctype html><html><body style="font-family:sans-serif;max-width:600px;margin:60px auto;padding:20px">
+            <h2>Import SlickText Chat Transcripts</h2>
+            <p>Upload the CSV exported from SlickText Inbox. Only messages before March 27 will be imported.</p>
+            <form method="POST" enctype="multipart/form-data">
+              <input type="file" name="csv_file" accept=".csv" required style="margin-bottom:16px;display:block">
+              <button type="submit" style="padding:10px 24px;background:#6366f1;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:15px">
+                Import CSV
+              </button>
+            </form></body></html>""",
+            mimetype="text/html",
+        )
+
+    # POST — process uploaded file
+    import csv as _csv
+    import io
+    from datetime import timezone as _tz, timedelta as _td
+
+    f = request.files.get("csv_file")
+    if not f:
+        return Response("No file uploaded.", status=400, mimetype="text/plain")
+
+    ZARNA_NUMBER = "+18775532629"
+    BOT_LAUNCH   = datetime(2026, 3, 27, tzinfo=timezone.utc)
+    REPLY_WINDOW = 48 * 3600  # seconds
+
+    _TZ_OFF = {"EDT": -4, "EST": -5, "PDT": -7, "PST": -8, "UTC": 0}
+
+    def _parse_ts(raw):
+        raw = (raw or "").strip()
+        if not raw:
+            return None
+        parts = raw.rsplit(" ", 1)
+        offset_h = _TZ_OFF.get(parts[1].upper(), -5) if len(parts) == 2 else -5
+        try:
+            naive = datetime.strptime(parts[0], "%Y-%m-%d %H:%M:%S")
+            return naive.replace(tzinfo=timezone(timedelta(hours=offset_h)))
+        except ValueError:
+            return None
+
+    def _stream():
+        yield "SlickText Chat Transcript Import\n\n"
+        text_data = f.stream.read().decode("utf-8")
+        rows = []
+        for r in _csv.DictReader(io.StringIO(text_data)):
+            dt = _parse_ts(r.get("Sent", ""))
+            if not dt or dt >= BOT_LAUNCH:
+                continue
+            from_num = (r.get("From") or "").strip()
+            to_num   = (r.get("To")   or "").strip()
+            body     = (r.get("Body") or "").strip()
+            if not body:
+                continue
+            if from_num == ZARNA_NUMBER:
+                role, phone = "assistant", to_num
+            else:
+                role, phone = "user", from_num
+            if phone:
+                rows.append((phone, role, body, dt))
+
+        incoming = sum(1 for r in rows if r[1] == "user")
+        outgoing = sum(1 for r in rows if r[1] == "assistant")
+        fans     = len({r[0] for r in rows if r[1] == "user"})
+        yield f"Pre-bot rows found : {len(rows):,}\n"
+        yield f"Incoming (fans)    : {incoming:,} from {fans:,} unique fans\n"
+        yield f"Outgoing (Zarna)   : {outgoing:,}\n\n"
+
+        conn = get_db_connection()
+        if not conn:
+            yield "DB not configured.\n"
+            return
+
+        try:
+            # Ensure source column
+            with conn.cursor() as cur:
+                cur.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'bot'")
+            conn.commit()
+            yield "DB schema ready.\n"
+
+            # Insert rows
+            inserted = 0
+            with conn.cursor() as cur:
+                for phone, role, body, dt in rows:
+                    cur.execute(
+                        "INSERT INTO messages (phone_number, role, text, created_at, source) "
+                        "VALUES (%s, %s, %s, %s, 'csv_import') ON CONFLICT DO NOTHING",
+                        (phone, role, body, dt),
+                    )
+                    if cur.rowcount > 0:
+                        inserted += 1
+            conn.commit()
+            yield f"Inserted : {inserted:,}  (skipped {len(rows) - inserted:,} dupes)\n\n"
+
+            # Score reply metrics
+            yield "Scoring reply metrics…\n"
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    UPDATE messages AS m
+                    SET
+                      did_user_reply = EXISTS (
+                        SELECT 1 FROM messages m2
+                        WHERE m2.phone_number = m.phone_number
+                          AND m2.role = 'user' AND m2.source = 'csv_import'
+                          AND m2.created_at > m.created_at
+                          AND m2.created_at <= m.created_at + INTERVAL '{REPLY_WINDOW} seconds'
+                      ),
+                      reply_delay_seconds = (
+                        SELECT EXTRACT(EPOCH FROM (m2.created_at - m.created_at))::int
+                        FROM messages m2
+                        WHERE m2.phone_number = m.phone_number
+                          AND m2.role = 'user' AND m2.source = 'csv_import'
+                          AND m2.created_at > m.created_at
+                        ORDER BY m2.created_at LIMIT 1
+                      ),
+                      went_silent_after = NOT EXISTS (
+                        SELECT 1 FROM messages m2
+                        WHERE m2.phone_number = m.phone_number
+                          AND m2.role = 'user' AND m2.source = 'csv_import'
+                          AND m2.created_at > m.created_at
+                          AND m2.created_at <= m.created_at + INTERVAL '{REPLY_WINDOW} seconds'
+                      )
+                    WHERE m.role = 'assistant'
+                      AND m.source = 'csv_import'
+                      AND m.did_user_reply IS NULL
+                    """
+                )
+                scored = cur.rowcount
+            conn.commit()
+            yield f"Scored   : {scored:,} outgoing messages\n\n"
+            yield "Done! Reload the Insights tab and switch to Pre-bot to see real reply rates.\n"
+        except Exception as exc:
+            conn.rollback()
+            yield f"Error: {exc}\n"
+        finally:
+            conn.close()
 
     return Response(_stream(), mimetype="text/plain")
 
