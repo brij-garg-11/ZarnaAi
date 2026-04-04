@@ -8,6 +8,9 @@ Run on Railway as a cron job (or locally):
 
 All SQL is self-contained — no imports from the main app/ package.
 Safe to re-run: all updates are idempotent.
+
+Performance: uses composite indexes on messages(phone_number, role, created_at)
+and a single-pass window for msgs_after_this (not per-row correlated counts).
 """
 
 import logging
@@ -16,7 +19,10 @@ import sys
 
 try:
     from dotenv import load_dotenv
+    _here = os.path.dirname(os.path.abspath(__file__))
     load_dotenv()
+    load_dotenv(os.path.join(_here, "..", ".env"))  # operator/.env
+    load_dotenv(os.path.join(_here, "..", "..", ".env"))  # repo root
 except ImportError:
     pass
 
@@ -25,6 +31,25 @@ _logger = logging.getLogger(__name__)
 
 SILENCE_HOURS: int = int(os.getenv("SILENCE_HOURS", "24"))
 SESSION_GAP_HOURS: int = int(os.getenv("SESSION_GAP_HOURS", "24"))
+
+
+def _ensure_perf_indexes(conn) -> None:
+    """Create indexes if missing (cron may run before main app migration). Idempotent."""
+    stmts = [
+        """
+        CREATE INDEX IF NOT EXISTS idx_messages_phone_role_created
+            ON messages (phone_number, role, created_at)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_sessions_phone_started
+            ON conversation_sessions (phone_number, started_at)
+        """,
+    ]
+    with conn:
+        with conn.cursor() as cur:
+            for sql in stmts:
+                cur.execute(sql)
+    _logger.info("ensure_perf_indexes: OK")
 
 
 def _get_conn():
@@ -47,7 +72,7 @@ def backfill_silence(conn) -> int:
                     went_silent_after = TRUE
                 WHERE bot_msg.role           = 'assistant'
                   AND bot_msg.did_user_reply IS NULL
-                  AND bot_msg.created_at     < NOW() - INTERVAL '%s hours'
+                  AND bot_msg.created_at     < NOW() - make_interval(hours => %s)
                   AND NOT EXISTS (
                       SELECT 1 FROM messages AS fan_msg
                       WHERE fan_msg.phone_number = bot_msg.phone_number
@@ -61,22 +86,33 @@ def backfill_silence(conn) -> int:
 
 
 def backfill_msgs_after_this(conn) -> int:
-    """Fill msgs_after_this for bot replies that were replied-to but missing the count."""
+    """Fill msgs_after_this for bot replies that were replied-to but missing the count.
+
+    One pass: window over all rows per phone (chronological), not N correlated COUNTs.
+    """
     with conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                UPDATE messages AS bot_msg
-                SET msgs_after_this = (
-                    SELECT COUNT(*)
-                    FROM messages AS fan_msg
-                    WHERE fan_msg.phone_number = bot_msg.phone_number
-                      AND fan_msg.role         = 'user'
-                      AND fan_msg.created_at   > bot_msg.created_at
+                WITH ordered AS (
+                    SELECT id,
+                           COALESCE(
+                               SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END) OVER (
+                                   PARTITION BY phone_number
+                                   ORDER BY created_at ASC, id ASC
+                                   ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
+                               ),
+                               0
+                           )::int AS users_after
+                    FROM messages
                 )
-                WHERE bot_msg.role           = 'assistant'
-                  AND bot_msg.did_user_reply  = TRUE
-                  AND bot_msg.msgs_after_this IS NULL
+                UPDATE messages AS m
+                SET msgs_after_this = o.users_after
+                FROM ordered AS o
+                WHERE m.id = o.id
+                  AND m.role = 'assistant'
+                  AND m.did_user_reply = TRUE
+                  AND m.msgs_after_this IS NULL
                 """
             )
             return cur.rowcount
@@ -123,6 +159,7 @@ def backfill_came_back_within_7d(conn) -> int:
 def main():
     conn = _get_conn()
     try:
+        _ensure_perf_indexes(conn)
         silence_count = backfill_silence(conn)
         _logger.info("backfill_silence: marked %d bot replies as went_silent_after=TRUE", silence_count)
 
@@ -134,6 +171,12 @@ def main():
 
         came_back = backfill_came_back_within_7d(conn)
         _logger.info("backfill_came_back_within_7d: updated %d sessions", came_back)
+
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("ANALYZE messages")
+                cur.execute("ANALYZE conversation_sessions")
+        _logger.info("ANALYZE messages, conversation_sessions — planner stats refreshed.")
 
         _logger.info("Backfill complete.")
     finally:

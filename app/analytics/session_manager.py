@@ -63,6 +63,10 @@ _SESSION_DDL = (
         ON conversation_sessions (ended_at, ended_by)
         WHERE ended_at IS NOT NULL
     """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_sessions_phone_started
+        ON conversation_sessions (phone_number, started_at)
+    """,
 )
 
 

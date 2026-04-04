@@ -118,6 +118,10 @@ _ENGAGEMENT_ANALYTICS_MIGRATIONS = (
         ON messages (role, intent, tone_mode, routing_tier)
         WHERE role = 'assistant' AND did_user_reply IS NOT NULL
     """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_messages_phone_role_created
+        ON messages (phone_number, role, created_at)
+    """,
 )
 
 # Quiz tables — created by main app so the inbound webhook can read them.
