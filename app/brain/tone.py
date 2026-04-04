@@ -52,6 +52,9 @@ def classify_tone_mode(
 
     if _VULNERABLE_RE.search(text):
         return "sensitive_care"
+    # PERSONAL facts → always roast, even if message contains "love" etc.
+    if intent == Intent.PERSONAL:
+        return "roast_playful"
     if intent == Intent.FEEDBACK or _CELEBRATORY_RE.search(text):
         return "celebratory"
     if intent == Intent.JOKE or _ROAST_FAMILY_RE.search(text):
