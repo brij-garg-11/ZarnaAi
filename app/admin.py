@@ -380,6 +380,7 @@ def _fetch_dashboard(
     msg_body_q: str,
     inbox_page: int,
     thread_page: int,
+    insights_days: int = 14,
 ):
     conn = _get_db()
     if not conn:
@@ -584,8 +585,9 @@ def _fetch_dashboard(
                         FROM messages
                         WHERE role = 'assistant'
                           AND did_user_reply IS NOT NULL
-                          AND created_at >= NOW() - INTERVAL '30 days'
-                        """
+                          AND created_at >= NOW() - make_interval(days => %s)
+                        """,
+                        (insights_days,),
                     )
                     row = cur.fetchone()
                     if row:
@@ -614,10 +616,11 @@ def _fetch_dashboard(
                         FROM messages
                         WHERE role = 'assistant'
                           AND did_user_reply IS NOT NULL
-                          AND created_at >= NOW() - INTERVAL '30 days'
+                          AND created_at >= NOW() - make_interval(days => %s)
                         GROUP BY COALESCE(intent, 'unknown')
                         ORDER BY reply_rate_pct DESC NULLS LAST
-                        """
+                        """,
+                        (insights_days,),
                     )
                     insights_intent = [
                         dict(zip(["intent", "total", "reply_rate_pct", "dropoff_rate_pct", "avg_delay_s"], r))
@@ -641,10 +644,11 @@ def _fetch_dashboard(
                         FROM messages
                         WHERE role = 'assistant'
                           AND did_user_reply IS NOT NULL
-                          AND created_at >= NOW() - INTERVAL '30 days'
+                          AND created_at >= NOW() - make_interval(days => %s)
                         GROUP BY COALESCE(tone_mode, 'unknown')
                         ORDER BY reply_rate_pct DESC NULLS LAST
-                        """
+                        """,
+                        (insights_days,),
                     )
                     insights_tone = [
                         dict(zip(["tone_mode", "total", "reply_rate_pct", "dropoff_rate_pct"], r))
@@ -660,10 +664,11 @@ def _fetch_dashboard(
                         FROM messages
                         WHERE role = 'assistant'
                           AND went_silent_after = TRUE
-                          AND created_at >= NOW() - INTERVAL '30 days'
+                          AND created_at >= NOW() - make_interval(days => %s)
                         ORDER BY created_at DESC
                         LIMIT 15
-                        """
+                        """,
+                        (insights_days,),
                     )
                     insights_dropoff = [
                         dict(zip(["preview", "intent", "tone_mode", "reply_length_chars"], r))
@@ -682,8 +687,9 @@ def _fetch_dashboard(
                           COUNT(*) FILTER (WHERE came_back_within_7d = TRUE)      AS came_back_7d,
                           COUNT(*) FILTER (WHERE ended_at IS NOT NULL)            AS closed_sessions
                         FROM conversation_sessions
-                        WHERE started_at >= NOW() - INTERVAL '30 days'
-                        """
+                        WHERE started_at >= NOW() - make_interval(days => %s)
+                        """,
+                        (insights_days,),
                     )
                     row = cur.fetchone()
                     if row:
@@ -808,7 +814,7 @@ def _range_links(active: int) -> str:
     return " ".join(parts)
 
 
-def _render_insights_tab(stats: dict) -> str:
+def _render_insights_tab(stats: dict, insights_days: int = 14) -> str:
     """Return the inner HTML for the 🧠 Insights tab."""
     s = stats["insights_summary"]
     scored = stats["insights_scored_total"]
@@ -846,12 +852,25 @@ def _render_insights_tab(stats: dict) -> str:
     delay      = s.get("avg_reply_delay_s")
     avg_len    = s.get("avg_bot_reply_length")
 
-    summary_html = f"""
+    day_picker_html = "".join(
+        f'<a href="/admin?tab=insights&days={d}" style="'
+        f'padding:5px 14px;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none;'
+        f'{"background:#6366f1;color:#fff;" if d == insights_days else "background:#1f2937;color:#94a3b8;"}'
+        f'">{d}d</a>'
+        for d in (7, 14, 30)
+    )
+    date_filter_bar = f"""
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:18px;">
+      <span style="color:#6b7280;font-size:13px;margin-right:4px;">Window:</span>
+      {day_picker_html}
+    </div>"""
+
+    summary_html = date_filter_bar + f"""
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px;">
       <div class="stat-card">
         <div class="stat-label">Scored Replies</div>
         <div class="stat-value">{scored:,}</div>
-        <div class="stat-trend" style="color:#64748b;font-size:12px">last 30 days</div>
+        <div class="stat-trend" style="color:#64748b;font-size:12px">last {insights_days} days</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Reply Rate</div>
@@ -885,12 +904,12 @@ def _render_insights_tab(stats: dict) -> str:
           <td style="padding:10px 14px;text-align:center;color:#94a3b8;">{int(d) if d is not None else '—'}{'s' if d is not None else ''}</td>
         </tr>"""
     if not intent_rows_html:
-        intent_rows_html = '<tr><td colspan="5" style="padding:24px;text-align:center;color:#6b7280;font-style:italic;">No data yet for last 30 days.</td></tr>'
+        intent_rows_html = f'<tr><td colspan="5" style="padding:24px;text-align:center;color:#6b7280;font-style:italic;">No data yet for last {insights_days} days.</td></tr>'
 
     intent_table = f"""
     <div class="card" style="margin-bottom:20px;padding:0;overflow:hidden;">
       <div style="padding:16px 20px 12px;border-bottom:1px solid #1f2937;">
-        <div class="card-title" style="margin:0;">Engagement by Intent — Last 30 Days</div>
+        <div class="card-title" style="margin:0;">Engagement by Intent — Last {insights_days} Days</div>
       </div>
       <table style="width:100%;border-collapse:collapse;">
         <thead>
@@ -924,7 +943,7 @@ def _render_insights_tab(stats: dict) -> str:
     tone_table = f"""
     <div class="card" style="margin-bottom:20px;padding:0;overflow:hidden;">
       <div style="padding:16px 20px 12px;border-bottom:1px solid #1f2937;">
-        <div class="card-title" style="margin:0;">Engagement by Tone — Last 30 Days</div>
+        <div class="card-title" style="margin:0;">Engagement by Tone — Last {insights_days} Days</div>
       </div>
       <table style="width:100%;border-collapse:collapse;">
         <thead>
@@ -1040,6 +1059,12 @@ def admin():
     inbox_phone_q = request.args.get("phone", "").strip()
     msg_body_q = request.args.get("q", "").strip()
     try:
+        insights_days = int(request.args.get("days", "14"))
+        if insights_days not in (7, 14, 30):
+            insights_days = 14
+    except ValueError:
+        insights_days = 14
+    try:
         inbox_page = max(0, int(request.args.get("inbox_page", "0")))
     except ValueError:
         inbox_page = 0
@@ -1061,6 +1086,7 @@ def admin():
         msg_body_q=msg_body_q,
         inbox_page=inbox_page,
         thread_page=thread_page,
+        insights_days=insights_days,
     )
     if stats is None:
         return "<h2 style='font-family:sans-serif;padding:40px'>No database configured (DATABASE_URL not set).</h2>", 503
@@ -1635,7 +1661,7 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
   </div>
 
   <div class="tab-content {'active' if tab == 'insights' else ''}" id="tab-insights">
-    {_render_insights_tab(stats)}
+    {_render_insights_tab(stats, insights_days)}
   </div>
 
   <div class="tab-content {'active' if tab == 'conversions' else ''}" id="tab-conversions">
