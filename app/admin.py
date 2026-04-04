@@ -579,47 +579,64 @@ def _fetch_dashboard(
                           (SELECT COUNT(*) FROM contacts
                            WHERE created_at < %s)                              AS pre_bot_list,
 
-                          -- Post-bot list (subscribed on/after launch)
+                          -- New subscribers (subscribed on/after launch)
                           (SELECT COUNT(*) FROM contacts
                            WHERE created_at >= %s)                             AS post_bot_list,
 
-                          -- Post-bot: unique fans who texted the bot
-                          (SELECT COUNT(DISTINCT phone_number) FROM messages
-                           WHERE role = 'user' AND created_at >= %s)          AS post_bot_fans,
+                          -- Legacy subs (pre-March 27) who have since texted the bot
+                          (SELECT COUNT(DISTINCT m.phone_number)
+                           FROM messages m JOIN contacts c ON c.phone_number = m.phone_number
+                           WHERE m.role = 'user' AND m.created_at >= %s
+                             AND c.created_at < %s)                           AS legacy_engaged,
 
-                          -- Post-bot: fans with 3+ user messages (real conversation)
+                          -- New subs (post-March 27) who have texted the bot
+                          (SELECT COUNT(DISTINCT m.phone_number)
+                           FROM messages m JOIN contacts c ON c.phone_number = m.phone_number
+                           WHERE m.role = 'user' AND m.created_at >= %s
+                             AND c.created_at >= %s)                          AS new_sub_engaged,
+
+                          -- Fans with 3+ user messages (real conversation)
                           (SELECT COUNT(*) FROM (
                                SELECT phone_number FROM messages
                                WHERE role = 'user' AND created_at >= %s
                                GROUP BY phone_number HAVING COUNT(*) >= 3
                            ) AS deep_fans)                                    AS deep_convo_fans,
 
-                          -- Post-bot: unique fans who received a bot reply
+                          -- Unique fans who received a bot reply
                           (SELECT COUNT(DISTINCT phone_number) FROM messages
                            WHERE role = 'assistant' AND created_at >= %s)     AS bot_replied_fans,
 
-                          -- Total list size
-                          (SELECT COUNT(*) FROM contacts)                      AS total_list
+                          -- Earliest subscriber date for context
+                          (SELECT MIN(created_at)::date FROM contacts)        AS earliest_sub_date
                         """,
-                        (_BOT_LAUNCH, _BOT_LAUNCH, _BOT_LAUNCH, _BOT_LAUNCH, _BOT_LAUNCH),
+                        (
+                            _BOT_LAUNCH, _BOT_LAUNCH,
+                            _BOT_LAUNCH, _BOT_LAUNCH,
+                            _BOT_LAUNCH, _BOT_LAUNCH,
+                            _BOT_LAUNCH, _BOT_LAUNCH,
+                        ),
                     )
                     row = cur.fetchone()
                     if row:
-                        pre_list     = row[0] or 0
-                        post_list    = row[1] or 1
-                        post_fans    = row[2] or 0
-                        deep_convos  = row[3] or 0
-                        bot_replied  = row[4] or 1
-                        total_list   = row[5] or 1
+                        pre_list        = row[0] or 0
+                        post_list       = row[1] or 1
+                        legacy_engaged  = row[2] or 0
+                        new_engaged     = row[3] or 0
+                        deep_convos     = row[4] or 0
+                        bot_replied     = row[5] or 1
+                        earliest_date   = row[6]
+                        earliest_year   = earliest_date.year if earliest_date else 2022
                         insights_impact = {
                             "pre_bot_list": pre_list,
                             "post_bot_list": post_list,
-                            "post_bot_fans": post_fans,
+                            "legacy_engaged": legacy_engaged,
+                            "new_engaged": new_engaged,
+                            "legacy_pct": round(legacy_engaged / max(pre_list, 1) * 100, 1),
+                            "new_pct": round(new_engaged / max(post_list, 1) * 100, 1),
                             "deep_convo_fans": deep_convos,
                             "deep_convo_pct": round(deep_convos / max(bot_replied, 1) * 100, 1),
                             "bot_replied_fans": bot_replied,
-                            "total_list": total_list,
-                            "penetration_pct": round(post_fans / max(post_list, 1) * 100, 1),
+                            "earliest_year": earliest_year,
                         }
                 except Exception:
                     conn.rollback()
@@ -874,12 +891,14 @@ def _render_impact_section(impact: dict) -> str:
         return ""
     pre_list        = impact.get("pre_bot_list", 0)
     post_list       = impact.get("post_bot_list", 0)
-    post_fans       = impact.get("post_bot_fans", 0)
+    legacy_engaged  = impact.get("legacy_engaged", 0)
+    new_engaged     = impact.get("new_engaged", 0)
+    legacy_pct      = impact.get("legacy_pct", 0)
+    new_pct         = impact.get("new_pct", 0)
     deep_pct        = impact.get("deep_convo_pct", 0)
     deep_fans       = impact.get("deep_convo_fans", 0)
     bot_replied     = impact.get("bot_replied_fans", 0)
-    penetration_pct = impact.get("penetration_pct", 0)
-    total_list      = impact.get("total_list", 0)
+    earliest_year   = impact.get("earliest_year", 2022)
 
     def _bar(pct, color):
         w = min(100, max(0, float(pct or 0)))
@@ -900,26 +919,24 @@ def _render_impact_section(impact: dict) -> str:
 
         <div style="padding-right:20px;">
           <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;
-                      margin-bottom:4px;">Pre-bot subscribers</div>
-          <div style="font-size:28px;font-weight:800;color:#f87171;">{pre_list:,}</div>
+                      margin-bottom:4px;">Legacy subscribers (since {earliest_year})</div>
+          <div style="font-size:28px;font-weight:800;color:#f87171;">{legacy_pct}%</div>
           <div style="font-size:12px;color:#6b7280;margin-top:2px;">
-            subscribed before March 27 · SMS-only era
+            {legacy_engaged:,} of {pre_list:,} SMS-only fans tried the bot
           </div>
-          <div style="font-size:11px;color:#4b5563;margin-top:8px;">
-            {total_list:,} total on list today
-          </div>
+          {_bar(legacy_pct, "#f87171")}
         </div>
 
         <div style="background:#1f2937;"></div>
 
         <div style="padding:0 20px;">
           <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;
-                      margin-bottom:4px;">Post-bot penetration</div>
-          <div style="font-size:28px;font-weight:800;color:#4ade80;">{penetration_pct}%</div>
+                      margin-bottom:4px;">New subscribers (post-March 27)</div>
+          <div style="font-size:28px;font-weight:800;color:#4ade80;">{new_pct}%</div>
           <div style="font-size:12px;color:#6b7280;margin-top:2px;">
-            {post_fans:,} of {post_list:,} new subscribers texted the bot
+            {new_engaged:,} of {post_list:,} new subs texted the bot
           </div>
-          {_bar(penetration_pct, "#4ade80")}
+          {_bar(new_pct, "#4ade80")}
         </div>
 
         <div style="background:#1f2937;"></div>
