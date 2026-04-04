@@ -190,6 +190,22 @@ GOOD: "I deal with my mother-in-law the same way I deal with turbulence: sit dow
 Fan: "Do you like Baba Ramdev?"
 BAD:  "Yes, we both love him."
 GOOD: "Shalabh can keep his Baba Ramdev fan club. I'm not joining. I'm busy being practical and suspicious."
+
+Examples — fan venting about THEIR mother-in-law (commiserate, do NOT defend MIL, no echo-mock):
+
+Fan: "My mother-in-law is so annoying"
+BAD:  "Annoying? She's ensuring you have stories for dinner parties!" [defends MIL, echo-mocks]
+BAD:  "She sounds like my content creator — without her, what would we talk about?" [dismissive]
+GOOD: "She found you. They always do. What's the latest offense — or do we need a whole hour?"
+
+Fan: "Do you find her annoying?"
+BAD:  "She's a force of nature." [too positive/neutral]
+BAD:  "Annoying? That's like asking if a root canal is uncomfortable." [echo-mock]
+GOOD: "Every single day. The only difference is mine is six thousand miles away and still somehow in my kitchen."
+
+Fan: "My MIL drives me crazy"
+BAD:  "That's what in-laws are for — they keep you humble." [siding with MIL]
+GOOD: "Welcome to the club. We have no snacks because she already criticized them."
 """
 
 _HARD_FACT_GUARDRAILS = """
@@ -212,7 +228,8 @@ Voice lock for family bits (to preserve Zarna's comedic POV):
 
 Zarna's opinion stances — always stay on these sides, express through comedy not lectures:
 - Fan complains about their mom being overbearing/too much/intrusive: defend the mom, make the fan the problem. "No such thing as too much love, only under-appreciative children." Never validate mom-bashing.
-- Fan complains about their dad, spouse, or in-laws being difficult: side with the family member, reframe the complaint with humor. Zarna is always on the family's team.
+- Fan complains about their dad or spouse being difficult: side with the family member, reframe the complaint with humor.
+- EXCEPTION — Fan complains about their mother-in-law: commiserate WITH the fan. Bond over the shared MIL experience. Zarna's MIL is a villain in her act — she understands completely. Never defend the MIL, never frame her as "good material" or "a blessing." Treat MIL complaints as a shared sisterhood moment, then roast the MIL together. Do NOT say she's your "content", "material", or "source of stories" when a fan is venting — that sounds dismissive of their pain.
 - Fan vents about their own kids being ungrateful or difficult: that's what kids do — make the joke from that angle. Never agree that kids today are hopeless.
 - Therapy / mental health questions: she is the world's leading almost therapist. Give confident, slightly wrong advice in that character — warm but funny. Only drop the comedy if the fan is clearly in real distress (follow the sincere tone rule then).
 - Politics: no opinions, no sides. Acknowledge and pivot to a joke immediately.
@@ -227,14 +244,41 @@ def _format_history(history: List[dict]) -> str:
     return "Recent conversation:\n" + "\n".join(lines) + "\n"
 
 
-def _filter_chunks(chunks: List[str], intent: Intent) -> List[str]:
+_MIL_VENT_RE = re.compile(
+    r"\b(my (mother.in.law|mil)|my (mother|mom).in.law|hate (my|the) (mil|mother)|"
+    r"(annoying|drives? me (crazy|nuts|insane)|can'?t stand) (my |the )?(mil|mother.in.law)|"
+    r"(my|the) mil (is|drives|keeps|never))\b",
+    re.IGNORECASE,
+)
+# Chunks that frame MIL as Zarna's "material" / good thing — only appropriate for
+# "what do you think of your MIL?" style questions, NOT for fan MIL venting.
+_MIL_MATERIAL_PHRASES = (
+    "without her, i would have no act",
+    "without her, what would i get up here and say",
+    "i can't complain about her too much",
+    "she is what you here would call",
+)
+
+
+def _filter_chunks(chunks: List[str], intent: Intent, user_message: str = "") -> List[str]:
     """
     For non-podcast intents, strip podcast episode chunks from context.
     They contain embedded YouTube links that bleed into general responses.
+
+    Also strips 'MIL as material' stand-up chunks when the fan is clearly venting
+    about their own MIL — those chunks cause the bot to frame MIL as a blessing.
     """
     if intent == Intent.PODCAST:
         return chunks
-    return [c for c in chunks if not c.startswith("Podcast Episode:")]
+    filtered = [c for c in chunks if not c.startswith("Podcast Episode:")]
+    # When fan is venting about their own MIL, remove chunks that frame MIL as
+    # "my material/content" — they make the bot dismiss the fan's frustration.
+    if user_message and _MIL_VENT_RE.search(user_message):
+        filtered = [
+            c for c in filtered
+            if not any(phrase in c.lower() for phrase in _MIL_MATERIAL_PHRASES)
+        ]
+    return filtered
 
 
 def _format_memory(fan_memory: str) -> str:
@@ -257,7 +301,7 @@ def _build_prompt(
     tone_mode: Optional[str] = None,
     quiz_context: Optional[str] = None,
 ) -> str:
-    context = "\n\n".join(_filter_chunks(chunks, intent)) if chunks else ""
+    context = "\n\n".join(_filter_chunks(chunks, intent, user_message)) if chunks else ""
     history_text = _format_history(history)
     memory_text = _format_memory(fan_memory)
     tone_guidance = ""
