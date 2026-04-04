@@ -521,6 +521,51 @@ def _enforce_emphasis(text: str) -> str:
     return result
 
 
+_ECHO_MOCK_OPENER_RE = re.compile(
+    r"^([A-Za-z][a-zA-Z ,'\-]{0,40})\?\s+",
+    re.UNICODE,
+)
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "i", "you", "my", "your",
+    "it", "this", "that", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "so", "do", "did", "be", "as", "up", "if", "no", "not",
+    "he", "she", "we", "they", "his", "her", "our", "its", "will", "can",
+    "have", "has", "had", "just", "very", "really", "too",
+})
+
+
+def _strip_echo_mock(reply: str, fan_message: str) -> str:
+    """
+    Remove echo-mock openers: a short phrase (≤5 words) ending in '?' that
+    mirrors a word from the fan's message.
+
+    e.g.
+      "Annoying? She's a force."      → "She's a force."
+      "Four kids? That's a lot."      → "That's a lot."
+      "A doctor? Your parents knew."  → "Your parents knew."
+
+    Legitimate question openers that aren't echo-mocks are left alone because
+    they won't share a meaningful word with the fan message.
+    """
+    m = _ECHO_MOCK_OPENER_RE.match(reply)
+    if not m:
+        return reply
+
+    opener = m.group(1).strip()
+    opener_words = set(re.sub(r"[^\w\s]", "", opener.lower()).split()) - _STOP_WORDS
+    fan_words = set(re.sub(r"[^\w\s]", "", fan_message.lower()).split()) - _STOP_WORDS
+
+    # Only strip when opener is short AND at least one content word overlaps
+    if len(opener.split()) <= 5 and opener_words & fan_words:
+        stripped = reply[m.end():]
+        # Capitalise the first letter of the remainder if needed
+        if stripped and stripped[0].islower():
+            stripped = stripped[0].upper() + stripped[1:]
+        return stripped
+
+    return reply
+
+
 def _trim_reply(text: str) -> str:
     """
     Trim the model's output to at most 3 sentences.
@@ -687,4 +732,6 @@ def generate_zarna_reply(
             first = _apply_emphasis_policy(_trim_reply(lines[0]), emphasis_suppress_all)
             return first + "\n" + lines[-1]
 
-    return _apply_emphasis_policy(_trim_reply(raw), emphasis_suppress_all)
+    # Strip echo-mock opener before final trimming so the char limit is applied to clean text
+    cleaned = _strip_echo_mock(raw, user_message)
+    return _apply_emphasis_policy(_trim_reply(cleaned), emphasis_suppress_all)
