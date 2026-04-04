@@ -597,10 +597,10 @@ def _fetch_dashboard(
                            WHERE m.role = 'user' AND m.created_at >= %s
                              AND c.created_at >= %s)                          AS new_sub_engaged,
 
-                          -- Pre-bot: fans with 3+ user messages
+                          -- Pre-bot: fans with 3+ messages (csv_import = same filter as pre-bot era)
                           (SELECT COUNT(*) FROM (
                                SELECT phone_number FROM messages
-                               WHERE role = 'user' AND created_at < %s
+                               WHERE role = 'user' AND source = 'csv_import'
                                GROUP BY phone_number HAVING COUNT(*) >= 3
                            ) AS pre_deep_fans)                                AS pre_deep_convo_fans,
 
@@ -611,10 +611,10 @@ def _fetch_dashboard(
                                GROUP BY phone_number HAVING COUNT(*) >= 3
                            ) AS post_deep_fans)                               AS post_deep_convo_fans,
 
-                          -- Pre-bot: fans with 5+ user messages
+                          -- Pre-bot: fans with 5+ messages (csv_import)
                           (SELECT COUNT(*) FROM (
                                SELECT phone_number FROM messages
-                               WHERE role = 'user' AND created_at < %s
+                               WHERE role = 'user' AND source = 'csv_import'
                                GROUP BY phone_number HAVING COUNT(*) >= 5
                            ) AS pre_super_fans)                               AS pre_super_deep_convo_fans,
 
@@ -625,9 +625,9 @@ def _fetch_dashboard(
                                GROUP BY phone_number HAVING COUNT(*) >= 5
                            ) AS post_super_fans)                              AS post_super_deep_convo_fans,
 
-                          -- Pre-bot: unique fans who sent at least 1 message
+                          -- Pre-bot: unique fans who sent at least 1 message (csv_import)
                           (SELECT COUNT(DISTINCT phone_number) FROM messages
-                           WHERE role = 'user' AND created_at < %s)           AS pre_engaging_fans,
+                           WHERE role = 'user' AND source = 'csv_import')     AS pre_engaging_fans,
 
                           -- Post-bot: unique fans who sent at least 1 message
                           (SELECT COUNT(DISTINCT phone_number) FROM messages
@@ -644,9 +644,9 @@ def _fetch_dashboard(
                             _BOT_LAUNCH, _BOT_LAUNCH,   # pre/post_bot_list
                             _BOT_LAUNCH, _BOT_LAUNCH,   # legacy_engaged
                             _BOT_LAUNCH, _BOT_LAUNCH,   # new_sub_engaged
-                            _BOT_LAUNCH, _BOT_LAUNCH,   # pre/post_deep_convo_fans
-                            _BOT_LAUNCH, _BOT_LAUNCH,   # pre/post_super_deep_convo_fans
-                            _BOT_LAUNCH, _BOT_LAUNCH,   # pre/post_engaging_fans
+                            _BOT_LAUNCH,                # post_deep_convo_fans
+                            _BOT_LAUNCH,                # post_super_deep_convo_fans
+                            _BOT_LAUNCH,                # post_engaging_fans
                             _BOT_LAUNCH,                # bot_replied_fans
                         ),
                     )
@@ -1026,7 +1026,7 @@ def _range_links(active: int) -> str:
     return " ".join(parts)
 
 
-def _render_impact_section(impact: dict) -> str:
+def _render_impact_section(impact: dict, era: str = "post") -> str:
     """Before/after bot impact banner."""
     if not impact:
         return ""
@@ -1047,6 +1047,13 @@ def _render_impact_section(impact: dict) -> str:
     pre_engaging_fans    = impact.get("pre_engaging_fans", 0)
     post_engaging_fans   = impact.get("post_engaging_fans", 0)
     bot_replied          = impact.get("bot_replied_fans", 0)
+
+    # Show era-appropriate values for deep/super deep convos
+    deep_pct      = pre_deep_pct   if era == "pre" else post_deep_pct
+    deep_fans     = pre_deep_fans  if era == "pre" else post_deep_fans
+    super_pct     = pre_super_pct  if era == "pre" else post_super_pct
+    super_fans    = pre_super_fans if era == "pre" else post_super_fans
+    engaging_fans = pre_engaging_fans if era == "pre" else post_engaging_fans
     earliest_year   = impact.get("earliest_year", 2022)
 
     def _bar(pct, color):
@@ -1093,15 +1100,11 @@ def _render_impact_section(impact: dict) -> str:
         <div style="padding:0 20px;">
           <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;
                       margin-bottom:4px;">Deep convos (3+ msgs)</div>
-          <div style="display:flex;align-items:baseline;gap:6px;">
-            <span style="font-size:20px;font-weight:700;color:#6b7280;">{pre_deep_pct}%</span>
-            <span style="font-size:16px;color:#4b5563;">→</span>
-            <span style="font-size:28px;font-weight:800;color:#a78bfa;">{post_deep_pct}%</span>
-          </div>
+          <div style="font-size:28px;font-weight:800;color:#a78bfa;">{deep_pct}%</div>
           <div style="font-size:12px;color:#6b7280;margin-top:2px;">
-            {pre_deep_fans:,}/{pre_engaging_fans:,} before · {post_deep_fans:,}/{post_engaging_fans:,} after
+            {deep_fans:,} of {engaging_fans:,} fans who replied
           </div>
-          {_bar(post_deep_pct, "#a78bfa")}
+          {_bar(deep_pct, "#a78bfa")}
         </div>
 
         <div style="background:#1f2937;"></div>
@@ -1109,15 +1112,11 @@ def _render_impact_section(impact: dict) -> str:
         <div style="padding:0 20px;">
           <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;
                       margin-bottom:4px;">Super deep convos (5+ msgs)</div>
-          <div style="display:flex;align-items:baseline;gap:6px;">
-            <span style="font-size:20px;font-weight:700;color:#6b7280;">{pre_super_pct}%</span>
-            <span style="font-size:16px;color:#4b5563;">→</span>
-            <span style="font-size:28px;font-weight:800;color:#f472b6;">{post_super_pct}%</span>
-          </div>
+          <div style="font-size:28px;font-weight:800;color:#f472b6;">{super_pct}%</div>
           <div style="font-size:12px;color:#6b7280;margin-top:2px;">
-            {pre_super_fans:,}/{pre_engaging_fans:,} before · {post_super_fans:,}/{post_engaging_fans:,} after
+            {super_fans:,} of {engaging_fans:,} fans who replied
           </div>
-          {_bar(post_super_pct, "#f472b6")}
+          {_bar(super_pct, "#f472b6")}
         </div>
 
         <div style="background:#1f2937;"></div>
@@ -1219,7 +1218,7 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
       {"<span style='color:#374151;margin:0 6px;'>|</span><span style='color:#6b7280;font-size:13px;'>Window:</span>" + day_picker_html if day_picker_html else ""}
     </div>"""
 
-    impact_html = _render_impact_section(stats.get("insights_impact", {}))
+    impact_html = _render_impact_section(stats.get("insights_impact", {}), era=insights_era)
     summary_html = impact_html + date_filter_bar + f"""
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px;">
       <div class="stat-card">
