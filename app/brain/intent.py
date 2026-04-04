@@ -68,6 +68,8 @@ _GREETING_EXACT = frozenset({
     "hii", "hiii", "heyyy", "heyy", "hiiii",
     "namaste", "namasté",
     "good night", "goodnight", "night night",
+    # Zarna name misspellings — fan trying to address her
+    "zara", "zaria", "zarnas", "varna", "zarana", "zarha",
 })
 _GREETING_PHRASES = (
     "what's up", "whats up", "wassup", "whaddup",
@@ -79,6 +81,104 @@ _GREETING_PHRASES = (
     "hi there", "hey there", "hello there",
 )
 _GREETING_MAX_WORDS = 7
+
+# ── Location: fans replying with where they're from ──────────────────────────
+# Checked for very short messages (≤4 words) — almost certainly answering
+# "where are you from?" during a live show → classify as PERSONAL
+_LOCATION_EXACT = frozenset({
+    # US States
+    "alabama","alaska","arizona","arkansas","california","colorado",
+    "connecticut","delaware","florida","georgia","hawaii","idaho",
+    "illinois","indiana","iowa","kansas","kentucky","louisiana","maine",
+    "maryland","massachusetts","michigan","minnesota","mississippi",
+    "missouri","montana","nebraska","nevada","new hampshire","new jersey",
+    "new mexico","new york","north carolina","north dakota","ohio",
+    "oklahoma","oregon","pennsylvania","rhode island","south carolina",
+    "south dakota","tennessee","texas","utah","vermont","virginia",
+    "washington","west virginia","wisconsin","wyoming",
+    # Major US cities
+    "new york city","los angeles","chicago","houston","phoenix",
+    "philadelphia","san antonio","san diego","dallas","san jose",
+    "austin","jacksonville","san francisco","seattle","denver",
+    "nashville","boston","las vegas","portland","memphis","louisville",
+    "baltimore","milwaukee","atlanta","new orleans","tampa","orlando",
+    "miami","raleigh","minneapolis","cleveland","pittsburgh","cincinnati",
+    "kansas city","sacramento","salt lake city","richmond","spokane",
+    "des moines","hartford","bridgeport","new haven","jersey city",
+    "newark","buffalo","rochester","grand rapids","madison","providence",
+    "fort lauderdale","baton rouge","little rock","albuquerque","tucson",
+    "fresno","oklahoma city","el paso","corpus christi","lubbong",
+    "arlington","plano","garland","lincoln","omaha","wichita",
+    "colorado springs","greensboro","durham","charlotte","columbia",
+    "charleston","savannah","tallahassee","birmingham","montgomery",
+    "mobile","knoxville","chattanooga","lexington","indianapolis",
+    "fort wayne","columbus","akron","toledo","dayton","detroit",
+    "flint","lansing","ann arbor","st louis","springfield","st paul",
+    "sioux falls","fargo","bismarck","billings","boise","eugene",
+    "salem","tacoma","bellevue","olympia","anchorage","juneau","honolulu",
+    "south bend","palo alto","boulder","pasadena","irvine","scottsdale",
+    "tempe","chandler","mesa","glendale","peoria","fort worth",
+    "lubbock","garland","irving","laredo","amarillo","mcallen",
+    "fresno","bakersfield","stockton","modesto","riverside","ontario",
+    "santa ana","anaheim","chula vista","oceanside","escondido",
+    "oxnard","elk grove","corona","salinas","sunnyvale","hayward",
+    "pomona","torrance","moreno valley","garden grove","palmdale",
+    "santa clarita","paterson","yonkers","worcester","cape coral",
+    "fort collins","aurora","lakewood","thornton","westminster",
+    # Common abbreviations / nicknames
+    "nyc","la","sf","dc","atl","chi","phx","philly","nola","kc",
+    "brooklyn","queens","bronx","manhattan","long island",
+    "the bronx","staten island","jersey","nj","ct","ny","ca","tx","fl",
+    # Canadian cities
+    "toronto","vancouver","calgary","montreal","ottawa","edmonton",
+    "winnipeg","halifax","victoria","saskatoon","regina",
+    # International (common in Zarna's desi fanbase)
+    "mumbai","delhi","new delhi","bangalore","chennai","hyderabad",
+    "pune","ahmedabad","kolkata","lucknow","jaipur","surat","chandigarh",
+    "london","toronto","sydney","dubai","singapore","auckland",
+})
+# Matches "City, ST" or "City, State" patterns (e.g. "Hartford, CT", "Pasadena, CA")
+_LOCATION_CITY_STATE_RE = re.compile(
+    r"^[a-z][a-z\s\-]{1,25},\s*[a-z]{2,}$", re.IGNORECASE
+)
+
+# ── Short affirmations: fans confirming/reacting in 1-3 words ────────────────
+# Maps to FEEDBACK (positive acknowledgment) — better than GENERAL's generic reply
+_AFFIRMATION_EXACT = frozenset({
+    "yes","yep","yup","yeah","yea","yass","yasss","yaaaas",
+    "correct","right","true","absolutely","definitely","exactly",
+    "of course","for sure","totally","certainly","indeed","yes indeed",
+    "yes ma am","yes maam","yes ma'am",
+    "congrats","congratulations","congrats!","yay","woohoo","woo hoo",
+    "awesome","great","nice","cool","sweet","dope","lit","fire",
+    "thanks","thank you","ty","thx","thank u",
+    "no","nope","nah","not yet","almost","not really","kind of","kinda",
+    "maybe","perhaps","idk","idc","sure","ok","okay","okk","okkk","k",
+    "yup yup","yes yes","no no","oh yes","oh yeah","oh no",
+    "shut up","stop it","no way","no way!","get out","get outta here",
+})
+
+# ── AI / bot questions ────────────────────────────────────────────────────────
+_AI_QUESTION_PHRASES = (
+    "are you ai", "are you an ai", "is this ai", "is this an ai",
+    "are you a bot", "is this a bot", "are you real",
+    "am i talking to ai", "am i talking to a bot",
+    "is this really zarna", "is this actually zarna",
+    "are you actually zarna", "this is ai", "this is a bot",
+    "what ai", "which ai", "what model", "what llm",
+    "powered by", "chatgpt", "chat gpt", "openai", "claude", "gemini",
+    "nice job ai", "good job ai", "wow ai", "hey ai",
+)
+
+# ── Shalabh / name references → PERSONAL ─────────────────────────────────────
+_SHALABH_NAMES = (
+    "shalabh", "shalab", "shalabhs",
+)
+# Common mis-spellings of Zarna's name as standalone messages → GREETING
+_ZARNA_VARIANTS = frozenset({
+    "zara", "zaria", "zarnas", "varna", "zarana", "zarha",
+    "zarna", "zarna!", "zarna?",
+})
 
 # ── Feedback: reactions, laughs, compliments, quiz answers ──────────────────
 # Laugh / reaction words caught by exact word match (very short messages)
@@ -133,7 +233,8 @@ _PERSONAL_PHRASES = re.compile(
     r"fun fact.{0,5}(i |about me)|"
     r"i love (to |my |our )?(cook|hike|travel|read|danc|sing|paint|garden|yoga)|"
     r"introvert|extrovert|i'?m (jewish|hindu|muslim|catholic|christian|sikh|desi|indian|"
-    r"south asian|desi|gori|white|black|latina|asian)"
+    r"south asian|desi|gori|white|black|latina|asian)|"
+    r"shalabh|shalab"
     r")",
     re.IGNORECASE,
 )
@@ -156,19 +257,27 @@ def _fast_classify(message: str) -> Intent | None:
     """
     lower = message.lower().strip()
     # Strip punctuation from word tokens for keyword matching
-    words = set(re.sub(r"[^\w\s]", "", lower).split())
+    clean = re.sub(r"[^\w\s]", "", lower)
+    words = set(clean.split())
 
     # Emoji-only laugh reactions (stripped before word split, so check raw lower)
     if lower.strip() in _LAUGH_EXACT:
         return Intent.FEEDBACK
 
-    # Greeting — short openers, check before anything else
+    # Greeting — short openers (incl. Zarna name misspellings)
     if len(words) <= _GREETING_MAX_WORDS:
         stripped = lower.rstrip("!.? ")
         if stripped in _GREETING_EXACT:
             return Intent.GREETING
         if any(lower.startswith(p) for p in _GREETING_PHRASES):
             return Intent.GREETING
+
+    # Location: very short messages that are entirely a known location → PERSONAL
+    if len(words) <= 4:
+        if clean.strip() in _LOCATION_EXACT:
+            return Intent.PERSONAL
+        if _LOCATION_CITY_STATE_RE.match(lower.strip()):
+            return Intent.PERSONAL
 
     # Personal first for longer messages (before feedback, to avoid substring collisions)
     if len(words) > 4 and _PERSONAL_PHRASES.search(lower) and "?" not in lower:
@@ -177,12 +286,19 @@ def _fast_classify(message: str) -> Intent | None:
     # Feedback — laugh/reaction words for very short messages (≤4 words)
     if len(words) <= 4 and words & _LAUGH_EXACT:
         return Intent.FEEDBACK
+    # Short affirmations / one-word reactions (≤3 words)
+    if len(words) <= 3 and clean.strip() in _AFFIRMATION_EXACT:
+        return Intent.FEEDBACK
     # MIL quiz answers ("mother in law" etc.) → engagement reaction = feedback
     if any(p in lower for p in _MIL_ANSWERS):
         return Intent.FEEDBACK
     # Post-show praise and general reactions
     if any(p in lower for p in _FEEDBACK_PHRASES):
         return Intent.FEEDBACK
+
+    # AI / bot questions → QUESTION
+    if any(p in lower for p in _AI_QUESTION_PHRASES):
+        return Intent.QUESTION
 
     # Structured intents
     if words & _SHOW_KEYWORDS or any(k in lower for k in _SHOW_KEYWORDS if " " in k):
@@ -212,26 +328,34 @@ def classify_intent(message: str) -> Intent:
 
 INTENTS with examples:
 
-greeting — opening the conversation, checking in, saying goodbye
-  examples: "hi", "hey Zarna!", "are you there?", "good morning", "goodnight", "what's going on?"
+greeting — opening the conversation, checking in, saying goodbye, or calling out Zarna's name
+  examples: "hi", "hey Zarna!", "are you there?", "good morning", "goodnight", "what's going on?",
+            "Zara" (fan mishearing/misspelling Zarna), "Zaria", "Varna"
 
-feedback — reacting positively to Zarna's content, laughing, giving a review, answering her bits
+feedback — reacting, laughing, agreeing, answering Zarna's interactive bits, short affirmations
   examples: "lol", "hahaha", "😂", "so funny!", "that's hilarious", "you were amazing tonight",
             "great show", "loved it", "preach!", "so true", "you crack me up",
             "mother in law" (answering Zarna's "who's my enemy #1?" game),
-            "your husband 😂", "her MIL!", "omg I'm dying"
+            "your husband 😂", "her MIL!", "omg I'm dying",
+            "yes", "yeah", "correct", "absolutely", "congrats", "yay",
+            "awesome", "nice", "thanks", "no", "nope", "not yet", "almost",
+            "shut up" (as in "shut up that's so funny!"), "stop it", "no way"
 
-personal — fan sharing facts about themselves (name, job, city, family, hobbies, life story)
+personal — fan sharing facts about themselves OR their location (city, state, country)
   examples: "I'm a teacher from Ohio", "my name is Susan, I'm a mom of 3",
             "3 facts about me: I love hiking, I'm 45, I have 2 dogs",
             "I grew up in India", "I'm Jewish and this hits different",
-            "I hate my mother-in-law too!", "I'm happily divorced"
+            "Houston" (fan answering "where are you from?"),
+            "NYC", "New Jersey", "Connecticut", "Pasadena, CA",
+            "Hartford, CT", "South Bend", "Boulder, CO",
+            "Shalabh is hilarious", "Shalabh seems so patient",
+            "I'm happily divorced", "I hate my MIL too", "married with 2 kids"
 
 question — fan asking Zarna a direct question expecting a real answer
   examples: "what does Shalabh think of your comedy?", "do your kids watch your shows?",
-            "is this actually you or AI?", "how do you deal with the MIL?",
-            "what's your advice for dealing with difficult in-laws?",
-            "when did you start doing comedy?"
+            "is this actually you or AI?", "are you an AI?", "what AI model do you use?",
+            "how do you deal with the MIL?", "when did you start doing comedy?",
+            "are you coming to Toronto?", "how is Zarna doing?"
 
 show — explicitly asking for ticket links, show dates, or where to see Zarna perform
   examples: "how do I get tickets?", "when are you coming to LA?", "where can I buy tickets?",
@@ -250,9 +374,9 @@ podcast — asking about Zarna's podcast
   examples: "do you have a podcast?", "where can I listen to your podcast?"
 
 general — ONLY use this if the message truly fits none of the above:
-  short mid-conversation replies ("yes", "ok", "I know", "maybe"), random non-Zarna topics,
-  spam, or messages that make no sense out of context.
-  DO NOT use general for laughs, reactions, MIL answers, or fan self-introductions.
+  random non-Zarna topics, spam, or deeply context-dependent messages that make no sense alone.
+  DO NOT use general for: laughs, reactions, affirmations (yes/no/thanks/congrats),
+  location names, MIL answers, fan self-introductions, or Zarna/Shalabh name mentions.
 
 Message: "{message}"
 

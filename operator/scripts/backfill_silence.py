@@ -185,6 +185,8 @@ def backfill_intent(conn) -> int:
         "hi", "hey", "hello", "hola", "yo", "howdy", "sup",
         "hii", "hiii", "heyyy", "heyy", "hiiii",
         "namaste", "namasté", "good night", "goodnight", "night night",
+        # Zarna name misspellings
+        "zara", "zaria", "zarnas", "varna", "zarana", "zarha",
     }
     _GREETING_PHRASES = (
         "what's up", "whats up", "wassup", "whaddup",
@@ -225,6 +227,72 @@ def backfill_intent(conn) -> int:
         "thank you zarna", "thanks zarna", "good night was fun",
         "you were awesome tonight", "we have seen you",
     )
+    _AFFIRMATION_EXACT = {
+        "yes","yep","yup","yeah","yea","yass","yasss","yaaaas",
+        "correct","right","true","absolutely","definitely","exactly",
+        "of course","for sure","totally","certainly","indeed","yes indeed",
+        "yes ma am","yes maam","yes ma'am",
+        "congrats","congratulations","yay","woohoo","woo hoo",
+        "awesome","great","nice","cool","sweet","dope","lit","fire",
+        "thanks","thank you","ty","thx","thank u",
+        "no","nope","nah","not yet","almost","not really","kind of","kinda",
+        "maybe","perhaps","idk","idc","sure","ok","okay","okk","okkk","k",
+        "yup yup","yes yes","no no","oh yes","oh yeah","oh no",
+        "shut up","stop it","no way","get out","get outta here",
+    }
+    _AI_QUESTION_PHRASES = (
+        "are you ai", "are you an ai", "is this ai", "is this an ai",
+        "are you a bot", "is this a bot", "are you real",
+        "am i talking to ai", "am i talking to a bot",
+        "is this really zarna", "is this actually zarna",
+        "are you actually zarna", "this is ai", "this is a bot",
+        "what ai", "which ai", "what model", "what llm",
+        "powered by", "chatgpt", "chat gpt", "openai", "claude", "gemini",
+        "nice job ai", "good job ai", "wow ai", "hey ai",
+    )
+    _LOCATION_EXACT = {
+        "alabama","alaska","arizona","arkansas","california","colorado",
+        "connecticut","delaware","florida","georgia","hawaii","idaho",
+        "illinois","indiana","iowa","kansas","kentucky","louisiana","maine",
+        "maryland","massachusetts","michigan","minnesota","mississippi",
+        "missouri","montana","nebraska","nevada","new hampshire","new jersey",
+        "new mexico","new york","north carolina","north dakota","ohio",
+        "oklahoma","oregon","pennsylvania","rhode island","south carolina",
+        "south dakota","tennessee","texas","utah","vermont","virginia",
+        "washington","west virginia","wisconsin","wyoming",
+        "new york city","los angeles","chicago","houston","phoenix",
+        "philadelphia","san antonio","san diego","dallas","san jose",
+        "austin","jacksonville","san francisco","seattle","denver",
+        "nashville","boston","las vegas","portland","memphis","louisville",
+        "baltimore","milwaukee","atlanta","new orleans","tampa","orlando",
+        "miami","raleigh","minneapolis","cleveland","pittsburgh","cincinnati",
+        "kansas city","sacramento","salt lake city","richmond","spokane",
+        "des moines","hartford","bridgeport","new haven","jersey city",
+        "newark","buffalo","rochester","grand rapids","madison","providence",
+        "fort lauderdale","baton rouge","little rock","albuquerque","tucson",
+        "fresno","oklahoma city","el paso","corpus christi",
+        "arlington","plano","garland","lincoln","omaha","wichita",
+        "colorado springs","greensboro","durham","charlotte","columbia",
+        "charleston","savannah","tallahassee","birmingham","montgomery",
+        "mobile","knoxville","chattanooga","lexington","indianapolis",
+        "fort wayne","columbus","akron","toledo","dayton","detroit",
+        "flint","lansing","ann arbor","st louis","springfield","st paul",
+        "sioux falls","fargo","bismarck","billings","boise","eugene",
+        "salem","tacoma","bellevue","olympia","anchorage","juneau","honolulu",
+        "south bend","palo alto","boulder","pasadena","irvine","scottsdale",
+        "tempe","chandler","mesa","glendale","fort worth","lubbock",
+        "nyc","la","sf","dc","atl","chi","phx","philly","nola","kc",
+        "brooklyn","queens","bronx","manhattan","long island",
+        "jersey","nj","ct","ny","ca","tx","fl",
+        "toronto","vancouver","calgary","montreal","ottawa","edmonton",
+        "winnipeg","halifax",
+        "mumbai","delhi","new delhi","bangalore","chennai","hyderabad",
+        "pune","ahmedabad","kolkata","lucknow","jaipur","surat","chandigarh",
+        "london","sydney","dubai","singapore",
+    }
+    _LOCATION_CITY_STATE_RE = _re.compile(
+        r"^[a-z][a-z\s\-]{1,25},\s*[a-z]{2,}$", _re.IGNORECASE
+    )
     _PERSONAL_RE = _re.compile(
         r"\b(i'?m a |i am a |i'?m from |i am from |i live in |i work(ed)? (as|at|for|in)|"
         r"my name is |my husband |my wife |my kids |my daughter |my son |my family |"
@@ -235,7 +303,8 @@ def backfill_intent(conn) -> int:
         r"three facts|3 facts|\d+ facts about (me|myself)|facts about me|"
         r"fun fact.{0,5}(i |about me)|"
         r"introvert|extrovert|i'?m (jewish|hindu|muslim|catholic|christian|sikh|desi|indian|"
-        r"south asian|gori|white|black|latina|asian))",
+        r"south asian|gori|white|black|latina|asian)|"
+        r"shalabh|shalab)",
         _re.IGNORECASE,
     )
 
@@ -244,13 +313,14 @@ def backfill_intent(conn) -> int:
         if not lower:
             return "general"
         # Strip punctuation for word-set matching
-        words = set(_re.sub(r"[^\w\s]", "", lower).split())
+        clean = _re.sub(r"[^\w\s]", "", lower)
+        words = set(clean.split())
 
         # Emoji-only laugh reactions (stripped before word split)
         if lower.strip() in _LAUGH_EXACT:
             return "feedback"
 
-        # Greeting
+        # Greeting (incl. Zarna name misspellings)
         if len(words) <= 7:
             stripped = lower.rstrip("!.? ")
             if stripped in _GREETING_EXACT:
@@ -258,17 +328,30 @@ def backfill_intent(conn) -> int:
             if any(lower.startswith(p) for p in _GREETING_PHRASES):
                 return "greeting"
 
+        # Location: very short messages that are entirely a known location → personal
+        if len(words) <= 4:
+            if clean.strip() in _LOCATION_EXACT:
+                return "personal"
+            if _LOCATION_CITY_STATE_RE.match(lower.strip()):
+                return "personal"
+
         # Personal first for longer messages (before feedback)
         if len(words) > 4 and _PERSONAL_RE.search(lower) and "?" not in lower:
             return "personal"
 
-        # Feedback: laugh reactions for short messages, MIL answers, praise
+        # Feedback: laugh reactions for short messages, MIL answers, praise, affirmations
         if len(words) <= 4 and words & _LAUGH_EXACT:
+            return "feedback"
+        if len(words) <= 3 and clean.strip() in _AFFIRMATION_EXACT:
             return "feedback"
         if any(p in lower for p in _MIL_ANSWERS):
             return "feedback"
         if any(p in lower for p in _FEEDBACK_PHRASES):
             return "feedback"
+
+        # AI / bot questions
+        if any(p in lower for p in _AI_QUESTION_PHRASES):
+            return "question"
 
         # Structured
         if words & _SHOW_KW or any(k in lower for k in _SHOW_KW if " " in k):
