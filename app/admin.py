@@ -575,35 +575,18 @@ def _fetch_dashboard(
                     cur.execute(
                         """
                         SELECT
-                          -- Pre-bot: unique subscribers who sent any message before launch
-                          COUNT(DISTINCT CASE WHEN created_at < %s THEN phone_number END)
-                            FILTER (WHERE role = 'user')                             AS pre_bot_active,
-
-                          -- Total contacts before bot launch (proxy for list size)
-                          (SELECT COUNT(*) FROM contacts WHERE created_at < %s)      AS pre_bot_list_size,
-
-                          -- Post-bot: unique fans who texted since launch
-                          COUNT(DISTINCT CASE WHEN created_at >= %s THEN phone_number END)
-                            FILTER (WHERE role = 'user')                             AS post_bot_fans,
-
-                          -- Post-bot: fans who had 3+ user messages (real conversation)
-                          (
-                            SELECT COUNT(DISTINCT phone_number)
-                            FROM messages
-                            WHERE role = 'user'
-                              AND created_at >= %s
-                            GROUP BY phone_number
-                            HAVING COUNT(*) >= 3
-                          )                                                           AS deep_convo_fans,
-
-                          -- Post-bot: total unique fans who received a bot reply
-                          (
-                            SELECT COUNT(DISTINCT phone_number)
-                            FROM messages
-                            WHERE role = 'assistant'
-                              AND created_at >= %s
-                          )                                                           AS bot_replied_fans
-                        FROM messages
+                          (SELECT COUNT(DISTINCT phone_number) FROM messages
+                           WHERE role = 'user' AND created_at < %s)          AS pre_bot_active,
+                          (SELECT COUNT(*) FROM contacts WHERE created_at < %s) AS pre_bot_list_size,
+                          (SELECT COUNT(DISTINCT phone_number) FROM messages
+                           WHERE role = 'user' AND created_at >= %s)         AS post_bot_fans,
+                          (SELECT COUNT(*) FROM (
+                               SELECT phone_number FROM messages
+                               WHERE role = 'user' AND created_at >= %s
+                               GROUP BY phone_number HAVING COUNT(*) >= 3
+                           ) AS deep_fans)                                   AS deep_convo_fans,
+                          (SELECT COUNT(DISTINCT phone_number) FROM messages
+                           WHERE role = 'assistant' AND created_at >= %s)    AS bot_replied_fans
                         """,
                         (_BOT_LAUNCH, _BOT_LAUNCH, _BOT_LAUNCH, _BOT_LAUNCH, _BOT_LAUNCH),
                     )
