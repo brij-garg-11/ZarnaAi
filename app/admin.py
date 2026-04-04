@@ -1048,12 +1048,15 @@ def _render_impact_section(impact: dict, era: str = "post") -> str:
     post_engaging_fans   = impact.get("post_engaging_fans", 0)
     bot_replied          = impact.get("bot_replied_fans", 0)
 
-    # Show era-appropriate values for deep/super deep convos
-    deep_pct      = pre_deep_pct   if era == "pre" else post_deep_pct
-    deep_fans     = pre_deep_fans  if era == "pre" else post_deep_fans
-    super_pct     = pre_super_pct  if era == "pre" else post_super_pct
-    super_fans    = pre_super_fans if era == "pre" else post_super_fans
-    engaging_fans = pre_engaging_fans if era == "pre" else post_engaging_fans
+    # Deep/super deep convos are only meaningful post-bot.
+    # Pre-bot data is a cumulative phone-number history (no per-session grouping),
+    # so message counts stack across years and produce meaningless 100% figures.
+    is_pre        = (era == "pre")
+    deep_pct      = post_deep_pct
+    deep_fans     = post_deep_fans
+    super_pct     = post_super_pct
+    super_fans    = post_super_fans
+    engaging_fans = post_engaging_fans
     earliest_year   = impact.get("earliest_year", 2022)
 
     def _bar(pct, color):
@@ -1100,11 +1103,7 @@ def _render_impact_section(impact: dict, era: str = "post") -> str:
         <div style="padding:0 20px;">
           <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;
                       margin-bottom:4px;">Deep convos (3+ msgs)</div>
-          <div style="font-size:28px;font-weight:800;color:#a78bfa;">{deep_pct}%</div>
-          <div style="font-size:12px;color:#6b7280;margin-top:2px;">
-            {deep_fans:,} of {engaging_fans:,} fans who replied
-          </div>
-          {_bar(deep_pct, "#a78bfa")}
+          {"<div style='font-size:22px;font-weight:800;color:#4b5563;'>—</div><div style='font-size:11px;color:#4b5563;margin-top:4px;'>not tracked pre-bot<br>(cumulative history)</div>" if is_pre else f"<div style='font-size:28px;font-weight:800;color:#a78bfa;'>{deep_pct}%</div><div style='font-size:12px;color:#6b7280;margin-top:2px;'>{deep_fans:,} of {engaging_fans:,} fans who replied</div>{_bar(deep_pct, '#a78bfa')}"}
         </div>
 
         <div style="background:#1f2937;"></div>
@@ -1112,11 +1111,7 @@ def _render_impact_section(impact: dict, era: str = "post") -> str:
         <div style="padding:0 20px;">
           <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;
                       margin-bottom:4px;">Super deep convos (5+ msgs)</div>
-          <div style="font-size:28px;font-weight:800;color:#f472b6;">{super_pct}%</div>
-          <div style="font-size:12px;color:#6b7280;margin-top:2px;">
-            {super_fans:,} of {engaging_fans:,} fans who replied
-          </div>
-          {_bar(super_pct, "#f472b6")}
+          {"<div style='font-size:22px;font-weight:800;color:#4b5563;'>—</div><div style='font-size:11px;color:#4b5563;margin-top:4px;'>not tracked pre-bot<br>(cumulative history)</div>" if is_pre else f"<div style='font-size:28px;font-weight:800;color:#f472b6;'>{super_pct}%</div><div style='font-size:12px;color:#6b7280;margin-top:2px;'>{super_fans:,} of {engaging_fans:,} fans who replied</div>{_bar(super_pct, '#f472b6')}"}
         </div>
 
         <div style="background:#1f2937;"></div>
