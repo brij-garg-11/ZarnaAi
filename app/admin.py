@@ -787,6 +787,58 @@ def _fetch_dashboard(
                     conn.rollback()
                     insights_session = {}
 
+                # ── Blast performance ─────────────────────────────────────
+                insights_blasts = []
+                try:
+                    cur.execute(
+                        """
+                        SELECT
+                          bd.id,
+                          bd.name,
+                          bd.sent_at,
+                          bd.sent_count,
+                          bd.failed_count,
+                          bd.tracked_link_slug,
+                          -- replies within 24h of blast send
+                          (SELECT COUNT(DISTINCT m.phone_number)
+                           FROM messages m
+                           WHERE m.role = 'user'
+                             AND m.source IS DISTINCT FROM 'csv_import'
+                             AND m.created_at >= bd.sent_at
+                             AND m.created_at <  bd.sent_at + INTERVAL '24 hours'
+                          ) AS replies_24h,
+                          -- link clicks if tracked
+                          COALESCE((
+                            SELECT COUNT(*)
+                            FROM tracked_links tl
+                            JOIN tracked_link_clicks tlc ON tlc.link_id = tl.id
+                            WHERE tl.slug = bd.tracked_link_slug
+                          ), 0) AS link_clicks,
+                          COALESCE((
+                            SELECT tl.sent_to FROM tracked_links tl
+                            WHERE tl.slug = bd.tracked_link_slug
+                          ), 0) AS link_sent_to
+                        FROM blast_drafts bd
+                        WHERE bd.status = 'sent'
+                          AND bd.sent_at IS NOT NULL
+                        ORDER BY bd.sent_at DESC
+                        LIMIT 30
+                        """
+                    )
+                    cols = ["id", "name", "sent_at", "sent_count", "failed_count",
+                            "tracked_link_slug", "replies_24h", "link_clicks", "link_sent_to"]
+                    for r in cur.fetchall():
+                        row = dict(zip(cols, r))
+                        sc = row["sent_count"] or 0
+                        row["reply_rate_pct"] = round(row["replies_24h"] / sc * 100, 1) if sc else 0
+                        denom = row["link_sent_to"] or sc
+                        row["ctr_pct"] = round(row["link_clicks"] / denom * 100, 1) if (denom and row["tracked_link_slug"]) else None
+                        row["sent_at_str"] = row["sent_at"].strftime("%b %-d, %Y") if row["sent_at"] else "—"
+                        insights_blasts.append(row)
+                except Exception:
+                    conn.rollback()
+                    insights_blasts = []
+
             # ── Conversations tab ─────────────────────────────────────────
             if tab == "convos":
                 inbox_off = max(0, inbox_page) * INBOX_PAGE_SIZE
@@ -874,6 +926,7 @@ def _fetch_dashboard(
             "insights_scored_total": insights_scored_total,
             "insights_session": insights_session,
             "insights_impact": insights_impact,
+            "insights_blasts": insights_blasts,
         }
     finally:
         conn.close()
@@ -1242,7 +1295,56 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
       <p style="color:#4b5563;font-size:11px;margin-top:10px;">Append <code>?days=7</code> (or 14, 30, 90) to any endpoint to change the window.</p>
     </div>"""
 
-    return summary_html + intent_table + tone_table + session_html + dropoff_section + api_hint
+    # ── Blasts section ────────────────────────────────────────────────────
+    blasts = stats.get("insights_blasts", [])
+    if blasts:
+        blast_rows_html = ""
+        for b in blasts:
+            rr   = b.get("reply_rate_pct", 0)
+            ctr  = b.get("ctr_pct")
+            sent = b.get("sent_count") or 0
+            replies = b.get("replies_24h") or 0
+            clicks  = b.get("link_clicks") or 0
+            rr_color = _pct_color(rr)
+            blast_rows_html += f"""
+            <tr>
+              <td style="padding:10px 14px;font-weight:600;color:#e2e8f0;">{_esc(b.get("name","—"))}</td>
+              <td style="padding:10px 14px;text-align:center;color:#94a3b8;">{b.get("sent_at_str","—")}</td>
+              <td style="padding:10px 14px;text-align:center;color:#94a3b8;">{sent:,}</td>
+              <td style="padding:10px 14px;text-align:center;color:#94a3b8;">{replies:,}</td>
+              <td style="padding:10px 14px;text-align:center;font-weight:700;color:{rr_color}">{rr}%</td>
+              <td style="padding:10px 14px;text-align:center;color:#94a3b8;">
+                {"—" if ctr is None else f'<span style="font-weight:700;color:#818cf8">{ctr}%</span> <span style="color:#4b5563;font-size:11px">({clicks:,} clicks)</span>'}
+              </td>
+            </tr>"""
+        blast_section = f"""
+        <div class="card" style="margin-bottom:20px;padding:0;overflow:hidden;">
+          <div style="padding:16px 20px 12px;border-bottom:1px solid #1f2937;display:flex;align-items:center;gap:12px;">
+            <div class="card-title" style="margin:0;">📣 Blast Performance</div>
+            <span style="font-size:12px;color:#6b7280;">reply rate = fans who texted back within 24h</span>
+          </div>
+          <table style="width:100%;border-collapse:collapse;">
+            <thead>
+              <tr style="border-bottom:1px solid #1f2937;">
+                <th style="padding:10px 14px;text-align:left;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Blast</th>
+                <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Date</th>
+                <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Sent</th>
+                <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Replies (24h)</th>
+                <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Reply Rate</th>
+                <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Link CTR</th>
+              </tr>
+            </thead>
+            <tbody>{blast_rows_html}</tbody>
+          </table>
+        </div>"""
+    else:
+        blast_section = f"""
+        <div class="card" style="margin-bottom:20px;">
+          <div class="card-title">📣 Blast Performance</div>
+          <p style="color:#6b7280;font-size:13px;">No sent blasts found. Blasts sent via the operator panel will appear here with reply rate and CTR.</p>
+        </div>"""
+
+    return summary_html + intent_table + tone_table + session_html + dropoff_section + blast_section + api_hint
 
 
 @admin_bp.route("/admin")
