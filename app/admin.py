@@ -381,6 +381,7 @@ def _fetch_dashboard(
     inbox_page: int,
     thread_page: int,
     insights_days: int = 30,
+    insights_era: str = "post",
 ):
     conn = _get_db()
     if not conn:
@@ -641,8 +642,16 @@ def _fetch_dashboard(
                 except Exception:
                     conn.rollback()
 
-                # insights_days is pre-validated to 7 | 14 | 30 — safe to embed directly
+                # Build date filter clause based on era toggle
+                _BOT_LAUNCH_STR = "2026-03-27"
                 _idays = int(insights_days)
+                if insights_era == "pre":
+                    _date_filter = f"created_at < '{_BOT_LAUNCH_STR}'"
+                    _session_date_filter = f"started_at < '{_BOT_LAUNCH_STR}'"
+                else:
+                    _date_filter = f"created_at >= NOW() - INTERVAL '{_idays} days'"
+                    _session_date_filter = f"started_at >= NOW() - INTERVAL '{_idays} days'"
+
                 try:
                     cur.execute(
                         f"""
@@ -659,7 +668,7 @@ def _fetch_dashboard(
                         FROM messages
                         WHERE role = 'assistant'
                           AND did_user_reply IS NOT NULL
-                          AND created_at >= NOW() - INTERVAL '{_idays} days'
+                          AND {_date_filter}
                         """
                     )
                     row = cur.fetchone()
@@ -689,7 +698,7 @@ def _fetch_dashboard(
                         FROM messages
                         WHERE role = 'assistant'
                           AND did_user_reply IS NOT NULL
-                          AND created_at >= NOW() - INTERVAL '{_idays} days'
+                          AND {_date_filter}
                         GROUP BY COALESCE(intent, 'unknown')
                         ORDER BY reply_rate_pct DESC NULLS LAST
                         """
@@ -716,7 +725,7 @@ def _fetch_dashboard(
                         FROM messages
                         WHERE role = 'assistant'
                           AND did_user_reply IS NOT NULL
-                          AND created_at >= NOW() - INTERVAL '{_idays} days'
+                          AND {_date_filter}
                         GROUP BY COALESCE(tone_mode, 'unknown')
                         ORDER BY reply_rate_pct DESC NULLS LAST
                         """
@@ -735,7 +744,7 @@ def _fetch_dashboard(
                         FROM messages
                         WHERE role = 'assistant'
                           AND went_silent_after = TRUE
-                          AND created_at >= NOW() - INTERVAL '{_idays} days'
+                          AND {_date_filter}
                         ORDER BY created_at DESC
                         LIMIT 15
                         """
@@ -757,7 +766,7 @@ def _fetch_dashboard(
                           COUNT(*) FILTER (WHERE came_back_within_7d = TRUE)      AS came_back_7d,
                           COUNT(*) FILTER (WHERE ended_at IS NOT NULL)            AS closed_sessions
                         FROM conversation_sessions
-                        WHERE started_at >= NOW() - INTERVAL '{_idays} days'
+                        WHERE {_session_date_filter}
                         """
                     )
                     row = cur.fetchone()
@@ -970,27 +979,44 @@ def _render_impact_section(impact: dict) -> str:
     </div>"""
 
 
-def _render_insights_tab(stats: dict, insights_days: int = 30) -> str:
+def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str = "post") -> str:
     """Return the inner HTML for the 🧠 Insights tab."""
     s = stats["insights_summary"]
     scored = stats["insights_scored_total"]
 
     if not scored:
-        return """
+        if insights_era == "pre":
+            empty_msg = (
+                "<div style='font-size:16px;font-weight:600;color:#9ca3af;margin-bottom:8px;'>"
+                "No AI conversations before March 27</div>"
+                "<p style='font-size:13px;max-width:480px;margin:0 auto;line-height:1.6;'>"
+                "Before the bot launched, there were no AI-driven conversations — only one-way SMS blasts. "
+                "This is the baseline: 0% reply rate, 0 scored replies. Switch to <b>Post-bot</b> to see what the AI changed."
+                "</p>"
+            )
+        else:
+            empty_msg = (
+                "<div style='font-size:16px;font-weight:600;color:#9ca3af;margin-bottom:8px;'>"
+                "No engagement data yet</div>"
+                "<p style='font-size:13px;max-width:420px;margin:0 auto;line-height:1.6;'>"
+                "Data starts accumulating as fans text in. Come back after your next show."
+                "</p>"
+            )
+        _era_bar = (
+            f'<div style="display:flex;gap:8px;justify-content:center;margin-top:16px;">'
+            f'<a href="/admin?tab=insights&era=pre" style="padding:6px 18px;border-radius:8px;font-size:13px;font-weight:700;text-decoration:none;'
+            f'{"background:#f87171;color:#fff;" if insights_era == "pre" else "background:#1f2937;color:#94a3b8;"}">'
+            f'Pre-bot</a>'
+            f'<a href="/admin?tab=insights&era=post" style="padding:6px 18px;border-radius:8px;font-size:13px;font-weight:700;text-decoration:none;'
+            f'{"background:#6366f1;color:#fff;" if insights_era == "post" else "background:#1f2937;color:#94a3b8;"}">'
+            f'Post-bot</a></div>'
+        )
+        return f"""
         <div style="background:#111827;border:1px solid #1f2937;border-radius:12px;
                     padding:40px;text-align:center;color:#6b7280;margin-top:8px;">
           <div style="font-size:32px;margin-bottom:12px;">🧠</div>
-          <div style="font-size:16px;font-weight:600;color:#9ca3af;margin-bottom:8px;">
-            No engagement data yet
-          </div>
-          <p style="font-size:13px;max-width:420px;margin:0 auto;line-height:1.6;">
-            Data starts accumulating as fans text in. After the first fan sends a follow-up
-            message, the bot's previous reply gets scored. Come back after your next show.
-          </p>
-          <p style="font-size:12px;color:#4b5563;margin-top:12px;">
-            Run <code style="color:#a5b4fc">python scripts/backfill_silence.py</code> nightly to score
-            messages where fans never replied.
-          </p>
+          {empty_msg}
+          {_era_bar}
         </div>"""
 
     def _pct_color(v):
@@ -1008,17 +1034,29 @@ def _render_insights_tab(stats: dict, insights_days: int = 30) -> str:
     delay      = s.get("avg_reply_delay_s")
     avg_len    = s.get("avg_bot_reply_length")
 
+    _era_btn_style = "padding:6px 18px;border-radius:8px;font-size:13px;font-weight:700;text-decoration:none;border:none;cursor:pointer;"
+    _pre_active  = insights_era == "pre"
+    _post_active = insights_era == "post"
+    era_toggle_html = (
+        f'<a href="/admin?tab=insights&era=pre&days={insights_days}" style="{_era_btn_style}'
+        f'{"background:#f87171;color:#fff;" if _pre_active else "background:#1f2937;color:#94a3b8;"}">'
+        f'Pre-bot (before Mar 27)</a>'
+        f'<a href="/admin?tab=insights&era=post&days={insights_days}" style="{_era_btn_style}'
+        f'{"background:#6366f1;color:#fff;" if _post_active else "background:#1f2937;color:#94a3b8;"}">'
+        f'Post-bot (after Mar 27)</a>'
+    )
     day_picker_html = "".join(
-        f'<a href="/admin?tab=insights&days={d}" style="'
-        f'padding:5px 14px;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none;'
+        f'<a href="/admin?tab=insights&era={insights_era}&days={d}" style="'
+        f'padding:5px 12px;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none;'
         f'{"background:#6366f1;color:#fff;" if d == insights_days else "background:#1f2937;color:#94a3b8;"}'
         f'">{d}d</a>'
         for d in (7, 14, 30)
-    )
+    ) if not _pre_active else ""
     date_filter_bar = f"""
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:18px;">
-      <span style="color:#6b7280;font-size:13px;margin-right:4px;">Window:</span>
-      {day_picker_html}
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap;">
+      <span style="color:#6b7280;font-size:13px;margin-right:4px;">Era:</span>
+      {era_toggle_html}
+      {"<span style='color:#374151;margin:0 6px;'>|</span><span style='color:#6b7280;font-size:13px;'>Window:</span>" + day_picker_html if day_picker_html else ""}
     </div>"""
 
     impact_html = _render_impact_section(stats.get("insights_impact", {}))
@@ -1027,7 +1065,7 @@ def _render_insights_tab(stats: dict, insights_days: int = 30) -> str:
       <div class="stat-card">
         <div class="stat-label">Scored Replies</div>
         <div class="stat-value">{scored:,}</div>
-        <div class="stat-trend" style="color:#64748b;font-size:12px">last {insights_days} days</div>
+        <div class="stat-trend" style="color:#64748b;font-size:12px">{"before Mar 27" if insights_era == "pre" else f"last {insights_days} days"}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Reply Rate</div>
@@ -1066,7 +1104,7 @@ def _render_insights_tab(stats: dict, insights_days: int = 30) -> str:
     intent_table = f"""
     <div class="card" style="margin-bottom:20px;padding:0;overflow:hidden;">
       <div style="padding:16px 20px 12px;border-bottom:1px solid #1f2937;">
-        <div class="card-title" style="margin:0;">Engagement by Intent — Last {insights_days} Days</div>
+        <div class="card-title" style="margin:0;">Engagement by Intent — {"Before Mar 27 (Pre-bot)" if insights_era == "pre" else f"Last {insights_days} Days"}</div>
       </div>
       <table style="width:100%;border-collapse:collapse;">
         <thead>
@@ -1100,7 +1138,7 @@ def _render_insights_tab(stats: dict, insights_days: int = 30) -> str:
     tone_table = f"""
     <div class="card" style="margin-bottom:20px;padding:0;overflow:hidden;">
       <div style="padding:16px 20px 12px;border-bottom:1px solid #1f2937;">
-        <div class="card-title" style="margin:0;">Engagement by Tone — Last {insights_days} Days</div>
+        <div class="card-title" style="margin:0;">Engagement by Tone — {"Before Mar 27 (Pre-bot)" if insights_era == "pre" else f"Last {insights_days} Days"}</div>
       </div>
       <table style="width:100%;border-collapse:collapse;">
         <thead>
@@ -1221,6 +1259,9 @@ def admin():
             insights_days = 30
     except ValueError:
         insights_days = 30
+    insights_era = request.args.get("era", "post").strip().lower()
+    if insights_era not in ("pre", "post"):
+        insights_era = "post"
     try:
         inbox_page = max(0, int(request.args.get("inbox_page", "0")))
     except ValueError:
@@ -1244,6 +1285,7 @@ def admin():
         inbox_page=inbox_page,
         thread_page=thread_page,
         insights_days=insights_days,
+        insights_era=insights_era,
     )
     if stats is None:
         return "<h2 style='font-family:sans-serif;padding:40px'>No database configured (DATABASE_URL not set).</h2>", 503
@@ -1818,7 +1860,7 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
   </div>
 
   <div class="tab-content {'active' if tab == 'insights' else ''}" id="tab-insights">
-    {_render_insights_tab(stats, insights_days)}
+    {_render_insights_tab(stats, insights_days, insights_era)}
   </div>
 
   <div class="tab-content {'active' if tab == 'conversions' else ''}" id="tab-conversions">
