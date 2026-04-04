@@ -800,6 +800,7 @@ def _fetch_dashboard(
                           bd.sent_count,
                           bd.tracked_link_slug,
                           COALESCE(bd.opt_out_count, 0) AS opt_out_count,
+                          bd.manual_link_clicks,
                           -- replies within 24h, only from contacts who existed at blast time
                           (SELECT COUNT(DISTINCT m.phone_number)
                            FROM messages m
@@ -810,14 +811,14 @@ def _fetch_dashboard(
                              AND m.created_at <  bd.sent_at + INTERVAL '24 hours'
                              AND c.created_at  <= bd.sent_at
                           ) AS replies_24h,
-                          -- link clicks
+                          -- tracked link clicks (for our own blasts)
                           COALESCE((
                             SELECT COUNT(*)
                             FROM tracked_links tl
                             JOIN tracked_link_clicks tlc ON tlc.link_id = tl.id
                             WHERE tl.slug = bd.tracked_link_slug
                               AND bd.tracked_link_slug <> ''
-                          ), 0) AS link_clicks,
+                          ), 0) AS tracked_clicks,
                           COALESCE((
                             SELECT tl.sent_to FROM tracked_links tl
                             WHERE tl.slug = bd.tracked_link_slug
@@ -831,15 +832,24 @@ def _fetch_dashboard(
                         """
                     )
                     cols = ["id", "name", "sent_at", "sent_count", "tracked_link_slug",
-                            "opt_out_count", "replies_24h", "link_clicks", "link_sent_to"]
+                            "opt_out_count", "manual_link_clicks",
+                            "replies_24h", "tracked_clicks", "link_sent_to"]
                     for r in cur.fetchall():
                         row = dict(zip(cols, r))
                         sc  = row["sent_count"] or 0
                         rep = min(row["replies_24h"] or 0, sc)  # cap at sent_count
                         row["replies_24h"]    = rep
                         row["reply_rate_pct"] = round(rep / sc * 100, 1) if sc else 0
-                        denom = row["link_sent_to"] or sc
-                        row["ctr_pct"] = round(row["link_clicks"] / denom * 100, 1) if (denom and row["tracked_link_slug"]) else None
+                        # Prefer manual_link_clicks (external blasts) over tracked DB clicks
+                        mlc = row["manual_link_clicks"]
+                        if mlc is not None:
+                            row["link_clicks"] = mlc
+                            denom = sc
+                        else:
+                            row["link_clicks"] = row["tracked_clicks"]
+                            denom = row["link_sent_to"] or sc
+                        has_link = (mlc is not None) or row["tracked_link_slug"]
+                        row["ctr_pct"] = round(row["link_clicks"] / denom * 100, 1) if (denom and has_link) else None
                         oc = row["opt_out_count"] or 0
                         row["unsub_rate_pct"] = round(oc / sc * 100, 2) if sc else None
                         row["sent_at_str"] = row["sent_at"].strftime("%b %-d, %Y") if row["sent_at"] else "—"
@@ -1310,7 +1320,7 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
     _add_blast_form = f"""
     <div id="add-blast-panel" style="display:none;padding:16px 20px;border-top:1px solid #1f2937;background:#0f172a;">
       <div style="font-size:13px;color:#94a3b8;margin-bottom:12px;">Add an external blast (e.g. from SlickText)</div>
-      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr;gap:10px;align-items:end;">
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr;gap:10px;align-items:end;">
         <div>
           <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px;">Blast Name</label>
           <input id="eb-name" type="text" placeholder="e.g. Zarna Voice Note #1"
@@ -1335,6 +1345,12 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
             style="width:100%;background:#1e293b;border:1px solid #374151;color:#e2e8f0;
                    padding:6px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;">
         </div>
+        <div>
+          <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px;">Link Clicks</label>
+          <input id="eb-clicks" type="number" min="0" placeholder="0"
+            style="width:100%;background:#1e293b;border:1px solid #374151;color:#e2e8f0;
+                   padding:6px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;">
+        </div>
         <div style="display:flex;gap:8px;">
           <button onclick="submitExternalBlast()"
             style="flex:1;background:#4f46e5;border:none;color:#fff;padding:7px 14px;
@@ -1355,6 +1371,8 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
       const date = document.getElementById('eb-date').value;
       const sent = parseInt(document.getElementById('eb-sent').value) || 0;
       const optouts = parseInt(document.getElementById('eb-optouts').value) || 0;
+      const clicks = document.getElementById('eb-clicks').value.trim();
+      const link_clicks = clicks !== '' ? parseInt(clicks) : null;
       if (!name || !date || !sent) {{ alert('Name, date, and sent count are required.'); return; }}
       fetch('/admin/actions/add-external-blast', {{
         method: 'POST',
@@ -1362,7 +1380,7 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
           'Content-Type': 'application/json',
           'Authorization': 'Basic {_admin_b64}',
         }},
-        body: JSON.stringify({{ name, date, sent_count: sent, opt_out_count: optouts }}),
+        body: JSON.stringify({{ name, date, sent_count: sent, opt_out_count: optouts, link_clicks }}),
       }}).then(r => r.json()).then(d => {{
         if (d.ok) {{ location.reload(); }}
         else {{ alert('Error: ' + (d.error || 'unknown')); }}
@@ -2411,6 +2429,8 @@ def add_external_blast():
         date_str      = (data.get("date") or "").strip()
         sent_count    = int(data.get("sent_count") or 0)
         opt_out_count = int(data.get("opt_out_count") or 0)
+        lc            = data.get("link_clicks")
+        manual_link_clicks = int(lc) if lc is not None else None
         if not name or not date_str or sent_count <= 0:
             return jsonify({"ok": False, "error": "name, date, and sent_count are required"}), 400
         # Parse the date and treat it as noon UTC so it shows the right calendar day
@@ -2422,11 +2442,11 @@ def add_external_blast():
                     """
                     INSERT INTO blast_drafts
                       (name, body, status, sent_at, sent_count, total_recipients,
-                       opt_out_count, created_by, channel)
-                    VALUES (%s, '', 'sent', %s, %s, %s, %s, 'external', 'slicktext')
+                       opt_out_count, manual_link_clicks, created_by, channel)
+                    VALUES (%s, '', 'sent', %s, %s, %s, %s, %s, 'external', 'slicktext')
                     RETURNING id
                     """,
-                    (name, sent_at, sent_count, sent_count, opt_out_count),
+                    (name, sent_at, sent_count, sent_count, opt_out_count, manual_link_clicks),
                 )
                 new_id = cur.fetchone()[0]
         conn.close()
