@@ -646,11 +646,15 @@ def _fetch_dashboard(
                 _BOT_LAUNCH_STR = "2026-03-27"
                 _idays = int(insights_days)
                 if insights_era == "pre":
-                    # Pre-bot: use CSV-imported rows (source = csv_import covers the date automatically)
+                    # Pre-bot: only CSV-imported rows
                     _date_filter = "source = 'csv_import'"
                     _session_date_filter = f"started_at < '{_BOT_LAUNCH_STR}'"
                 else:
-                    _date_filter = f"created_at >= NOW() - INTERVAL '{_idays} days'"
+                    # Post-bot: exclude any CSV-imported rows so pre-bot data never bleeds in
+                    _date_filter = (
+                        f"created_at >= NOW() - INTERVAL '{_idays} days' "
+                        f"AND source IS DISTINCT FROM 'csv_import'"
+                    )
                     _session_date_filter = f"started_at >= NOW() - INTERVAL '{_idays} days'"
 
                 try:
