@@ -650,10 +650,11 @@ def _fetch_dashboard(
                     _date_filter = "source = 'csv_import'"
                     _session_date_filter = f"started_at < '{_BOT_LAUNCH_STR}'"
                 else:
-                    # Post-bot: exclude any CSV-imported rows so pre-bot data never bleeds in
+                    # Post-bot: exclude CSV imports and blast messages (not AI conversations)
                     _date_filter = (
                         f"created_at >= NOW() - INTERVAL '{_idays} days' "
-                        f"AND source IS DISTINCT FROM 'csv_import'"
+                        f"AND source IS DISTINCT FROM 'csv_import' "
+                        f"AND source IS DISTINCT FROM 'blast'"
                     )
                     _session_date_filter = f"started_at >= NOW() - INTERVAL '{_idays} days'"
 
@@ -2149,6 +2150,40 @@ def sync_slicktext_dates():
         yield "\nDone. Reload the Insights tab to see updated pre-bot metrics.\n"
 
     return Response(_stream(), mimetype="text/plain")
+
+
+@admin_bp.route("/admin/actions/mark-blasts", methods=["POST"])
+def mark_blasts():
+    """One-off: mark existing preseed/blast messages (same text to 50+ people) as source='blast'."""
+    if not check_admin_auth():
+        return require_admin_auth_response()
+    conn = get_db_connection()
+    if not conn:
+        return Response("DB not configured", status=503, mimetype="text/plain")
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE messages
+                    SET source = 'blast'
+                    WHERE source IS NULL
+                      AND role = 'assistant'
+                      AND text IN (
+                        SELECT text FROM messages
+                        WHERE role = 'assistant' AND source IS NULL
+                        GROUP BY text
+                        HAVING COUNT(DISTINCT phone_number) >= 50
+                      )
+                    """
+                )
+                marked = cur.rowcount
+        conn.close()
+        return Response(f"Marked {marked:,} blast rows as source='blast'.", status=200, mimetype="text/plain")
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return Response(f"Error: {e}", status=500, mimetype="text/plain")
 
 
 @admin_bp.route("/admin/actions/import-chat-transcripts", methods=["GET", "POST"])
