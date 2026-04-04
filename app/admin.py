@@ -793,7 +793,7 @@ def _fetch_dashboard(
                 insights_blasts = []
                 try:
                     cur.execute(
-                        """
+                        f"""
                         SELECT
                           bd.id,
                           bd.name,
@@ -828,9 +828,11 @@ def _fetch_dashboard(
                         FROM blast_drafts bd
                         WHERE bd.status = 'sent'
                           AND bd.sent_at IS NOT NULL
+                          AND bd.sent_at {'<' if insights_era == 'pre' else '>='} %s
                         ORDER BY bd.sent_at DESC
                         LIMIT 50
-                        """
+                        """,
+                        (_BOT_LAUNCH,)
                     )
                     cols = ["id", "name", "sent_at", "sent_count", "tracked_link_slug",
                             "opt_out_count", "manual_link_clicks",
