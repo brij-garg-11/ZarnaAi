@@ -31,11 +31,11 @@ _SHOW_KEYWORDS = {
     "where are you", "when are you", "tour dates", "venue",
 }
 _JOKE_KEYWORDS = {
-    "joke", "jokes", "laugh", "laughter", "comedy", "comic",
+    "joke", "jokes", "laughter", "comedy", "comic",
     "make me laugh", "tell me something funny", "tell me a joke",
     "humor", "humour",
-    "roast", "one liner", "one-liner", "hilarious", "witty",
-    "crack me up", "make me smile",
+    "roast", "one liner", "one-liner", "witty",
+    "make me smile",
 }
 _CLIP_KEYWORDS = {
     "video", "videos", "clip", "clips", "youtube", "watch",
@@ -62,20 +62,39 @@ _BOOK_PHRASES = (
 )
 _BOOK_EXTRA_WORDS = frozenset({"kindle", "hardcover", "paperback"})
 
-# Greeting: very short, low-ambiguity openers
+# ── Greeting ────────────────────────────────────────────────────────────────
 _GREETING_EXACT = frozenset({
     "hi", "hey", "hello", "hola", "yo", "howdy", "sup",
     "hii", "hiii", "heyyy", "heyy", "hiiii",
+    "namaste", "namasté",
+    "good night", "goodnight", "night night",
 })
 _GREETING_PHRASES = (
-    "what's up", "whats up", "wassup", "whaddup", "good morning",
-    "good afternoon", "good evening", "good night",
+    "what's up", "whats up", "wassup", "whaddup",
+    "good morning", "good afternoon", "good evening",
     "how are you", "how's it going", "how you doing",
+    "are you there", "is anyone there", "you there",
+    "what's going on", "whats going on", "what's happening",
+    "hi zarna", "hey zarna", "hello zarna",
+    "hi there", "hey there", "hello there",
 )
-_GREETING_MAX_WORDS = 6
+_GREETING_MAX_WORDS = 7
 
-# Feedback: post-show compliments, reactions to Zarna's performance
+# ── Feedback: reactions, laughs, compliments, quiz answers ──────────────────
+# Laugh / reaction words caught by exact word match (very short messages)
+_LAUGH_EXACT = frozenset({
+    "lol", "lmao", "lmfao", "rofl", "haha", "hahaha", "hahahaha",
+    "hahahahaha", "ha", "hah", "hehe", "heehee", "😂", "😆", "🤣",
+    "dead", "💀", "omg", "omfg", "lololol", "lolol",
+})
+# MIL quiz answers — fans answering "who is Zarna's enemy #1?"
+_MIL_ANSWERS = (
+    "mother in law", "mother-in-law", "mil ", " mil",
+    "her mother in law", "your mother in law", "mom in law",
+    "the mother in law", "mother in laws", "mothr in law",
+)
 _FEEDBACK_PHRASES = (
+    # post-show praise
     "great show", "amazing show", "awesome show", "best show",
     "loved the show", "loved your show", "loved it tonight",
     "you were amazing", "you were great", "you were incredible",
@@ -83,15 +102,38 @@ _FEEDBACK_PHRASES = (
     "so funny tonight", "had a blast", "best night ever",
     "such a great time", "what a show", "incredible performance",
     "funniest show", "thank you for the show",
+    # general positive reactions
+    "so funny", "that's so funny", "that is so funny",
+    "hilarious", "you're hilarious", "you are hilarious",
+    "you crack me up", "cracking me up", "cracking up",
+    "i'm dying", "i am dying", "dying laughing",
+    "tears down my face", "laughing so hard", "in stitches",
+    "you had me", "had me laughing", "can't stop laughing",
+    "love this", "love it", "love you zarna", "love zarna",
+    "you're amazing", "you are amazing", "you're the best",
+    "preach", "so true", "100%", "exactly",
+    "this is gold", "gold", "fire 🔥", "this is fire",
+    "well said", "couldn't agree more", "agree",
+    "thank you zarna", "thanks zarna", "thank you for this",
+    "good night was fun", "had so much fun",
+    "you were awesome tonight", "awesome tonight",
+    "we have seen you", "seen you many times",
 )
 
-# Personal: fan sharing biographical info about themselves
+# ── Personal: fan sharing biographical info about themselves ─────────────────
 _PERSONAL_PHRASES = re.compile(
     r"\b("
-    r"i'm a |i am a |i'm from |i am from |i live in |i work |"
-    r"my name is |my husband |my wife |my kids |my daughter |my son |"
-    r"i have \d+ kids|i'm \d+ years|i am \d+ years|"
-    r"i just moved|i grew up|born in |raised in "
+    r"i'?m a |i am a |i'?m from |i am from |i live in |i work(ed)? (as|at|for|in)|"
+    r"my name is |my husband |my wife |my kids |my daughter |my son |my family |"
+    r"i have \d+ kids|i'?m \d+ years|i am \d+ years|i just turned \d+|"
+    r"i just moved|i grew up|born in |raised in |"
+    r"i'?m (a |an |the )?(mom|dad|mother|father|teacher|nurse|doctor|lawyer|engineer|"
+    r"therapist|chef|artist|writer|student|retired)|"
+    r"three facts|3 facts|\d+ facts about (me|myself)|facts about me|"
+    r"fun fact.{0,5}(i |about me)|"
+    r"i love (to |my |our )?(cook|hike|travel|read|danc|sing|paint|garden|yoga)|"
+    r"introvert|extrovert|i'?m (jewish|hindu|muslim|catholic|christian|sikh|desi|indian|"
+    r"south asian|desi|gori|white|black|latina|asian)"
     r")",
     re.IGNORECASE,
 )
@@ -113,9 +155,14 @@ def _fast_classify(message: str) -> Intent | None:
     unambiguous, or None to fall through to the Gemini classifier.
     """
     lower = message.lower().strip()
-    words = set(lower.split())
+    # Strip punctuation from word tokens for keyword matching
+    words = set(re.sub(r"[^\w\s]", "", lower).split())
 
-    # Greeting — very short openers, check before anything else
+    # Emoji-only laugh reactions (stripped before word split, so check raw lower)
+    if lower.strip() in _LAUGH_EXACT:
+        return Intent.FEEDBACK
+
+    # Greeting — short openers, check before anything else
     if len(words) <= _GREETING_MAX_WORDS:
         stripped = lower.rstrip("!.? ")
         if stripped in _GREETING_EXACT:
@@ -123,7 +170,17 @@ def _fast_classify(message: str) -> Intent | None:
         if any(lower.startswith(p) for p in _GREETING_PHRASES):
             return Intent.GREETING
 
-    # Feedback — post-show praise (check before JOKE to avoid "funny" overlap)
+    # Personal first for longer messages (before feedback, to avoid substring collisions)
+    if len(words) > 4 and _PERSONAL_PHRASES.search(lower) and "?" not in lower:
+        return Intent.PERSONAL
+
+    # Feedback — laugh/reaction words for very short messages (≤4 words)
+    if len(words) <= 4 and words & _LAUGH_EXACT:
+        return Intent.FEEDBACK
+    # MIL quiz answers ("mother in law" etc.) → engagement reaction = feedback
+    if any(p in lower for p in _MIL_ANSWERS):
+        return Intent.FEEDBACK
+    # Post-show praise and general reactions
     if any(p in lower for p in _FEEDBACK_PHRASES):
         return Intent.FEEDBACK
 
@@ -139,7 +196,7 @@ def _fast_classify(message: str) -> Intent | None:
     if _fast_book_intent(lower, words):
         return Intent.BOOK
 
-    # Personal — fan sharing bio info (conservative: phrase-based)
+    # Personal — short messages (≤4 words) with bio phrases
     if _PERSONAL_PHRASES.search(lower) and "?" not in lower:
         return Intent.PERSONAL
 
@@ -151,19 +208,51 @@ def classify_intent(message: str) -> Intent:
     if fast is not None:
         return fast
 
-    prompt = f"""Classify this user message into exactly one intent.
+    prompt = f"""Classify this fan message to Zarna Garg (Indian-American comedian) into exactly one intent.
 
-Intents:
-- greeting: casual opener like hi, hello, hey, how are you — with no real question or topic yet
-- joke: user wants a joke, something funny, or comedy content
-- clip: user wants a video or clip recommendation
-- show: user is EXPLICITLY asking for ticket links, tour dates, or where to see Zarna perform. Personal stories, fun facts about themselves, or general conversation are NEVER show intent.
-- book: user is asking about Zarna's book "This American Woman", where to buy it, or how to get it
-- podcast: user is EXPLICITLY asking about the podcast by name, asking if there's a podcast episode on a specific topic, or asking where to listen. Questions about Zarna's family members (husband, kids, Shalabh, Veer, Brij, Zoya) are NOT podcast intent — they are general.
-- personal: fan sharing facts about themselves — their name, job, city, family, hobbies, life story. NOT asking a question.
-- feedback: fan giving a review, compliment, or reaction to Zarna's show or content (e.g. "great show!", "you were so funny tonight")
-- question: fan asking Zarna a question about her life, family, opinions, or advice — a direct question expecting a real answer
-- general: anything else — banter, one-word reactions, random topics
+INTENTS with examples:
+
+greeting — opening the conversation, checking in, saying goodbye
+  examples: "hi", "hey Zarna!", "are you there?", "good morning", "goodnight", "what's going on?"
+
+feedback — reacting positively to Zarna's content, laughing, giving a review, answering her bits
+  examples: "lol", "hahaha", "😂", "so funny!", "that's hilarious", "you were amazing tonight",
+            "great show", "loved it", "preach!", "so true", "you crack me up",
+            "mother in law" (answering Zarna's "who's my enemy #1?" game),
+            "your husband 😂", "her MIL!", "omg I'm dying"
+
+personal — fan sharing facts about themselves (name, job, city, family, hobbies, life story)
+  examples: "I'm a teacher from Ohio", "my name is Susan, I'm a mom of 3",
+            "3 facts about me: I love hiking, I'm 45, I have 2 dogs",
+            "I grew up in India", "I'm Jewish and this hits different",
+            "I hate my mother-in-law too!", "I'm happily divorced"
+
+question — fan asking Zarna a direct question expecting a real answer
+  examples: "what does Shalabh think of your comedy?", "do your kids watch your shows?",
+            "is this actually you or AI?", "how do you deal with the MIL?",
+            "what's your advice for dealing with difficult in-laws?",
+            "when did you start doing comedy?"
+
+show — explicitly asking for ticket links, show dates, or where to see Zarna perform
+  examples: "how do I get tickets?", "when are you coming to LA?", "where can I buy tickets?",
+            "are you performing in Chicago?"
+
+book — asking about Zarna's book "This American Woman"
+  examples: "where can I buy your book?", "is your book on Kindle?", "loved This American Woman"
+
+joke — wants a joke or comedy content from Zarna
+  examples: "tell me a joke", "make me laugh", "I need something funny"
+
+clip — wants a video or clip
+  examples: "do you have videos?", "where can I watch your specials?", "send me a clip"
+
+podcast — asking about Zarna's podcast
+  examples: "do you have a podcast?", "where can I listen to your podcast?"
+
+general — ONLY use this if the message truly fits none of the above:
+  short mid-conversation replies ("yes", "ok", "I know", "maybe"), random non-Zarna topics,
+  spam, or messages that make no sense out of context.
+  DO NOT use general for laughs, reactions, MIL answers, or fan self-introductions.
 
 Message: "{message}"
 
