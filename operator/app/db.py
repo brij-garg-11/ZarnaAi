@@ -141,6 +141,8 @@ def init_db():
         "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS opt_out_count INT DEFAULT 0",
         # manual_link_clicks: for external/SlickText blasts where we can't count from our DB
         "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS manual_link_clicks INT DEFAULT NULL",
+        # blast_category: 'friendly' | 'sales' | 'show' — used to split Blast Performance table
+        "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS blast_category TEXT DEFAULT NULL",
 
         # ── Data-cleanup on every startup ──────────────────────────────────
         # 1. Clear /tmp-based image URLs (ephemeral Railway filesystem, gone on redeploy)

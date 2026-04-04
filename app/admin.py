@@ -802,6 +802,7 @@ def _fetch_dashboard(
                           bd.tracked_link_slug,
                           COALESCE(bd.opt_out_count, 0) AS opt_out_count,
                           bd.manual_link_clicks,
+                          bd.blast_category,
                           -- replies within 24h, only from contacts who existed at blast time.
                           -- csv_import is included so pre-bot blasts count replies from the CSV history.
                           (SELECT COUNT(DISTINCT m.phone_number)
@@ -836,7 +837,7 @@ def _fetch_dashboard(
                         (_BOT_LAUNCH,)
                     )
                     cols = ["id", "name", "sent_at", "sent_count", "tracked_link_slug",
-                            "opt_out_count", "manual_link_clicks",
+                            "opt_out_count", "manual_link_clicks", "blast_category",
                             "replies_24h", "tracked_clicks", "link_sent_to"]
                     for r in cur.fetchall():
                         row = dict(zip(cols, r))
@@ -1321,55 +1322,134 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
     # ── Blasts section ────────────────────────────────────────────────────
     blasts = stats.get("insights_blasts", [])
     _admin_b64 = __import__('base64').b64encode(f'admin:{os.getenv("ADMIN_PASSWORD","")}'.encode()).decode()
-    _add_blast_form = f"""
-    <div id="add-blast-panel" style="display:none;padding:16px 20px;border-top:1px solid #1f2937;background:#0f172a;">
-      <div style="font-size:13px;color:#94a3b8;margin-bottom:12px;">Add an external blast (e.g. from SlickText)</div>
-      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr;gap:10px;align-items:end;">
-        <div>
-          <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px;">Blast Name</label>
-          <input id="eb-name" type="text" placeholder="e.g. Zarna Voice Note #1"
-            style="width:100%;background:#1e293b;border:1px solid #374151;color:#e2e8f0;
-                   padding:6px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;">
-        </div>
-        <div>
-          <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px;">Date Sent</label>
-          <input id="eb-date" type="date"
-            style="width:100%;background:#1e293b;border:1px solid #374151;color:#e2e8f0;
-                   padding:6px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;">
-        </div>
-        <div>
-          <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px;">Sent Count</label>
-          <input id="eb-sent" type="number" min="0" placeholder="4238"
-            style="width:100%;background:#1e293b;border:1px solid #374151;color:#e2e8f0;
-                   padding:6px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;">
-        </div>
-        <div>
-          <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px;">Opt-outs</label>
-          <input id="eb-optouts" type="number" min="0" placeholder="0"
-            style="width:100%;background:#1e293b;border:1px solid #374151;color:#e2e8f0;
-                   padding:6px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;">
-        </div>
-        <div>
-          <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px;">Link Clicks</label>
-          <input id="eb-clicks" type="number" min="0" placeholder="0"
-            style="width:100%;background:#1e293b;border:1px solid #374151;color:#e2e8f0;
-                   padding:6px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;">
-        </div>
-        <div style="display:flex;gap:8px;">
-          <button onclick="submitExternalBlast()"
-            style="flex:1;background:#4f46e5;border:none;color:#fff;padding:7px 14px;
-                   border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;">
-            Add
-          </button>
-          <button onclick="document.getElementById('add-blast-panel').style.display='none'"
-            style="background:transparent;border:1px solid #374151;color:#6b7280;padding:7px 12px;
-                   border-radius:6px;font-size:13px;cursor:pointer;">
-            ✕
-          </button>
-        </div>
-      </div>
-    </div>
+
+    # Build all blast rows as JSON for client-side tab filtering
+    import json as _json
+    blasts_json = _json.dumps([{
+        "id":            b["id"],
+        "name":          b.get("name", ""),
+        "sent_at_str":   b.get("sent_at_str", ""),
+        "sent_count":    b.get("sent_count") or 0,
+        "replies_24h":   b.get("replies_24h") or 0,
+        "reply_rate_pct":b.get("reply_rate_pct", 0),
+        "ctr_pct":       b.get("ctr_pct"),
+        "link_clicks":   b.get("link_clicks") or 0,
+        "unsub_rate_pct":b.get("unsub_rate_pct"),
+        "opt_out_count": b.get("opt_out_count") or 0,
+        "blast_category":b.get("blast_category") or "",
+    } for b in blasts])
+
+    _cat_colors = {
+        "friendly": ("#22d3ee", "#0e7490"),   # cyan
+        "sales":    ("#a78bfa", "#6d28d9"),   # purple
+        "show":     ("#fb923c", "#c2410c"),   # orange
+        "":         ("#4b5563", "#374151"),   # grey (uncategorized)
+    }
+
+    blast_section = f"""
     <script>
+    const _blastData = {blasts_json};
+    const _blastAuth = 'Basic {_admin_b64}';
+    const _catLabels = {{ friendly:'💬 Friendly', sales:'🛒 Sales', show:'🎤 Shows', '':'Uncategorized' }};
+    const _catColors = {{
+      friendly:['#22d3ee','#0e7490'], sales:['#a78bfa','#6d28d9'],
+      show:['#fb923c','#c2410c'],    '':['#4b5563','#374151']
+    }};
+
+    let _activeBlastTab = 'all';
+
+    function _pctColor(p) {{
+      if (p >= 30) return '#22c55e';
+      if (p >= 10) return '#eab308';
+      if (p >= 5)  return '#f97316';
+      return '#ef4444';
+    }}
+
+    function renderBlastTable() {{
+      const filter = _activeBlastTab;
+      const rows = _blastData.filter(b => filter === 'all' || b.blast_category === filter);
+      const tbody = document.getElementById('blast-tbody');
+      if (!tbody) return;
+
+      // Tab counts
+      ['all','friendly','sales','show'].forEach(cat => {{
+        const cnt = cat === 'all' ? _blastData.length
+                                  : _blastData.filter(b => b.blast_category === cat).length;
+        const el = document.getElementById('blast-tab-' + cat);
+        if (el) el.querySelector('.btab-cnt').textContent = cnt;
+        if (el) {{
+          const active = cat === _activeBlastTab;
+          el.style.borderBottomColor = active ? (cat === 'all' ? '#818cf8' : (_catColors[cat]||['#818cf8'])[0]) : 'transparent';
+          el.style.color = active ? '#e2e8f0' : '#6b7280';
+        }}
+      }});
+
+      if (!rows.length) {{
+        tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:#4b5563;font-size:13px;">No blasts in this category yet — assign them using the dropdown on each row.</td></tr>';
+        return;
+      }}
+
+      tbody.innerHTML = rows.map(b => {{
+        const rr = b.reply_rate_pct;
+        const rrColor = _pctColor(rr);
+        const ctrCell = b.ctr_pct == null ? '—'
+          : `<span style="font-weight:700;color:#818cf8">${{b.ctr_pct}}%</span> <span style="color:#4b5563;font-size:11px">(${{b.link_clicks.toLocaleString()}} clicks)</span>`;
+        const unsubCell = b.unsub_rate_pct == null ? '—'
+          : `<span style="font-weight:700;color:#f87171">${{b.unsub_rate_pct}}%</span> <span style="color:#4b5563;font-size:11px">(${{b.opt_out_count}})</span>`;
+        const cat = b.blast_category || '';
+        const [cc, cd] = _catColors[cat] || _catColors[''];
+        const catLabel = _catLabels[cat] || 'Uncategorized';
+        return `<tr id="blast-row-${{b.id}}">
+          <td style="padding:10px 14px;">
+            <div style="font-weight:600;color:#e2e8f0;margin-bottom:4px;">${{b.name}}</div>
+            <select onchange="setBlastCategory(${{b.id}}, this.value)"
+              style="background:#1e293b;border:1px solid ${{cd}};color:${{cc}};
+                     padding:2px 6px;border-radius:5px;font-size:11px;cursor:pointer;">
+              <option value="" ${{cat===''?'selected':''}}>Uncategorized</option>
+              <option value="friendly" ${{cat==='friendly'?'selected':''}}>💬 Friendly</option>
+              <option value="sales" ${{cat==='sales'?'selected':''}}>🛒 Sales</option>
+              <option value="show" ${{cat==='show'?'selected':''}}>🎤 Shows</option>
+            </select>
+          </td>
+          <td style="padding:10px 14px;text-align:center;color:#94a3b8;">${{b.sent_at_str}}</td>
+          <td style="padding:10px 14px;text-align:center;color:#94a3b8;">${{b.sent_count.toLocaleString()}}</td>
+          <td style="padding:10px 14px;text-align:center;color:#94a3b8;">${{b.replies_24h.toLocaleString()}}</td>
+          <td style="padding:10px 14px;text-align:center;font-weight:700;color:${{rrColor}}">${{rr}}%</td>
+          <td style="padding:10px 14px;text-align:center;color:#94a3b8;">${{ctrCell}}</td>
+          <td style="padding:10px 14px;text-align:center;color:#94a3b8;">${{unsubCell}}</td>
+          <td style="padding:10px 14px;text-align:center;">
+            <button onclick="deleteBlast(${{b.id}})"
+              style="background:transparent;border:1px solid #374151;color:#6b7280;padding:3px 10px;
+                     border-radius:6px;font-size:12px;cursor:pointer;"
+              onmouseover="this.style.borderColor='#f87171';this.style.color='#f87171'"
+              onmouseout="this.style.borderColor='#374151';this.style.color='#6b7280'">
+              Delete
+            </button>
+          </td>
+        </tr>`;
+      }}).join('');
+    }}
+
+    function setBlastCategory(id, cat) {{
+      const blast = _blastData.find(b => b.id === id);
+      if (blast) blast.blast_category = cat;
+      fetch('/admin/actions/set-blast-category/' + id, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json', 'Authorization': _blastAuth }},
+        body: JSON.stringify({{ category: cat }}),
+      }}).then(r => {{ if (!r.ok) alert('Save failed'); else renderBlastTable(); }});
+    }}
+
+    function deleteBlast(id) {{
+      if (!confirm('Delete this blast from analytics?')) return;
+      fetch('/admin/actions/delete-blast/' + id, {{
+        method: 'POST', headers: {{ 'Authorization': _blastAuth }},
+      }}).then(r => {{
+        if (r.ok) {{ const i = _blastData.findIndex(b => b.id===id); if (i>=0) _blastData.splice(i,1); renderBlastTable(); }}
+        else alert('Delete failed');
+      }});
+    }}
+
     function submitExternalBlast() {{
       const name = document.getElementById('eb-name').value.trim();
       const date = document.getElementById('eb-date').value;
@@ -1380,111 +1460,104 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
       if (!name || !date || !sent) {{ alert('Name, date, and sent count are required.'); return; }}
       fetch('/admin/actions/add-external-blast', {{
         method: 'POST',
-        headers: {{
-          'Content-Type': 'application/json',
-          'Authorization': 'Basic {_admin_b64}',
-        }},
+        headers: {{ 'Content-Type': 'application/json', 'Authorization': _blastAuth }},
         body: JSON.stringify({{ name, date, sent_count: sent, opt_out_count: optouts, link_clicks }}),
       }}).then(r => r.json()).then(d => {{
-        if (d.ok) {{ location.reload(); }}
-        else {{ alert('Error: ' + (d.error || 'unknown')); }}
+        if (d.ok) location.reload();
+        else alert('Error: ' + (d.error || 'unknown'));
       }});
     }}
-    </script>"""
 
-    blast_header_btn = """
-      <button onclick="document.getElementById('add-blast-panel').style.display='block'"
-        style="margin-left:auto;background:#1e293b;border:1px solid #374151;color:#94a3b8;
-               padding:5px 12px;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;"
-        onmouseover="this.style.borderColor='#4f46e5';this.style.color='#818cf8'"
-        onmouseout="this.style.borderColor='#374151';this.style.color='#94a3b8'">
-        + Add external blast
-      </button>"""
+    document.addEventListener('DOMContentLoaded', renderBlastTable);
+    </script>
 
-    if blasts:
-        blast_rows_html = ""
-        for b in blasts:
-            rr      = b.get("reply_rate_pct", 0)
-            ctr     = b.get("ctr_pct")
-            sent    = b.get("sent_count") or 0
-            replies = b.get("replies_24h") or 0
-            clicks  = b.get("link_clicks") or 0
-            bid     = b.get("id")
-            unsub   = b.get("unsub_rate_pct")
-            oc      = b.get("opt_out_count") or 0
-            rr_color = _pct_color(rr)
-            unsub_cell = "—" if unsub is None else f'<span style="font-weight:700;color:#f87171">{unsub}%</span> <span style="color:#4b5563;font-size:11px">({oc:,})</span>'
-            blast_rows_html += f"""
-            <tr id="blast-row-{bid}">
-              <td style="padding:10px 14px;font-weight:600;color:#e2e8f0;">{_esc(b.get("name","—"))}</td>
-              <td style="padding:10px 14px;text-align:center;color:#94a3b8;">{b.get("sent_at_str","—")}</td>
-              <td style="padding:10px 14px;text-align:center;color:#94a3b8;">{sent:,}</td>
-              <td style="padding:10px 14px;text-align:center;color:#94a3b8;">{replies:,}</td>
-              <td style="padding:10px 14px;text-align:center;font-weight:700;color:{rr_color}">{rr}%</td>
-              <td style="padding:10px 14px;text-align:center;color:#94a3b8;">
-                {"—" if ctr is None else f'<span style="font-weight:700;color:#818cf8">{ctr}%</span> <span style="color:#4b5563;font-size:11px">({clicks:,} clicks)</span>'}
-              </td>
-              <td style="padding:10px 14px;text-align:center;color:#94a3b8;">{unsub_cell}</td>
-              <td style="padding:10px 14px;text-align:center;">
-                <button onclick="deleteBlast({bid})"
-                  style="background:transparent;border:1px solid #374151;color:#6b7280;padding:3px 10px;
-                         border-radius:6px;font-size:12px;cursor:pointer;"
-                  onmouseover="this.style.borderColor='#f87171';this.style.color='#f87171'"
-                  onmouseout="this.style.borderColor='#374151';this.style.color='#6b7280'">
-                  Delete
-                </button>
-              </td>
-            </tr>"""
-        blast_section = f"""
-        <script>
-        function deleteBlast(id) {{
-          if (!confirm('Delete this blast from analytics?')) return;
-          fetch('/admin/actions/delete-blast/' + id, {{
-            method: 'POST',
-            headers: {{'Authorization': 'Basic ' + btoa('admin:{os.getenv("ADMIN_PASSWORD","")}')}},
-          }}).then(r => {{
-            if (r.ok) {{
-              const row = document.getElementById('blast-row-' + id);
-              if (row) row.remove();
-            }} else {{
-              alert('Delete failed');
-            }}
-          }});
-        }}
-        </script>
-        <div class="card" style="margin-bottom:20px;padding:0;overflow:hidden;">
-          <div style="padding:16px 20px 12px;border-bottom:1px solid #1f2937;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-            <div class="card-title" style="margin:0;">📣 Blast Performance</div>
-            <span style="font-size:12px;color:#6b7280;">reply rate = subscribers who texted back within 24h of blast</span>
-            {blast_header_btn}
+    <div class="card" style="margin-bottom:20px;padding:0;overflow:hidden;">
+      <!-- Header -->
+      <div style="padding:16px 20px 0;border-bottom:1px solid #1f2937;">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+          <div class="card-title" style="margin:0;">📣 Blast Performance</div>
+          <span style="font-size:12px;color:#6b7280;">reply rate = subscribers who texted back within 24h</span>
+          <button onclick="document.getElementById('add-blast-panel').style.display='block'"
+            style="margin-left:auto;background:#1e293b;border:1px solid #374151;color:#94a3b8;
+                   padding:5px 12px;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;"
+            onmouseover="this.style.borderColor='#4f46e5';this.style.color='#818cf8'"
+            onmouseout="this.style.borderColor='#374151';this.style.color='#94a3b8'">
+            + Add external blast
+          </button>
+        </div>
+        <!-- Category tabs -->
+        <div style="display:flex;gap:0;">
+          {"".join(f'''<button id="blast-tab-{cat}" onclick="_activeBlastTab='{cat}';renderBlastTable()"
+            style="padding:8px 16px;background:transparent;border:none;border-bottom:2px solid transparent;
+                   color:#6b7280;font-size:13px;font-weight:500;cursor:pointer;transition:all .15s;">
+            {label} <span class="btab-cnt" style="background:#1e293b;border-radius:10px;
+                    padding:1px 7px;font-size:11px;margin-left:4px;">0</span>
+          </button>''' for cat, label in [("all","All"), ("friendly","💬 Friendly"), ("sales","🛒 Sales"), ("show","🎤 Shows")])}
+        </div>
+      </div>
+
+      <!-- Add external blast form -->
+      <div id="add-blast-panel" style="display:none;padding:16px 20px;border-bottom:1px solid #1f2937;background:#0f172a;">
+        <div style="font-size:13px;color:#94a3b8;margin-bottom:12px;">Add an external blast (e.g. from SlickText)</div>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr;gap:10px;align-items:end;">
+          <div>
+            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px;">Blast Name</label>
+            <input id="eb-name" type="text" placeholder="e.g. Zarna Voice Note"
+              style="width:100%;background:#1e293b;border:1px solid #374151;color:#e2e8f0;
+                     padding:6px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;">
           </div>
-          {_add_blast_form}
-          <table style="width:100%;border-collapse:collapse;">
-            <thead>
-              <tr style="border-bottom:1px solid #1f2937;">
-                <th style="padding:10px 14px;text-align:left;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Blast</th>
-                <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Date</th>
-                <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Sent</th>
-                <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Replies (24h)</th>
-                <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Reply Rate</th>
-                <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Link CTR</th>
-                <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Unsub Rate</th>
-                <th style="padding:10px 14px;"></th>
-              </tr>
-            </thead>
-            <tbody>{blast_rows_html}</tbody>
-          </table>
-        </div>"""
-    else:
-        blast_section = f"""
-        <div class="card" style="margin-bottom:20px;padding:0;overflow:hidden;">
-          <div style="padding:16px 20px 12px;border-bottom:1px solid #1f2937;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-            <div class="card-title" style="margin:0;">📣 Blast Performance</div>
-            <span style="font-size:12px;color:#6b7280;">No sent blasts yet.</span>
-            {blast_header_btn}
+          <div>
+            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px;">Date Sent</label>
+            <input id="eb-date" type="date"
+              style="width:100%;background:#1e293b;border:1px solid #374151;color:#e2e8f0;
+                     padding:6px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;">
           </div>
-          {_add_blast_form}
-        </div>"""
+          <div>
+            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px;">Sent Count</label>
+            <input id="eb-sent" type="number" min="0" placeholder="4238"
+              style="width:100%;background:#1e293b;border:1px solid #374151;color:#e2e8f0;
+                     padding:6px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px;">Opt-outs</label>
+            <input id="eb-optouts" type="number" min="0" placeholder="0"
+              style="width:100%;background:#1e293b;border:1px solid #374151;color:#e2e8f0;
+                     padding:6px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px;">Link Clicks</label>
+            <input id="eb-clicks" type="number" min="0" placeholder="0"
+              style="width:100%;background:#1e293b;border:1px solid #374151;color:#e2e8f0;
+                     padding:6px 10px;border-radius:6px;font-size:13px;box-sizing:border-box;">
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button onclick="submitExternalBlast()"
+              style="flex:1;background:#4f46e5;border:none;color:#fff;padding:7px 14px;
+                     border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;">Add</button>
+            <button onclick="document.getElementById('add-blast-panel').style.display='none'"
+              style="background:transparent;border:1px solid #374151;color:#6b7280;padding:7px 12px;
+                     border-radius:6px;font-size:13px;cursor:pointer;">✕</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Table -->
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="border-bottom:1px solid #1f2937;">
+            <th style="padding:10px 14px;text-align:left;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Blast</th>
+            <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Date</th>
+            <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Sent</th>
+            <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Replies (24h)</th>
+            <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Reply Rate</th>
+            <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Link CTR</th>
+            <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Unsub Rate</th>
+            <th style="padding:10px 14px;"></th>
+          </tr>
+        </thead>
+        <tbody id="blast-tbody"><tr><td colspan="8" style="padding:20px;text-align:center;color:#4b5563;">Loading…</td></tr></tbody>
+      </table>
+    </div>"""
 
     return summary_html + intent_table + tone_table + session_html + dropoff_section + blast_section + api_hint
 
@@ -2417,6 +2490,33 @@ def delete_blast(blast_id: int):
         conn.rollback()
         conn.close()
         return Response(f"Error: {e}", status=500, mimetype="text/plain")
+
+
+@admin_bp.route("/admin/actions/set-blast-category/<int:blast_id>", methods=["POST"])
+def set_blast_category(blast_id: int):
+    """Set the category (friendly / sales / show) on a blast_drafts record."""
+    if not check_admin_auth():
+        return require_admin_auth_response()
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"ok": False, "error": "DB not configured"}), 503
+    try:
+        data     = request.get_json(force=True)
+        category = (data.get("category") or "").strip().lower()
+        if category not in ("friendly", "sales", "show", ""):
+            return jsonify({"ok": False, "error": "category must be friendly, sales, show, or empty"}), 400
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE blast_drafts SET blast_category = %s WHERE id = %s",
+                    (category or None, blast_id),
+                )
+        conn.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @admin_bp.route("/admin/actions/add-external-blast", methods=["POST"])
