@@ -1559,7 +1559,7 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
       </table>
     </div>"""
 
-    return summary_html + intent_table + tone_table + session_html + dropoff_section + blast_section + api_hint
+    return summary_html + intent_table + tone_table + session_html + blast_section + dropoff_section + api_hint
 
 
 @admin_bp.route("/admin")
