@@ -797,40 +797,45 @@ def _fetch_dashboard(
                           bd.name,
                           bd.sent_at,
                           bd.sent_count,
-                          bd.failed_count,
                           bd.tracked_link_slug,
-                          -- replies within 24h of blast send
+                          -- replies within 24h, only from contacts who existed at blast time
                           (SELECT COUNT(DISTINCT m.phone_number)
                            FROM messages m
+                           JOIN contacts c ON c.phone_number = m.phone_number
                            WHERE m.role = 'user'
                              AND m.source IS DISTINCT FROM 'csv_import'
                              AND m.created_at >= bd.sent_at
                              AND m.created_at <  bd.sent_at + INTERVAL '24 hours'
+                             AND c.created_at  <= bd.sent_at
                           ) AS replies_24h,
-                          -- link clicks if tracked
+                          -- link clicks
                           COALESCE((
                             SELECT COUNT(*)
                             FROM tracked_links tl
                             JOIN tracked_link_clicks tlc ON tlc.link_id = tl.id
                             WHERE tl.slug = bd.tracked_link_slug
+                              AND bd.tracked_link_slug <> ''
                           ), 0) AS link_clicks,
                           COALESCE((
                             SELECT tl.sent_to FROM tracked_links tl
                             WHERE tl.slug = bd.tracked_link_slug
+                              AND bd.tracked_link_slug <> ''
                           ), 0) AS link_sent_to
                         FROM blast_drafts bd
                         WHERE bd.status = 'sent'
                           AND bd.sent_at IS NOT NULL
                         ORDER BY bd.sent_at DESC
-                        LIMIT 30
+                        LIMIT 50
                         """
                     )
-                    cols = ["id", "name", "sent_at", "sent_count", "failed_count",
+                    cols = ["id", "name", "sent_at", "sent_count",
                             "tracked_link_slug", "replies_24h", "link_clicks", "link_sent_to"]
                     for r in cur.fetchall():
                         row = dict(zip(cols, r))
-                        sc = row["sent_count"] or 0
-                        row["reply_rate_pct"] = round(row["replies_24h"] / sc * 100, 1) if sc else 0
+                        sc  = row["sent_count"] or 0
+                        rep = min(row["replies_24h"] or 0, sc)  # cap at sent_count
+                        row["replies_24h"]   = rep
+                        row["reply_rate_pct"] = round(rep / sc * 100, 1) if sc else 0
                         denom = row["link_sent_to"] or sc
                         row["ctr_pct"] = round(row["link_clicks"] / denom * 100, 1) if (denom and row["tracked_link_slug"]) else None
                         row["sent_at_str"] = row["sent_at"].strftime("%b %-d, %Y") if row["sent_at"] else "—"
@@ -1300,14 +1305,15 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
     if blasts:
         blast_rows_html = ""
         for b in blasts:
-            rr   = b.get("reply_rate_pct", 0)
-            ctr  = b.get("ctr_pct")
-            sent = b.get("sent_count") or 0
+            rr      = b.get("reply_rate_pct", 0)
+            ctr     = b.get("ctr_pct")
+            sent    = b.get("sent_count") or 0
             replies = b.get("replies_24h") or 0
             clicks  = b.get("link_clicks") or 0
+            bid     = b.get("id")
             rr_color = _pct_color(rr)
             blast_rows_html += f"""
-            <tr>
+            <tr id="blast-row-{bid}">
               <td style="padding:10px 14px;font-weight:600;color:#e2e8f0;">{_esc(b.get("name","—"))}</td>
               <td style="padding:10px 14px;text-align:center;color:#94a3b8;">{b.get("sent_at_str","—")}</td>
               <td style="padding:10px 14px;text-align:center;color:#94a3b8;">{sent:,}</td>
@@ -1316,12 +1322,37 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
               <td style="padding:10px 14px;text-align:center;color:#94a3b8;">
                 {"—" if ctr is None else f'<span style="font-weight:700;color:#818cf8">{ctr}%</span> <span style="color:#4b5563;font-size:11px">({clicks:,} clicks)</span>'}
               </td>
+              <td style="padding:10px 14px;text-align:center;">
+                <button onclick="deleteBlast({bid})"
+                  style="background:transparent;border:1px solid #374151;color:#6b7280;padding:3px 10px;
+                         border-radius:6px;font-size:12px;cursor:pointer;"
+                  onmouseover="this.style.borderColor='#f87171';this.style.color='#f87171'"
+                  onmouseout="this.style.borderColor='#374151';this.style.color='#6b7280'">
+                  Delete
+                </button>
+              </td>
             </tr>"""
         blast_section = f"""
+        <script>
+        function deleteBlast(id) {{
+          if (!confirm('Delete this blast from analytics?')) return;
+          fetch('/admin/actions/delete-blast/' + id, {{
+            method: 'POST',
+            headers: {{'Authorization': 'Basic ' + btoa('admin:{os.getenv("ADMIN_PASSWORD","")}')}},
+          }}).then(r => {{
+            if (r.ok) {{
+              const row = document.getElementById('blast-row-' + id);
+              if (row) row.remove();
+            }} else {{
+              alert('Delete failed');
+            }}
+          }});
+        }}
+        </script>
         <div class="card" style="margin-bottom:20px;padding:0;overflow:hidden;">
           <div style="padding:16px 20px 12px;border-bottom:1px solid #1f2937;display:flex;align-items:center;gap:12px;">
             <div class="card-title" style="margin:0;">📣 Blast Performance</div>
-            <span style="font-size:12px;color:#6b7280;">reply rate = fans who texted back within 24h</span>
+            <span style="font-size:12px;color:#6b7280;">reply rate = subscribers who texted back within 24h of blast</span>
           </div>
           <table style="width:100%;border-collapse:collapse;">
             <thead>
@@ -1332,6 +1363,7 @@ def _render_insights_tab(stats: dict, insights_days: int = 30, insights_era: str
                 <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Replies (24h)</th>
                 <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Reply Rate</th>
                 <th style="padding:10px 14px;text-align:center;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em;">Link CTR</th>
+                <th style="padding:10px 14px;"></th>
               </tr>
             </thead>
             <tbody>{blast_rows_html}</tbody>
@@ -2252,6 +2284,29 @@ def sync_slicktext_dates():
         yield "\nDone. Reload the Insights tab to see updated pre-bot metrics.\n"
 
     return Response(_stream(), mimetype="text/plain")
+
+
+@admin_bp.route("/admin/actions/delete-blast/<int:blast_id>", methods=["POST"])
+def delete_blast(blast_id: int):
+    """Delete a blast draft record (for removing tests/junk from analytics)."""
+    if not check_admin_auth():
+        return require_admin_auth_response()
+    conn = get_db_connection()
+    if not conn:
+        return Response("DB not configured", status=503, mimetype="text/plain")
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM blast_drafts WHERE id = %s", (blast_id,))
+                deleted = cur.rowcount
+        conn.close()
+        if deleted:
+            return Response("deleted", status=200, mimetype="text/plain")
+        return Response("not found", status=404, mimetype="text/plain")
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return Response(f"Error: {e}", status=500, mimetype="text/plain")
 
 
 @admin_bp.route("/admin/actions/mark-blasts", methods=["POST"])
