@@ -641,12 +641,13 @@ def _fetch_dashboard(
                           (SELECT MIN(created_at)::date FROM contacts)        AS earliest_sub_date
                         """,
                         (
-                            _BOT_LAUNCH, _BOT_LAUNCH,
-                            _BOT_LAUNCH, _BOT_LAUNCH,
-                            _BOT_LAUNCH, _BOT_LAUNCH,
-                            _BOT_LAUNCH, _BOT_LAUNCH,
-                            _BOT_LAUNCH, _BOT_LAUNCH,
-                            _BOT_LAUNCH, _BOT_LAUNCH,
+                            _BOT_LAUNCH, _BOT_LAUNCH,   # pre/post_bot_list
+                            _BOT_LAUNCH, _BOT_LAUNCH,   # legacy_engaged
+                            _BOT_LAUNCH, _BOT_LAUNCH,   # new_sub_engaged
+                            _BOT_LAUNCH, _BOT_LAUNCH,   # pre/post_deep_convo_fans
+                            _BOT_LAUNCH, _BOT_LAUNCH,   # pre/post_super_deep_convo_fans
+                            _BOT_LAUNCH, _BOT_LAUNCH,   # pre/post_engaging_fans
+                            _BOT_LAUNCH,                # bot_replied_fans
                         ),
                     )
                     row = cur.fetchone()
