@@ -674,7 +674,7 @@ def _fetch_dashboard(
                         FROM messages
                         WHERE role = 'assistant'
                           AND did_user_reply IS NOT NULL
-                          AND COALESCE(intent, 'general') != 'general'
+                          {"AND COALESCE(intent, 'general') != 'general'" if insights_era == 'post' else ""}
                           AND {_date_filter}
                         """
                     )
