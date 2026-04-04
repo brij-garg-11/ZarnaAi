@@ -568,13 +568,14 @@ def _fetch_dashboard(
             insights_session = {}
             insights_scored_total = 0
             if tab == "insights":
+                # insights_days is pre-validated to 7 | 14 | 30 — safe to embed directly
+                _idays = int(insights_days)
                 try:
                     cur.execute(
-                        """
+                        f"""
                         SELECT
                           COUNT(*)                                           AS scored_bot_replies,
                           ROUND(AVG(did_user_reply::int) * 100, 1)          AS reply_rate_pct,
-                          /* AVG(went_silent_after) skipped NULLs and made drop-off ~100% misleading */
                           ROUND(
                             100.0 * COUNT(*) FILTER (WHERE went_silent_after = TRUE)::numeric
                             / NULLIF(COUNT(*), 0),
@@ -585,9 +586,8 @@ def _fetch_dashboard(
                         FROM messages
                         WHERE role = 'assistant'
                           AND did_user_reply IS NOT NULL
-                          AND created_at >= NOW() - make_interval(days => %s)
-                        """,
-                        (insights_days,),
+                          AND created_at >= NOW() - INTERVAL '{_idays} days'
+                        """
                     )
                     row = cur.fetchone()
                     if row:
@@ -598,11 +598,11 @@ def _fetch_dashboard(
                         ))
                         insights_scored_total = insights_summary.get("scored_bot_replies") or 0
                 except Exception:
-                    pass
+                    conn.rollback()
 
                 try:
                     cur.execute(
-                        """
+                        f"""
                         SELECT
                           COALESCE(intent, 'unknown')                   AS intent,
                           COUNT(*)                                       AS total,
@@ -616,22 +616,21 @@ def _fetch_dashboard(
                         FROM messages
                         WHERE role = 'assistant'
                           AND did_user_reply IS NOT NULL
-                          AND created_at >= NOW() - make_interval(days => %s)
+                          AND created_at >= NOW() - INTERVAL '{_idays} days'
                         GROUP BY COALESCE(intent, 'unknown')
                         ORDER BY reply_rate_pct DESC NULLS LAST
-                        """,
-                        (insights_days,),
+                        """
                     )
                     insights_intent = [
                         dict(zip(["intent", "total", "reply_rate_pct", "dropoff_rate_pct", "avg_delay_s"], r))
                         for r in cur.fetchall()
                     ]
                 except Exception:
-                    pass
+                    conn.rollback()
 
                 try:
                     cur.execute(
-                        """
+                        f"""
                         SELECT
                           COALESCE(tone_mode, 'unknown')                AS tone_mode,
                           COUNT(*)                                       AS total,
@@ -644,42 +643,40 @@ def _fetch_dashboard(
                         FROM messages
                         WHERE role = 'assistant'
                           AND did_user_reply IS NOT NULL
-                          AND created_at >= NOW() - make_interval(days => %s)
+                          AND created_at >= NOW() - INTERVAL '{_idays} days'
                         GROUP BY COALESCE(tone_mode, 'unknown')
                         ORDER BY reply_rate_pct DESC NULLS LAST
-                        """,
-                        (insights_days,),
+                        """
                     )
                     insights_tone = [
                         dict(zip(["tone_mode", "total", "reply_rate_pct", "dropoff_rate_pct"], r))
                         for r in cur.fetchall()
                     ]
                 except Exception:
-                    pass
+                    conn.rollback()
 
                 try:
                     cur.execute(
-                        """
+                        f"""
                         SELECT LEFT(text, 180) AS preview, intent, tone_mode, reply_length_chars
                         FROM messages
                         WHERE role = 'assistant'
                           AND went_silent_after = TRUE
-                          AND created_at >= NOW() - make_interval(days => %s)
+                          AND created_at >= NOW() - INTERVAL '{_idays} days'
                         ORDER BY created_at DESC
                         LIMIT 15
-                        """,
-                        (insights_days,),
+                        """
                     )
                     insights_dropoff = [
                         dict(zip(["preview", "intent", "tone_mode", "reply_length_chars"], r))
                         for r in cur.fetchall()
                     ]
                 except Exception:
-                    pass
+                    conn.rollback()
 
                 try:
                     cur.execute(
-                        """
+                        f"""
                         SELECT
                           COUNT(*)                                                AS total_sessions,
                           ROUND(AVG(user_message_count), 1)                      AS avg_user_msgs,
@@ -687,9 +684,8 @@ def _fetch_dashboard(
                           COUNT(*) FILTER (WHERE came_back_within_7d = TRUE)      AS came_back_7d,
                           COUNT(*) FILTER (WHERE ended_at IS NOT NULL)            AS closed_sessions
                         FROM conversation_sessions
-                        WHERE started_at >= NOW() - make_interval(days => %s)
-                        """,
-                        (insights_days,),
+                        WHERE started_at >= NOW() - INTERVAL '{_idays} days'
+                        """
                     )
                     row = cur.fetchone()
                     if row:
@@ -700,6 +696,7 @@ def _fetch_dashboard(
                     else:
                         insights_session = {}
                 except Exception:
+                    conn.rollback()
                     insights_session = {}
 
             # ── Conversations tab ─────────────────────────────────────────
