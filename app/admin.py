@@ -604,6 +604,10 @@ def _fetch_dashboard(
                                GROUP BY phone_number HAVING COUNT(*) >= 3
                            ) AS deep_fans)                                    AS deep_convo_fans,
 
+                          -- Unique fans who sent at least 1 message back (true engagers, excludes blast-only recipients)
+                          (SELECT COUNT(DISTINCT phone_number) FROM messages
+                           WHERE role = 'user' AND created_at >= %s)          AS engaging_fans,
+
                           -- Unique fans who received a bot reply
                           (SELECT COUNT(DISTINCT phone_number) FROM messages
                            WHERE role = 'assistant' AND created_at >= %s)     AS bot_replied_fans,
@@ -616,6 +620,7 @@ def _fetch_dashboard(
                             _BOT_LAUNCH, _BOT_LAUNCH,
                             _BOT_LAUNCH, _BOT_LAUNCH,
                             _BOT_LAUNCH, _BOT_LAUNCH,
+                            _BOT_LAUNCH,
                         ),
                     )
                     row = cur.fetchone()
@@ -625,8 +630,9 @@ def _fetch_dashboard(
                         legacy_engaged  = row[2] or 0
                         new_engaged     = row[3] or 0
                         deep_convos     = row[4] or 0
-                        bot_replied     = row[5] or 1
-                        earliest_date   = row[6]
+                        engaging_fans   = row[5] or 1
+                        bot_replied     = row[6] or 1
+                        earliest_date   = row[7]
                         earliest_year   = earliest_date.year if earliest_date else 2022
                         insights_impact = {
                             "pre_bot_list": pre_list,
@@ -636,7 +642,8 @@ def _fetch_dashboard(
                             "legacy_pct": round(legacy_engaged / max(pre_list, 1) * 100, 1),
                             "new_pct": round(new_engaged / max(post_list, 1) * 100, 1),
                             "deep_convo_fans": deep_convos,
-                            "deep_convo_pct": round(deep_convos / max(bot_replied, 1) * 100, 1),
+                            "deep_convo_pct": round(deep_convos / max(engaging_fans, 1) * 100, 1),
+                            "engaging_fans": engaging_fans,
                             "bot_replied_fans": bot_replied,
                             "earliest_year": earliest_year,
                         }
@@ -989,6 +996,7 @@ def _render_impact_section(impact: dict) -> str:
     new_pct         = impact.get("new_pct", 0)
     deep_pct        = impact.get("deep_convo_pct", 0)
     deep_fans       = impact.get("deep_convo_fans", 0)
+    engaging_fans   = impact.get("engaging_fans", 0)
     bot_replied     = impact.get("bot_replied_fans", 0)
     earliest_year   = impact.get("earliest_year", 2022)
 
@@ -1038,7 +1046,7 @@ def _render_impact_section(impact: dict) -> str:
                       margin-bottom:4px;">Deep convos (3+ msgs)</div>
           <div style="font-size:28px;font-weight:800;color:#a78bfa;">{deep_pct}%</div>
           <div style="font-size:12px;color:#6b7280;margin-top:2px;">
-            {deep_fans:,} fans kept the conversation going
+            {deep_fans:,} of {engaging_fans:,} fans who replied
           </div>
           {_bar(deep_pct, "#a78bfa")}
         </div>
