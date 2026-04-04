@@ -567,7 +567,65 @@ def _fetch_dashboard(
             insights_dropoff = []
             insights_session = {}
             insights_scored_total = 0
+            insights_impact = {}
+            _BOT_LAUNCH = "2026-03-27"  # first bot reply date — used for pre/post comparison
             if tab == "insights":
+                # ── Pre/post bot impact comparison ────────────────────────
+                try:
+                    cur.execute(
+                        """
+                        SELECT
+                          -- Pre-bot: unique subscribers who sent any message before launch
+                          COUNT(DISTINCT CASE WHEN created_at < %s THEN phone_number END)
+                            FILTER (WHERE role = 'user')                             AS pre_bot_active,
+
+                          -- Total contacts before bot launch (proxy for list size)
+                          (SELECT COUNT(*) FROM contacts WHERE created_at < %s)      AS pre_bot_list_size,
+
+                          -- Post-bot: unique fans who texted since launch
+                          COUNT(DISTINCT CASE WHEN created_at >= %s THEN phone_number END)
+                            FILTER (WHERE role = 'user')                             AS post_bot_fans,
+
+                          -- Post-bot: fans who had 3+ user messages (real conversation)
+                          (
+                            SELECT COUNT(DISTINCT phone_number)
+                            FROM messages
+                            WHERE role = 'user'
+                              AND created_at >= %s
+                            GROUP BY phone_number
+                            HAVING COUNT(*) >= 3
+                          )                                                           AS deep_convo_fans,
+
+                          -- Post-bot: total unique fans who received a bot reply
+                          (
+                            SELECT COUNT(DISTINCT phone_number)
+                            FROM messages
+                            WHERE role = 'assistant'
+                              AND created_at >= %s
+                          )                                                           AS bot_replied_fans
+                        FROM messages
+                        """,
+                        (_BOT_LAUNCH, _BOT_LAUNCH, _BOT_LAUNCH, _BOT_LAUNCH, _BOT_LAUNCH),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        pre_active   = row[0] or 0
+                        pre_list     = row[1] or 1
+                        post_fans    = row[2] or 0
+                        deep_convos  = row[3] or 0
+                        bot_replied  = row[4] or 1
+                        insights_impact = {
+                            "pre_bot_engagement_pct": round(pre_active / max(pre_list, 1) * 100, 1),
+                            "pre_bot_active": pre_active,
+                            "pre_bot_list": pre_list,
+                            "post_bot_fans": post_fans,
+                            "deep_convo_fans": deep_convos,
+                            "deep_convo_pct": round(deep_convos / max(bot_replied, 1) * 100, 1),
+                            "bot_replied_fans": bot_replied,
+                        }
+                except Exception:
+                    conn.rollback()
+
                 # insights_days is pre-validated to 7 | 14 | 30 — safe to embed directly
                 _idays = int(insights_days)
                 try:
@@ -785,6 +843,7 @@ def _fetch_dashboard(
             "insights_dropoff": insights_dropoff,
             "insights_scored_total": insights_scored_total,
             "insights_session": insights_session,
+            "insights_impact": insights_impact,
         }
     finally:
         conn.close()
@@ -809,6 +868,79 @@ def _range_links(active: int) -> str:
         cls = "range-pill-active" if d == active else "range-pill"
         parts.append(f'<a class="{cls}" href="/admin?tab=overview&range={d}">{d}d</a>')
     return " ".join(parts)
+
+
+def _render_impact_section(impact: dict) -> str:
+    """Before/after bot comparison banner."""
+    if not impact:
+        return ""
+    pre_pct      = impact.get("pre_bot_engagement_pct", 0)
+    pre_active   = impact.get("pre_bot_active", 0)
+    pre_list     = impact.get("pre_bot_list", 0)
+    post_fans    = impact.get("post_bot_fans", 0)
+    deep_pct     = impact.get("deep_convo_pct", 0)
+    deep_fans    = impact.get("deep_convo_fans", 0)
+    bot_replied  = impact.get("bot_replied_fans", 0)
+
+    def _bar(pct, color):
+        w = min(100, max(0, float(pct or 0)))
+        return (
+            f'<div style="background:#1f2937;border-radius:4px;height:8px;margin-top:6px;">'
+            f'<div style="width:{w}%;background:{color};height:8px;border-radius:4px;'
+            f'transition:width .4s;"></div></div>'
+        )
+
+    return f"""
+    <div style="background:linear-gradient(135deg,#0f172a 0%,#1e1b4b 100%);
+                border:1px solid #312e81;border-radius:14px;padding:22px 24px;margin-bottom:22px;">
+      <div style="font-size:11px;font-weight:700;letter-spacing:.1em;color:#818cf8;
+                  text-transform:uppercase;margin-bottom:14px;">
+        Bot Impact — Before vs After March 27
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1px 1fr 1px 1fr;gap:0;align-items:start;">
+
+        <div style="padding-right:20px;">
+          <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;
+                      margin-bottom:4px;">Pre-bot engagement</div>
+          <div style="font-size:28px;font-weight:800;color:#f87171;">{pre_pct}%</div>
+          <div style="font-size:12px;color:#6b7280;margin-top:2px;">
+            {pre_active:,} fans texted back out of {pre_list:,} subscribers
+          </div>
+          {_bar(pre_pct, "#f87171")}
+        </div>
+
+        <div style="background:#1f2937;"></div>
+
+        <div style="padding:0 20px;">
+          <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;
+                      margin-bottom:4px;">Post-bot conversations</div>
+          <div style="font-size:28px;font-weight:800;color:#4ade80;">{post_fans:,}</div>
+          <div style="font-size:12px;color:#6b7280;margin-top:2px;">
+            unique fans who texted since launch
+          </div>
+          <div style="margin-top:6px;font-size:12px;color:#94a3b8;">
+            {bot_replied:,} received a bot reply
+          </div>
+        </div>
+
+        <div style="background:#1f2937;"></div>
+
+        <div style="padding-left:20px;">
+          <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;
+                      margin-bottom:4px;">Deep conversations (3+ msgs)</div>
+          <div style="font-size:28px;font-weight:800;color:#a78bfa;">{deep_pct}%</div>
+          <div style="font-size:12px;color:#6b7280;margin-top:2px;">
+            {deep_fans:,} fans kept talking after the first reply
+          </div>
+          {_bar(deep_pct, "#a78bfa")}
+        </div>
+
+      </div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid #1f2937;
+                  font-size:11px;color:#4b5563;">
+        Goal: pre-bot engagement % goes up, deep conversation % goes up — show over show.
+      </div>
+    </div>"""
 
 
 def _render_insights_tab(stats: dict, insights_days: int = 30) -> str:
@@ -862,7 +994,8 @@ def _render_insights_tab(stats: dict, insights_days: int = 30) -> str:
       {day_picker_html}
     </div>"""
 
-    summary_html = date_filter_bar + f"""
+    impact_html = _render_impact_section(stats.get("insights_impact", {}))
+    summary_html = impact_html + date_filter_bar + f"""
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px;">
       <div class="stat-card">
         <div class="stat-label">Scored Replies</div>
