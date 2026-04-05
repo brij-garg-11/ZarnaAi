@@ -168,6 +168,8 @@ th {{ color:#6b7280; font-size:11px; text-transform:uppercase; }}
   <a href="/admin?tab=convos">💬 Conversations</a>
   <a href="/admin?tab=conversions">🔗 Conversions</a>
   <a href="/admin?tab=insights">🧠 Insights</a>
+  <a href="/admin?tab=learning">✨ Learning</a>
+  <a href="/admin?tab=quality">🔍 Quality</a>
   <a href="/admin/live-shows" class="{'active' if nav_active == 'live' else ''}">🎤 Live shows</a>
 </nav>
 <div class="container">{body}</div>

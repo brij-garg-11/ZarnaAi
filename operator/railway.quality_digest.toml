@@ -1,0 +1,43 @@
+# Weekly AI Quality Digest — use a NEW Railway service (do not reuse the web app or other crons).
+#
+# Setup steps:
+#
+# 1) Railway project → + New Service → GitHub Repo → same repo as Zarna.
+#
+# 2) Service → Settings → Config-as-code → set path:
+#      operator/railway.quality_digest.toml
+#
+# 3) Variables (reference existing vars — do NOT create a new database):
+#      DATABASE_URL        → Variable Reference → same Postgres as the web service
+#      GEMINI_API_KEY      → Variable Reference → same as web service
+#
+#    Optional (for Notion page creation):
+#      NOTION_TOKEN              → your internal integration secret
+#      NOTION_DIGEST_PARENT_ID   → the UUID of the Notion page where weekly digests should appear
+#                                   (share that page with your integration via Connections first)
+#      NOTION_API_VERSION        → leave blank to use default 2022-06-28
+#
+#    Optional tuning:
+#      GENERATION_MODEL    → default gemini-2.5-flash  (override if you want a different model)
+#
+# 4) Cron schedule — in Railway service Settings → "Run on Schedule":
+#      0 10 * * 1   = every Monday 10:00 UTC (6:00 AM Eastern during DST)
+#    Adjust timezone offset as needed.
+#
+# 5) One-off run: click "Deploy now" or run locally:
+#      python scripts/generate_quality_digest.py
+#      python scripts/generate_quality_digest.py --dry-run   # preview without saving
+#
+# 6) After the first run, open Admin Dashboard → Quality tab to see the report and mark it reviewed.
+#
+# Notion setup (optional but recommended):
+#   a) Create a page in your Notion workspace called "AI Quality Digest"
+#   b) Share that page with your Zarna integration (3-dot menu → Connections → Add connection)
+#   c) Copy the page UUID from the URL and set as NOTION_DIGEST_PARENT_ID
+#   Each weekly run will create a child page under it automatically.
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python -u scripts/generate_quality_digest.py"

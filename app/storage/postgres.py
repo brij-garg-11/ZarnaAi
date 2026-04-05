@@ -185,6 +185,21 @@ _LIVE_SHOW_ADDITIVE_MIGRATIONS = (
     """,
 )
 
+_QUALITY_DIGEST_MIGRATIONS = (
+    """
+    CREATE TABLE IF NOT EXISTS ai_quality_reports (
+        id           SERIAL PRIMARY KEY,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        week_start   DATE NOT NULL,
+        headline_json TEXT NOT NULL DEFAULT '{}',
+        findings_json TEXT NOT NULL DEFAULT '[]',
+        notion_page_id TEXT,
+        reviewed_at  TIMESTAMPTZ
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_quality_reports_week ON ai_quality_reports(week_start DESC)",
+)
+
 
 class PostgresStorage(BaseStorage):
     """Thread-safe Postgres storage using a connection pool."""
@@ -223,6 +238,8 @@ class PostgresStorage(BaseStorage):
                     for sql in _ENGAGEMENT_ANALYTICS_MIGRATIONS:
                         cur.execute(sql)
                     for sql in _QUIZ_MIGRATIONS:
+                        cur.execute(sql)
+                    for sql in _QUALITY_DIGEST_MIGRATIONS:
                         cur.execute(sql)
                 # conversation_sessions lives in session_manager — ensure it exists here too
                 try:
