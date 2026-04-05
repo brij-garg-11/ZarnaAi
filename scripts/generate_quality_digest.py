@@ -364,15 +364,32 @@ Return ONLY a valid JSON object — no markdown, no preamble — with this exact
 
 
 def call_gemini(prompt: str) -> dict:
-    model = os.getenv("GENERATION_MODEL", "gemini-2.5-flash")
+    # Use flash-8b or 1.5-flash — thinking models (2.5-flash) return unpredictable
+    # structured output and are overkill for analytics summarisation.
+    model = os.getenv("DIGEST_MODEL", "gemini-1.5-flash")
     client = _gemini_client()
     response = client.models.generate_content(model=model, contents=prompt)
     raw = (response.text or "").strip()
-    # Strip possible markdown fences
-    if raw.startswith("```"):
-        raw = raw.split("```", 2)[-1].lstrip("json\n")
-        if raw.endswith("```"):
-            raw = raw[:-3]
+    log.info("Gemini raw response length: %d chars", len(raw))
+
+    # Strip markdown code fences if present
+    if "```" in raw:
+        # grab content between first ``` and last ```
+        parts = raw.split("```")
+        # parts[1] is the block after opening fence
+        if len(parts) >= 3:
+            raw = parts[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+
+    # Fallback: find first { ... } blob via regex
+    if not raw.startswith("{"):
+        import re
+        m = re.search(r"\{[\s\S]+\}", raw)
+        if m:
+            raw = m.group(0)
+
     return json.loads(raw)
 
 
