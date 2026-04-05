@@ -104,6 +104,15 @@ def _get_db_conn():
     return psycopg2.connect(url.replace("postgres://", "postgresql://", 1))
 
 
+def ensure_notion_page_id_column(conn) -> None:
+    """Idempotent — allows this script to run on a cron-only Railway service."""
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "ALTER TABLE live_shows ADD COLUMN IF NOT EXISTS notion_page_id TEXT"
+            )
+
+
 def notion_retrieve_database(database_id: str) -> Dict[str, Any]:
     rid = _normalize_uuid(database_id)
     r = requests.get(
@@ -457,6 +466,7 @@ def main() -> None:
 
     conn = _get_db_conn()
     try:
+        ensure_notion_page_id_column(conn)
         shows = fetch_shows(conn)
         ids = [int(s["id"]) for s in shows]
         channels = fetch_signup_channels(conn, ids)
