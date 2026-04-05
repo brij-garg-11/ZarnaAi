@@ -364,9 +364,8 @@ Return ONLY a valid JSON object — no markdown, no preamble — with this exact
 
 
 def call_gemini(prompt: str) -> dict:
-    # Use flash-8b or 1.5-flash — thinking models (2.5-flash) return unpredictable
-    # structured output and are overkill for analytics summarisation.
-    model = os.getenv("DIGEST_MODEL", "gemini-1.5-flash")
+    # gemini-2.0-flash: fast, reliable JSON output, available on v1beta
+    model = os.getenv("DIGEST_MODEL", "gemini-2.0-flash")
     client = _gemini_client()
     response = client.models.generate_content(model=model, contents=prompt)
     raw = (response.text or "").strip()
@@ -612,6 +611,20 @@ def create_notion_page(week_start: date, headline: dict, findings: dict, data: d
 
 # ── DB save ───────────────────────────────────────────────────────────────────
 
+def _json_serial(obj):
+    """JSON serializer that handles Decimal and date types from psycopg2."""
+    import decimal
+    if isinstance(obj, decimal.Decimal):
+        return float(obj)
+    if hasattr(obj, "isoformat"):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def _to_json(obj) -> str:
+    return json.dumps(obj, default=_json_serial)
+
+
 def save_report(conn, week_start: date, headline: dict, findings: dict, notion_page_id: str | None):
     with conn:
         with conn.cursor() as cur:
@@ -622,8 +635,8 @@ def save_report(conn, week_start: date, headline: dict, findings: dict, notion_p
                 RETURNING id
             """, (
                 week_start,
-                json.dumps(headline),
-                json.dumps(findings),
+                _to_json(headline),
+                _to_json(findings),
                 notion_page_id,
             ))
             row = cur.fetchone()
@@ -680,7 +693,7 @@ def main():
 
     if args.dry_run:
         print("\n=== DRY RUN — NOT SAVED ===")
-        print(json.dumps({"headline": data["headline"], "findings": findings}, indent=2, default=str))
+        print(json.dumps({"headline": data["headline"], "findings": findings}, indent=2, default=_json_serial))
         conn.close()
         return
 
