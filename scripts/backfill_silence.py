@@ -82,6 +82,7 @@ def backfill_msgs_after_this(conn) -> int:
                     FROM messages AS fan_msg
                     WHERE fan_msg.phone_number = bot_msg.phone_number
                       AND fan_msg.role         = 'user'
+                      AND fan_msg.source IS DISTINCT FROM 'reaction'
                       AND fan_msg.created_at   > bot_msg.created_at
                 )
                 WHERE bot_msg.role           = 'assistant'

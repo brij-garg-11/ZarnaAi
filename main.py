@@ -20,7 +20,7 @@ from app.inbound_security import (
     verify_slicktext_webhook_secret,
 )
 from app.brain.handler import create_brain
-from app.messaging.slicktext_adapter import create_slicktext_adapter
+from app.messaging.slicktext_adapter import create_slicktext_adapter, _is_reaction as _slick_is_reaction
 from app.messaging.twilio_adapter import create_twilio_adapter
 from app.admin import admin_bp
 from app.analytics.blueprint import analytics_bp
@@ -73,6 +73,32 @@ def _safe_try_live_show_signup(phone_number: str, message_text: str, channel: st
 # Handles 500-1000 signups without opening thousands of threads or overwhelming
 # the SlickText / Twilio APIs. Each adapter already retries on 429.
 _confirm_pool = ThreadPoolExecutor(max_workers=20, thread_name_prefix="confirm")
+
+
+def _record_reaction(phone: str, message: str) -> None:
+    """
+    Persist an iOS/Android reaction to the DB so it counts toward reply-rate
+    metrics.  No AI reply is generated — this is engagement-only bookkeeping.
+    """
+    try:
+        brain.storage.score_previous_bot_reply(phone)
+    except Exception:
+        logging.exception("_record_reaction: score failed for ...%s", phone[-4:] if phone else "?")
+    try:
+        from app.admin_auth import get_db_connection
+        conn = get_db_connection()
+        if not conn:
+            return
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO messages (phone_number, role, text, source) "
+                    "VALUES (%s, 'user', %s, 'reaction')",
+                    (phone, (message or "")[:500]),
+                )
+        conn.close()
+    except Exception:
+        logging.exception("_record_reaction: DB insert failed for ...%s", phone[-4:] if phone else "?")
 
 
 def _send_join_confirmation_async(phone: str, channel: str, body: str) -> None:
@@ -253,6 +279,11 @@ def slicktext_webhook():
         return jsonify({"status": "duplicate"}), 200
 
     raw_phone, raw_body = slicktext.peek_inbound(payload)
+
+    # Persist iOS/Android reactions — counts toward engagement metrics, no AI reply.
+    if raw_phone and raw_body and _slick_is_reaction(raw_body):
+        threading.Thread(target=_record_reaction, args=(raw_phone, raw_body), daemon=True).start()
+
     signup_res = LiveShowSignupResult()
     if raw_phone and raw_body:
         signup_res = _safe_try_live_show_signup(raw_phone, raw_body, "slicktext")

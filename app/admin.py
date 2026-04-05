@@ -853,7 +853,9 @@ def _fetch_dashboard(
                           bd.manual_link_clicks,
                           bd.blast_category,
                           -- replies within 24h, only from contacts who existed at blast time.
-                          -- csv_import is included so pre-bot blasts count replies from the CSV history.
+                          -- Only counts a fan's reply for the blast they were actually responding to:
+                          -- if a newer blast went out before the fan replied, that reply is attributed
+                          -- to the newer blast instead (prevents cross-blast double counting).
                           (SELECT COUNT(DISTINCT m.phone_number)
                            FROM messages m
                            JOIN contacts c ON c.phone_number = m.phone_number
@@ -862,6 +864,12 @@ def _fetch_dashboard(
                              AND m.created_at >= bd.sent_at
                              AND m.created_at <  bd.sent_at + INTERVAL '24 hours'
                              AND c.created_at  <= bd.sent_at
+                             AND NOT EXISTS (
+                                 SELECT 1 FROM blast_drafts bd2
+                                 WHERE bd2.status  = 'sent'
+                                   AND bd2.sent_at > bd.sent_at
+                                   AND bd2.sent_at <= m.created_at
+                             )
                           ) AS replies_24h,
                           -- tracked link clicks (for our own blasts)
                           COALESCE((
