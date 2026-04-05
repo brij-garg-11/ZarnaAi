@@ -22,6 +22,11 @@ Env (optional — property names must match your Notion database exactly):
   NOTION_PROP_BLAST_STATUS=Blast status (last)
   NOTION_PROP_SYNCED_AT=Data synced at
   NOTION_PROP_WINDOW_END=Window end
+  NOTION_PROP_REENGAGEMENT=Fan re-engagement rate
+  NOTION_PROP_AVG_MSGS=Avg msgs per fan
+  NOTION_PROP_VELOCITY=Signup velocity
+  NOTION_PROP_BLAST_OUTCOME=Broadcast outcome
+  NOTION_PROP_VS_AVG=vs avg signups
 
   NOTION_SYNC_STAGE=0|1          default 0 — set 1 after Stage options include mapped names
   NOTION_STAGE_DRAFT=Planned     maps DB status draft
@@ -270,6 +275,8 @@ def build_properties_for_show(
     show: Dict[str, Any],
     channel_parts: str,
     last_job: Optional[Dict[str, Any]],
+    analytics: Optional[Dict[str, Any]] = None,
+    avg_signups: float = 0.0,
 ) -> Dict[str, Any]:
     env = os.getenv
 
@@ -290,6 +297,11 @@ def build_properties_for_show(
     bstat_p = pname("NOTION_PROP_BLAST_STATUS", "Blast status (last)")
     synced_p = pname("NOTION_PROP_SYNCED_AT", "Data synced at")
     winend_p = pname("NOTION_PROP_WINDOW_END", "Window end")
+    reeng_p = pname("NOTION_PROP_REENGAGEMENT", "Fan re-engagement rate")
+    avgmsgs_p = pname("NOTION_PROP_AVG_MSGS", "Avg msgs per fan")
+    velocity_p = pname("NOTION_PROP_VELOCITY", "Signup velocity")
+    boutcome_p = pname("NOTION_PROP_BLAST_OUTCOME", "Broadcast outcome")
+    vsavg_p = pname("NOTION_PROP_VS_AVG", "vs avg signups")
 
     out: Dict[str, Any] = {}
     name = show.get("name") or f"Show {show.get('id')}"
@@ -358,6 +370,25 @@ def build_properties_for_show(
         we = datetime.fromisoformat(we.replace("Z", "+00:00"))
     if we and _prop_type(schema, winend_p) == "date":
         out[winend_p] = _date_val(we if isinstance(we, datetime) else None)
+
+    # --- analytics columns ---
+    a = analytics or {}
+    signup_total = int(show.get("signup_total") or 0)
+
+    if _prop_type(schema, reeng_p) == "rich_text":
+        out[reeng_p] = _rich_text(_fmt_reengagement(a))
+
+    if _prop_type(schema, avgmsgs_p) == "rich_text":
+        out[avgmsgs_p] = _rich_text(_fmt_avg_msgs(a))
+
+    if _prop_type(schema, velocity_p) == "rich_text":
+        out[velocity_p] = _rich_text(_fmt_velocity(a))
+
+    if _prop_type(schema, boutcome_p) == "rich_text":
+        out[boutcome_p] = _rich_text(_fmt_broadcast_outcome(last_job))
+
+    if _prop_type(schema, vsavg_p) == "rich_text":
+        out[vsavg_p] = _rich_text(_fmt_vs_avg(signup_total, avg_signups))
 
     return out
 
@@ -433,6 +464,185 @@ def fetch_latest_jobs(conn, show_ids: List[int]) -> Dict[int, Dict[str, Any]]:
     return {int(r["show_id"]): dict(r) for r in rows}
 
 
+def fetch_show_analytics(conn, show_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    """
+    Four analytics queries in one go for all synced show IDs.
+    Returns dict keyed by show_id with:
+      total_signups, fans_texted_7d, avg_msgs, first_30_pct, first_30_count, window_start
+    """
+    if not show_ids:
+        return {}
+    import psycopg2.extras
+
+    result: Dict[int, Dict[str, Any]] = {sid: {} for sid in show_ids}
+
+    # 1. Fan re-engagement — how many signed-up fans sent any message within 7d of signup
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT
+                lss.show_id,
+                COUNT(DISTINCT lss.phone_number)::int AS total_signups,
+                COUNT(DISTINCT
+                    CASE WHEN EXISTS (
+                        SELECT 1 FROM messages m
+                        WHERE m.phone_number = lss.phone_number
+                          AND m.role = 'user'
+                          AND m.created_at > lss.signed_up_at
+                          AND m.created_at <= lss.signed_up_at + INTERVAL '7 days'
+                    ) THEN lss.phone_number END
+                )::int AS fans_texted_7d
+            FROM live_show_signups lss
+            WHERE lss.show_id = ANY(%s::int[])
+            GROUP BY lss.show_id
+            """,
+            (show_ids,),
+        )
+        for r in cur.fetchall():
+            sid = int(r["show_id"])
+            result[sid]["total_signups"] = int(r["total_signups"] or 0)
+            result[sid]["fans_texted_7d"] = int(r["fans_texted_7d"] or 0)
+
+    # 2. Avg messages per fan (all-time from show's audience)
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT
+                lss.show_id,
+                ROUND(AVG(COALESCE(mc.msg_count, 0))::numeric, 1)::float AS avg_msgs
+            FROM live_show_signups lss
+            LEFT JOIN (
+                SELECT m.phone_number, COUNT(*)::int AS msg_count
+                FROM messages m
+                WHERE m.role = 'user'
+                  AND m.phone_number = ANY(
+                    SELECT phone_number FROM live_show_signups
+                    WHERE show_id = ANY(%s::int[])
+                  )
+                GROUP BY m.phone_number
+            ) mc ON mc.phone_number = lss.phone_number
+            WHERE lss.show_id = ANY(%s::int[])
+            GROUP BY lss.show_id
+            """,
+            (show_ids, show_ids),
+        )
+        for r in cur.fetchall():
+            sid = int(r["show_id"])
+            result[sid]["avg_msgs"] = float(r["avg_msgs"] or 0.0)
+
+    # 3. Signup velocity — % of signups who joined in first 30 min after window_start
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT
+                s.id AS show_id,
+                s.window_start,
+                COUNT(lss.phone_number)::int AS total_signups,
+                COUNT(CASE
+                    WHEN s.window_start IS NOT NULL
+                         AND lss.signed_up_at <= s.window_start + INTERVAL '30 minutes'
+                    THEN 1 END
+                )::int AS first_30_count
+            FROM live_shows s
+            LEFT JOIN live_show_signups lss ON lss.show_id = s.id
+            WHERE s.id = ANY(%s::int[])
+            GROUP BY s.id, s.window_start
+            """,
+            (show_ids,),
+        )
+        for r in cur.fetchall():
+            sid = int(r["show_id"])
+            result[sid]["window_start"] = r["window_start"]
+            total = int(r["total_signups"] or 0)
+            first30 = int(r["first_30_count"] or 0)
+            if r["window_start"] and total > 0:
+                result[sid]["first_30_pct"] = round(first30 / total * 100, 1)
+                result[sid]["first_30_count"] = first30
+            else:
+                result[sid]["first_30_pct"] = None
+                result[sid]["first_30_count"] = 0
+
+    return result
+
+
+def fetch_avg_ended_signups(conn) -> float:
+    """Average signup count across all ended shows — used for above/below avg comparison."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT AVG(cnt)::float AS avg_signups
+            FROM (
+                SELECT s.id, COUNT(lss.phone_number)::int AS cnt
+                FROM live_shows s
+                LEFT JOIN live_show_signups lss ON lss.show_id = s.id
+                WHERE s.status = 'ended'
+                GROUP BY s.id
+            ) t
+            """
+        )
+        row = cur.fetchone()
+        if row and row[0] is not None:
+            return float(row[0])
+    return 0.0
+
+
+# ---------------------------------------------------------------------------
+# Analytics text formatters
+# ---------------------------------------------------------------------------
+
+def _fmt_reengagement(a: Dict[str, Any]) -> str:
+    total = a.get("total_signups", 0)
+    texted = a.get("fans_texted_7d", 0)
+    if not total:
+        return "No signups"
+    pct = round(texted / total * 100, 1)
+    return f"{pct}% ({texted}/{total} fans texted AI within 7d)"
+
+
+def _fmt_avg_msgs(a: Dict[str, Any]) -> str:
+    avg = a.get("avg_msgs", 0.0)
+    return f"{avg} msgs/fan (all-time from show audience)"
+
+
+def _fmt_velocity(a: Dict[str, Any]) -> str:
+    pct = a.get("first_30_pct")
+    if pct is None:
+        return "No window start — cannot compute"
+    count = a.get("first_30_count", 0)
+    total = a.get("total_signups", 0)
+    return f"{pct}% signed up in first 30 min ({count}/{total})"
+
+
+def _fmt_broadcast_outcome(last_job: Optional[Dict[str, Any]]) -> str:
+    if not last_job:
+        return "No broadcast"
+    sent = int(last_job.get("sent_count") or 0)
+    failed = int(last_job.get("failed_count") or 0)
+    total = int(last_job.get("total_recipients") or 0)
+    status = (last_job.get("status") or "").strip()
+    if total == 0:
+        return status or "No broadcast"
+    pct = round(sent / total * 100) if total else 0
+    parts = f"{sent} sent"
+    if failed:
+        parts += f", {failed} failed"
+    parts += f" ({pct}% success)"
+    return parts
+
+
+def _fmt_vs_avg(signup_total: int, avg_signups: float) -> str:
+    if avg_signups <= 0:
+        return f"{signup_total} signups (no comparison data yet)"
+    avg_r = round(avg_signups, 1)
+    if signup_total > avg_signups * 1.1:
+        arrow = "↑ above avg"
+    elif signup_total < avg_signups * 0.9:
+        arrow = "↓ below avg"
+    else:
+        arrow = "≈ near avg"
+    return f"{arrow} (avg: {avg_r}, this show: {signup_total})"
+
+
 def save_notion_page_id(conn, show_id: int, page_id: str) -> None:
     pid = _normalize_uuid(page_id)
     with conn:
@@ -459,6 +669,11 @@ _SYNC_COLUMN_SPEC: Tuple[Tuple[str, str, Tuple[str, ...], str], ...] = (
     ("NOTION_PROP_BLAST_STATUS", "Blast status (last)", ("rich_text", "select"), "recommended"),
     ("NOTION_PROP_SYNCED_AT", "Data synced at", ("date",), "recommended"),
     ("NOTION_PROP_WINDOW_END", "Window end", ("date",), "recommended"),
+    ("NOTION_PROP_REENGAGEMENT", "Fan re-engagement rate", ("rich_text",), "analytics"),
+    ("NOTION_PROP_AVG_MSGS", "Avg msgs per fan", ("rich_text",), "analytics"),
+    ("NOTION_PROP_VELOCITY", "Signup velocity", ("rich_text",), "analytics"),
+    ("NOTION_PROP_BLAST_OUTCOME", "Broadcast outcome", ("rich_text",), "analytics"),
+    ("NOTION_PROP_VS_AVG", "vs avg signups", ("rich_text",), "analytics"),
 )
 
 
@@ -543,6 +758,9 @@ def main_sync() -> None:
         ids = [int(s["id"]) for s in shows]
         channels = fetch_signup_channels(conn, ids)
         jobs = fetch_latest_jobs(conn, ids)
+        analytics_all = fetch_show_analytics(conn, ids)
+        avg_signups = fetch_avg_ended_signups(conn)
+        _log.info("avg_ended_signups=%.1f (used for vs-avg column)", avg_signups)
 
         _log.info("Syncing %d live show(s) to Notion", len(shows))
         ok = 0
@@ -550,7 +768,8 @@ def main_sync() -> None:
             sid = int(show["id"])
             ch = channels.get(sid, "")
             last_job = jobs.get(sid)
-            props = build_properties_for_show(schema, show, ch, last_job)
+            a = analytics_all.get(sid, {})
+            props = build_properties_for_show(schema, show, ch, last_job, a, avg_signups)
             if not props:
                 _log.warning("No properties to write for show_id=%s", sid)
                 continue
