@@ -1356,20 +1356,30 @@ def _render_quality_tab() -> str:
             for w in working
         )
 
+        _problems_block = (
+            f'<div style="margin-bottom:18px"><div style="font-size:13px;font-weight:600;'
+            f'color:#cbd5e1;margin-bottom:10px">🔴 Problems identified</div>{problems_html}</div>'
+            if problems_html else ""
+        )
+        _working_block = (
+            '<div style="margin-bottom:14px"><div style="font-size:13px;font-weight:600;'
+            "color:#cbd5e1;margin-bottom:8px\">✅ What's working</div>"
+            f'<ul style="margin:0;padding-left:18px">{working_items}</ul></div>'
+            if working_items else ""
+        )
+        _review_block = "" if reviewed else (
+            f'<div style="padding-top:14px;border-top:1px solid #1f2937;margin-top:6px">'
+            f'<form method="POST" action="/admin/quality/{rid}/review">'
+            '<button type="submit" style="background:#6366f1;color:#fff;border:none;'
+            'border-radius:6px;padding:7px 20px;font-size:13px;font-weight:600;cursor:pointer">'
+            '✓ Mark as reviewed</button></form></div>'
+        )
+
         detail_body = f"""
         {stats_strip}
-        {f'<div style="margin-bottom:18px"><div style="font-size:13px;font-weight:600;color:#cbd5e1;margin-bottom:10px">🔴 Problems identified</div>{problems_html}</div>' if problems_html else ''}
-        {f'<div style="margin-bottom:14px"><div style="font-size:13px;font-weight:600;color:#cbd5e1;margin-bottom:8px">✅ What\'s working</div><ul style="margin:0;padding-left:18px">{working_items}</ul></div>' if working_items else ''}
-        {"" if reviewed else f'''
-        <div style="padding-top:14px;border-top:1px solid #1f2937;margin-top:6px">
-          <form method="POST" action="/admin/quality/{rid}/review">
-            <button type="submit"
-              style="background:#6366f1;color:#fff;border:none;border-radius:6px;
-                     padding:7px 20px;font-size:13px;font-weight:600;cursor:pointer">
-              ✓ Mark as reviewed
-            </button>
-          </form>
-        </div>'''}"""
+        {_problems_block}
+        {_working_block}
+        {_review_block}"""
 
         # Open the most-recent unreviewed digest automatically
         open_attr = "open" if (idx == 0 and not reviewed) else ""
