@@ -148,7 +148,7 @@ def _create_quiz_session(
                     """
                     INSERT INTO quiz_sessions
                       (show_id, blast_draft_id, question_text, correct_answer, expires_at)
-                    VALUES (%s, %s, %s, %s, NOW() + INTERVAL '2 hours')
+                    VALUES (%s, %s, %s, %s, NOW() + INTERVAL '24 hours')
                     """,
                     (show_id, blast_draft_id, question_text, correct_answer),
                 )
