@@ -65,3 +65,17 @@ class BaseStorage(ABC):
         unscored assistant message for this phone and marks it as replied-to,
         recording how many seconds the fan took to reply.  No-op by default.
         """
+
+    def get_top_performing_replies(
+        self,
+        intent: str,
+        tone_mode: str,
+        limit: int = 4,
+    ) -> list:
+        """
+        Return up to `limit` high-engagement bot reply texts for a given
+        intent + tone_mode combination, ordered by depth of follow-up
+        conversation (msgs_after_this DESC) then reply speed (faster = better).
+        Returns [] when not enough data exists or storage doesn't support it.
+        """
+        return []

@@ -140,6 +140,21 @@ class ZarnaBrain:
 
         t_gen = time.perf_counter()
         tone_mode = classify_tone_mode(message_text, intent, history)
+
+        # Fetch high-engagement examples for this intent+tone combo (cached, never blocks).
+        # Only used for conversational intents — structured ones (show/clip/book/podcast) skip.
+        winning_examples = None
+        _LEARNING_INTENTS = frozenset({
+            "greeting", "feedback", "question", "personal", "general", "joke",
+        })
+        if intent and intent.value in _LEARNING_INTENTS:
+            try:
+                winning_examples = self.storage.get_top_performing_replies(
+                    intent.value, str(tone_mode) if tone_mode else ""
+                ) or None
+            except Exception:
+                pass  # learning is best-effort, never block a reply
+
         reply = generate_zarna_reply(
             intent=intent,
             user_message=message_text,
@@ -150,6 +165,7 @@ class ZarnaBrain:
             routing_tier=routing_tier,
             tone_mode=tone_mode,
             quiz_context=quiz_context,
+            winning_examples=winning_examples,
         )
         gen_ms = (time.perf_counter() - t_gen) * 1000
 

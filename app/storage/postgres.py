@@ -9,6 +9,7 @@ Tables are created on first startup — no migration step needed.
 """
 
 import logging
+import time
 from typing import List, Optional
 
 import psycopg2
@@ -17,6 +18,11 @@ from psycopg2.pool import ThreadedConnectionPool
 
 from .base import BaseStorage
 from .models import Contact, Message
+
+# Cache for top-performing replies — keyed by (intent, tone_mode), expires after 5 min.
+# Prevents a DB round-trip on every inbound message while still picking up new winners.
+_REPLY_CACHE: dict = {}
+_REPLY_CACHE_TTL = 300
 
 logger = logging.getLogger(__name__)
 
@@ -461,5 +467,55 @@ class PostgresStorage(BaseStorage):
                     )
         except Exception:
             logger.exception("score_previous_bot_reply failed for ...%s", phone_number[-4:] if phone_number else "?")
+        finally:
+            self._release(conn)
+
+    def get_top_performing_replies(
+        self,
+        intent: str,
+        tone_mode: str,
+        limit: int = 4,
+    ) -> list:
+        """
+        Return up to `limit` bot reply texts that performed best for this
+        intent + tone_mode combo, ordered by follow-up depth then reply speed.
+        Results are cached for 5 minutes so this never adds per-message latency.
+        Requires at least 3 qualifying examples — returns [] otherwise.
+        """
+        cache_key = (intent, tone_mode)
+        now = time.monotonic()
+        cached, ts = _REPLY_CACHE.get(cache_key, (None, 0))
+        if cached is not None and now - ts < _REPLY_CACHE_TTL:
+            return cached
+
+        conn = self._acquire()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT text
+                    FROM   messages
+                    WHERE  role               = 'assistant'
+                      AND  intent             = %s
+                      AND  tone_mode          = %s
+                      AND  did_user_reply     = TRUE
+                      AND  reply_length_chars BETWEEN 40 AND 380
+                      AND  source IS DISTINCT FROM 'blast'
+                      AND  text NOT LIKE '%%zarnagarg.com%%'
+                      AND  text NOT LIKE '%%amazon.com%%'
+                      AND  text NOT LIKE '%%youtube.com%%'
+                    ORDER BY COALESCE(msgs_after_this, 1) DESC,
+                             reply_delay_seconds ASC NULLS LAST
+                    LIMIT %s
+                    """,
+                    (intent, tone_mode, limit),
+                )
+                rows = [r[0] for r in cur.fetchall()]
+            result = rows if len(rows) >= 3 else []
+            _REPLY_CACHE[cache_key] = (result, now)
+            return result
+        except Exception:
+            logger.exception("get_top_performing_replies failed intent=%s tone=%s", intent, tone_mode)
+            return []
         finally:
             self._release(conn)

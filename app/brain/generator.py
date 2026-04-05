@@ -281,6 +281,22 @@ def _filter_chunks(chunks: List[str], intent: Intent, user_message: str = "") ->
     return filtered
 
 
+def _format_winning_examples(examples: list) -> str:
+    """
+    Format high-engagement past replies as a few-shot block injected into
+    the prompt.  Only called when there are ≥3 examples (enforced upstream).
+    Kept brief so it doesn't dwarf the rest of the prompt.
+    """
+    if not examples:
+        return ""
+    bullets = "\n".join(f'• "{ex.strip()}"' for ex in examples[:4])
+    return (
+        f"High-engagement replies from real conversations with this type of fan "
+        f"(replies that kept the conversation going — learn from their pattern and energy, "
+        f"do NOT copy them verbatim):\n{bullets}\n\n"
+    )
+
+
 def _format_memory(fan_memory: str) -> str:
     if not fan_memory or not fan_memory.strip():
         return ""
@@ -300,10 +316,12 @@ def _build_prompt(
     fan_memory: str = "",
     tone_mode: Optional[str] = None,
     quiz_context: Optional[str] = None,
+    winning_examples: Optional[list] = None,
 ) -> str:
     context = "\n\n".join(_filter_chunks(chunks, intent, user_message)) if chunks else ""
     history_text = _format_history(history)
     memory_text = _format_memory(fan_memory)
+    examples_text = _format_winning_examples(winning_examples or [])
     tone_guidance = ""
     if tone_mode:
         tone_map = {
@@ -407,7 +425,7 @@ Background knowledge about Zarna (use to make responses richer — never recite 
 {_VOICE_LOCK_RULES}
 {tone_guidance}
 {_TONE_EXAMPLES}
-{memory_text}{history_text}Fan greeting: {user_message}
+{examples_text}{memory_text}{history_text}Fan greeting: {user_message}
 {_STYLE_RULES}
 Critical for this message: welcome them warmly in Zarna's voice — sharp, high-energy, never generic.
 Max 2 sentences. If this is clearly their very first message and you have nothing to riff on yet, a
@@ -425,7 +443,7 @@ Background knowledge about Zarna (use to make responses richer — never recite 
 {_VOICE_LOCK_RULES}
 {tone_guidance}
 {_TONE_EXAMPLES}
-{memory_text}{history_text}Fan reaction: {user_message}
+{examples_text}{memory_text}{history_text}Fan reaction: {user_message}
 {_STYLE_RULES}
 Critical for this message: the fan is reacting — laughing, agreeing, or answering one of Zarna's bits.
 Acknowledge it in ONE punchy line (sharp, in-character, not generic "You got it!").
@@ -449,7 +467,7 @@ Background knowledge about Zarna (use to make responses richer and more specific
 {_VOICE_LOCK_RULES}
 {tone_guidance}
 {_TONE_EXAMPLES}
-{memory_text}{history_text}Question from fan: {user_message}
+{examples_text}{memory_text}{history_text}Question from fan: {user_message}
 {_STYLE_RULES}
 Critical for this message: answer the question directly in plain language first — no echo-mock, no keyword+? dodge. A follow-up question back is optional — only add one if it genuinely flows and you haven't asked one recently. Often the best reply to a question is just a great answer that ends on a period."""
 
@@ -464,7 +482,7 @@ Background knowledge about Zarna (use to make responses richer and more specific
 {_VOICE_LOCK_RULES}
 {tone_guidance}
 {_TONE_EXAMPLES}
-{memory_text}{history_text}Fan shares: {user_message}
+{examples_text}{memory_text}{history_text}Fan shares: {user_message}
 {_STYLE_RULES}
 Critical for this message: riff on what they shared — find the funny or warm angle in their specific detail. A follow-up question is optional — only if it genuinely earns its place and you haven't asked one recently. Often just landing the joke or observation is the better move. Default to ending on a period. Do not pivot to Zarna's life unless they asked."""
 
@@ -479,7 +497,7 @@ Background knowledge about Zarna (use to make responses richer and more specific
 {_VOICE_LOCK_RULES}
 {tone_guidance}
 {_TONE_EXAMPLES}
-{memory_text}{history_text}{quiz_block}Message: {user_message}
+{examples_text}{memory_text}{history_text}{quiz_block}Message: {user_message}
 {_STYLE_RULES}"""
 
 
@@ -704,11 +722,13 @@ def generate_zarna_reply(
     routing_tier: Optional[str] = None,
     tone_mode: Optional[str] = None,
     quiz_context: Optional[str] = None,
+    winning_examples: Optional[list] = None,
 ) -> str:
     """
     Generate reply. For GENERAL/JOKE with multi-model enabled, pass routing_tier
     from classify_routing_tier(). Structured intents (clip/show/book/podcast) always use Gemini.
     quiz_context, when set, injects pop-quiz framing so the AI reacts to the fan's answer.
+    winning_examples, when set, injects high-engagement past replies as dynamic few-shot examples.
     """
     prompt = _build_prompt(
         intent,
@@ -718,6 +738,7 @@ def generate_zarna_reply(
         fan_memory,
         tone_mode=tone_mode,
         quiz_context=quiz_context,
+        winning_examples=winning_examples,
     )
 
     raw = _produce_raw_text(intent, prompt, routing_tier)

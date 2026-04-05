@@ -973,6 +973,59 @@ def _fetch_dashboard(
                         """, (phone_like, INBOX_PAGE_SIZE, inbox_off))
                     inbox_rows = [dict(r) for r in cur.fetchall()]
 
+            # ── Learning tab ──────────────────────────────────────────────
+            learning_data = []
+            if tab == "learning":
+                try:
+                    _LEARNING_INTENTS = ["greeting", "feedback", "question", "personal", "general"]
+                    _TONES = ["roast_playful", "warm_supportive", "direct_answer", "celebratory", "sensitive_care"]
+                    for _intent in _LEARNING_INTENTS:
+                        for _tone in _TONES:
+                            cur.execute(
+                                """
+                                SELECT text, COALESCE(msgs_after_this, 1) AS depth,
+                                       reply_delay_seconds
+                                FROM   messages
+                                WHERE  role               = 'assistant'
+                                  AND  intent             = %s
+                                  AND  tone_mode          = %s
+                                  AND  did_user_reply     = TRUE
+                                  AND  reply_length_chars BETWEEN 40 AND 380
+                                  AND  source IS DISTINCT FROM 'blast'
+                                  AND  text NOT LIKE '%%zarnagarg.com%%'
+                                  AND  text NOT LIKE '%%amazon.com%%'
+                                  AND  text NOT LIKE '%%youtube.com%%'
+                                ORDER BY COALESCE(msgs_after_this, 1) DESC,
+                                         reply_delay_seconds ASC NULLS LAST
+                                LIMIT 4
+                                """,
+                                (_intent, _tone),
+                            )
+                            rows = cur.fetchall()
+                            if rows:
+                                cur.execute(
+                                    """
+                                    SELECT COUNT(*) FROM messages
+                                    WHERE role = 'assistant' AND intent = %s
+                                      AND tone_mode = %s AND did_user_reply IS NOT NULL
+                                    """,
+                                    (_intent, _tone),
+                                )
+                                scored_count = cur.fetchone()[0]
+                                learning_data.append({
+                                    "intent": _intent,
+                                    "tone": _tone,
+                                    "examples": [
+                                        {"text": r[0], "depth": r[1], "delay": r[2]}
+                                        for r in rows
+                                    ],
+                                    "scored_total": scored_count,
+                                    "injected": len(rows) >= 3,
+                                })
+                except Exception:
+                    conn.rollback()
+                    learning_data = []
+
         return {
             "total_subscribers": total_subscribers,
             "total_messages": total_messages,
@@ -1008,6 +1061,7 @@ def _fetch_dashboard(
             "insights_session": insights_session,
             "insights_impact": insights_impact,
             "insights_blasts": insights_blasts,
+            "learning_data": learning_data,
         }
     finally:
         conn.close()
@@ -1138,6 +1192,138 @@ def _render_impact_section(impact: dict, era: str = "post") -> str:
                   font-size:11px;color:#4b5563;">
         Goal: pre-bot % stays low, post-bot penetration % and deep convo % grow show over show.
       </div>
+    </div>"""
+
+
+def _render_learning_tab(stats: dict) -> str:
+    """Return the inner HTML for the ✨ Learning tab."""
+    learning_data = stats.get("learning_data", [])
+
+    _INTENT_LABELS = {
+        "greeting":  "👋 Greeting",
+        "feedback":  "😂 Feedback / Laughs",
+        "question":  "❓ Question",
+        "personal":  "🙋 Personal / Fan shares",
+        "general":   "💬 General",
+    }
+    _TONE_LABELS = {
+        "roast_playful":   "Roast / Playful",
+        "warm_supportive": "Warm / Supportive",
+        "direct_answer":   "Direct Answer",
+        "celebratory":     "Celebratory",
+        "sensitive_care":  "Sensitive / Care",
+    }
+
+    if not learning_data:
+        return """
+        <div style="padding:40px;text-align:center;color:#6b7280;">
+          <div style="font-size:48px;margin-bottom:16px;">🌱</div>
+          <div style="font-size:18px;font-weight:600;color:#e2e8f0;margin-bottom:8px;">No learning data yet</div>
+          <div style="font-size:14px;">The bot needs at least 3 scored replies per intent/tone combo before it starts
+          injecting examples. Keep running shows — the data builds up quickly.</div>
+        </div>"""
+
+    # Group by intent
+    by_intent: dict = {}
+    for row in learning_data:
+        by_intent.setdefault(row["intent"], []).append(row)
+
+    sections_html = ""
+    for intent, rows in by_intent.items():
+        active_tones = [r for r in rows if r["injected"]]
+        inactive_tones = [r for r in rows if not r["injected"]]
+        total_scored = sum(r["scored_total"] for r in rows)
+
+        intent_label = _INTENT_LABELS.get(intent, intent.title())
+
+        tone_blocks = ""
+        for r in active_tones:
+            tone_label = _TONE_LABELS.get(r["tone"], r["tone"])
+            examples_html = ""
+            for ex in r["examples"]:
+                depth = ex["depth"] or 1
+                delay = ex["delay"]
+                delay_str = f"{delay}s" if delay else "—"
+                bar_w = min(100, depth * 20)
+                examples_html += f"""
+                <div style="background:#111827;border-radius:8px;padding:12px 14px;margin-bottom:8px;">
+                  <div style="font-size:13px;color:#e2e8f0;line-height:1.5;margin-bottom:8px;">"{_esc(ex["text"])}"</div>
+                  <div style="display:flex;align-items:center;gap:12px;font-size:11px;color:#6b7280;">
+                    <span style="color:#6366f1;font-weight:700;">{depth} follow-up{"s" if depth != 1 else ""}</span>
+                    <span>reply in {delay_str}</span>
+                    <div style="flex:1;height:4px;background:#1f2937;border-radius:2px;">
+                      <div style="width:{bar_w}%;height:4px;background:#6366f1;border-radius:2px;"></div>
+                    </div>
+                  </div>
+                </div>"""
+
+            tone_blocks += f"""
+            <div style="background:#1f2937;border-radius:10px;padding:16px;margin-bottom:12px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <span style="font-size:13px;font-weight:600;color:#a78bfa;">{_esc(tone_label)}</span>
+                <span style="font-size:11px;background:#6366f1;color:#fff;padding:2px 8px;
+                             border-radius:12px;">✓ Active · {r["scored_total"]} scored</span>
+              </div>
+              {examples_html}
+            </div>"""
+
+        inactive_html = ""
+        if inactive_tones:
+            inactive_names = ", ".join(
+                _TONE_LABELS.get(r["tone"], r["tone"]) for r in inactive_tones
+            )
+            inactive_html = f"""
+            <div style="font-size:12px;color:#4b5563;margin-top:4px;">
+              ⏳ Not enough data yet for: {_esc(inactive_names)}
+            </div>"""
+
+        sections_html += f"""
+        <div style="background:#18212f;border:1px solid #1f2937;border-radius:12px;
+                    padding:20px;margin-bottom:20px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;
+                      margin-bottom:16px;">
+            <div style="font-size:16px;font-weight:700;color:#e2e8f0;">{intent_label}</div>
+            <div style="font-size:12px;color:#6b7280;">{total_scored} total scored replies</div>
+          </div>
+          {tone_blocks if tone_blocks else
+           '<div style="color:#4b5563;font-size:13px;">No active tones yet for this intent.</div>'}
+          {inactive_html}
+        </div>"""
+
+    injected_count = sum(1 for r in learning_data if r["injected"])
+    total_count = len(learning_data)
+
+    return f"""
+    <div style="max-width:900px;margin:0 auto;">
+
+      <div style="margin-bottom:24px;">
+        <h2 style="color:#e2e8f0;font-size:20px;font-weight:700;margin:0 0 8px;">✨ Bot Learning</h2>
+        <p style="color:#94a3b8;font-size:14px;margin:0 0 16px;">
+          The bot automatically learns from its most engaging past replies.
+          For each intent + tone combination with enough data (≥3 scored replies),
+          it injects the top examples into every new prompt — like showing a comedian
+          their best bits before they go on stage.
+        </p>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;">
+          <div style="background:#1f2937;border-radius:10px;padding:14px 20px;min-width:140px;">
+            <div style="font-size:11px;color:#6b7280;text-transform:uppercase;
+                        letter-spacing:.06em;margin-bottom:4px;">Active Combos</div>
+            <div style="font-size:28px;font-weight:800;color:#6366f1;">{injected_count}</div>
+            <div style="font-size:12px;color:#6b7280;">of {total_count} tracked</div>
+          </div>
+          <div style="background:#1f2937;border-radius:10px;padding:14px 20px;min-width:140px;">
+            <div style="font-size:11px;color:#6b7280;text-transform:uppercase;
+                        letter-spacing:.06em;margin-bottom:4px;">How It Works</div>
+            <div style="font-size:12px;color:#94a3b8;margin-top:4px;line-height:1.5;">
+              Intent + tone detected → top replies fetched (cached 5 min)
+              → injected as "what worked" examples → AI learns the pattern
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {sections_html}
+
     </div>"""
 
 
@@ -2148,6 +2334,7 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
   <a href="/admin?tab=convos" class="nav-tab {'active' if tab == 'convos' else ''}">💬 Conversations</a>
   <a href="/admin?tab=conversions" class="nav-tab {'active' if tab == 'conversions' else ''}">🔗 Conversions</a>
   <a href="/admin?tab=insights" class="nav-tab {'active' if tab == 'insights' else ''}">🧠 Insights</a>
+  <a href="/admin?tab=learning" class="nav-tab {'active' if tab == 'learning' else ''}">✨ Learning</a>
   <a href="/admin/live-shows" class="nav-tab">🎤 Live shows</a>
 </nav>
 
@@ -2263,6 +2450,10 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
 
   <div class="tab-content {'active' if tab == 'insights' else ''}" id="tab-insights">
     {_render_insights_tab(stats, insights_days, insights_era)}
+  </div>
+
+  <div class="tab-content {'active' if tab == 'learning' else ''}" id="tab-learning">
+    {_render_learning_tab(stats)}
   </div>
 
   <div class="tab-content {'active' if tab == 'conversions' else ''}" id="tab-conversions">
