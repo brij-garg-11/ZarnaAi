@@ -135,8 +135,9 @@ textarea {{ min-height:100px; max-width:100%; }}
 small.hint {{ color:#64748b; display:block; margin-top:6px; font-size:12px; }}
 table {{ width:100%; border-collapse:collapse; font-size:13px; margin-top:12px; }}
 table .actions {{ white-space:nowrap; vertical-align:middle; }}
-table .actions form {{ display:inline-block; vertical-align:middle; margin:2px 4px 2px 0; }}
-table .actions input[type=text] {{ max-width:min(200px,42vw); padding:6px 8px; font-size:12px; margin:0; }}
+table .actions form {{ display:inline-block; vertical-align:middle; margin:2px 0; }}
+table .actions form + form {{ margin-left:10px; }}
+table .actions input[type=text] {{ max-width:min(200px,42vw); padding:6px 8px; font-size:12px; margin:0 6px 0 0; }}
 .danger-zone {{ border-color:#7f1d1d !important; background:#1c1917; }}
 th, td {{ text-align:left; padding:8px 10px; border-bottom:1px solid #1f2937; }}
 th {{ color:#6b7280; font-size:11px; text-transform:uppercase; }}
@@ -165,6 +166,8 @@ th {{ color:#6b7280; font-size:11px; text-transform:uppercase; }}
   <a href="/admin?tab=overview">📊 Overview</a>
   <a href="/admin?tab=audience">👥 Audience</a>
   <a href="/admin?tab=convos">💬 Conversations</a>
+  <a href="/admin?tab=conversions">🔗 Conversions</a>
+  <a href="/admin?tab=insights">🧠 Insights</a>
   <a href="/admin/live-shows" class="{'active' if nav_active == 'live' else ''}">🎤 Live shows</a>
 </nav>
 <div class="container">{body}</div>
