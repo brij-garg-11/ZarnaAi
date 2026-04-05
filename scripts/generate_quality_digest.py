@@ -364,8 +364,8 @@ Return ONLY a valid JSON object — no markdown, no preamble — with this exact
 
 
 def call_gemini(prompt: str) -> dict:
-    # gemini-2.0-flash: fast, reliable JSON output, available on v1beta
-    model = os.getenv("DIGEST_MODEL", "gemini-2.0-flash")
+    # Use the same model as the web service (already configured in Railway env)
+    model = os.getenv("DIGEST_MODEL", os.getenv("GENERATION_MODEL", "gemini-2.5-flash"))
     client = _gemini_client()
     response = client.models.generate_content(model=model, contents=prompt)
     raw = (response.text or "").strip()
