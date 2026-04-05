@@ -180,6 +180,9 @@ _LIVE_SHOW_ADDITIVE_MIGRATIONS = (
     """
     ALTER TABLE live_shows ADD COLUMN IF NOT EXISTS event_timezone TEXT
     """,
+    """
+    ALTER TABLE live_shows ADD COLUMN IF NOT EXISTS notion_page_id TEXT
+    """,
 )
 
 

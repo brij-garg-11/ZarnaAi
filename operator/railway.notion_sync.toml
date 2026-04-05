@@ -1,0 +1,21 @@
+# Weekly Notion sync for live shows (separate Railway service from web + nightly backfill).
+#
+# Create a new Railway service from this repo, set this config file under Settings:
+#   Service → Settings → Config-as-code → operator/railway.notion_sync.toml
+#
+# Variables (same as production DB + Notion):
+#   DATABASE_URL, NOTION_TOKEN, NOTION_DATABASE_ID
+#
+# Schedule (Railway dashboard → Cron or Deploy → Cron):
+#   e.g. 0 14 * * 1  (= Monday 14:00 UTC, adjust for your timezone)
+#
+# One-off backfill: Deploy once with "Run now" or run locally:
+#   python scripts/sync_live_shows_to_notion.py
+#
+# Notion: add Number column "App show ID" and optional columns listed in the script docstring.
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python -u scripts/sync_live_shows_to_notion.py"
