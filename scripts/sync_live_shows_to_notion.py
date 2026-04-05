@@ -33,15 +33,21 @@ Env (optional — property names must match your Notion database exactly):
 
 Run:
   python scripts/sync_live_shows_to_notion.py
+  python scripts/sync_live_shows_to_notion.py --check-schema   # no DATABASE_URL needed
 
 Notion setup:
   1. Add the properties above (types: title already exists; add numbers, rich_text, date as named).
   2. For Stage, add options matching NOTION_STAGE_* or keep NOTION_SYNC_STAGE=0.
   3. Connect the integration to the database (Connections).
+
+DATABASE_URL:
+  Use the exact same value as your production Zarna web service — one Postgres database
+  holds live_shows, signups, and broadcasts. The Notion cron does not need a different URL.
 """
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import re
@@ -437,7 +443,73 @@ def save_notion_page_id(conn, show_id: int, page_id: str) -> None:
             )
 
 
-def main() -> None:
+# (env override key, default column name, acceptable Notion types, tier: required|recommended)
+_SYNC_COLUMN_SPEC: Tuple[Tuple[str, str, Tuple[str, ...], str], ...] = (
+    ("NOTION_PROP_TITLE", "Show", ("title",), "required"),
+    ("NOTION_PROP_APP_ID", "App show ID", ("number",), "required"),
+    ("NOTION_PROP_DATE", "Show date/time", ("date",), "recommended"),
+    ("NOTION_PROP_STAGE", "Stage", ("status", "select"), "optional"),
+    ("NOTION_PROP_SIGNUPS", "Signups", ("number",), "recommended"),
+    ("NOTION_PROP_CHANNELS", "Signup channels", ("rich_text",), "recommended"),
+    ("NOTION_PROP_KEYWORD", "Keyword", ("rich_text",), "recommended"),
+    ("NOTION_PROP_CATEGORY", "Event category", ("rich_text", "select"), "recommended"),
+    ("NOTION_PROP_BROADCAST_COUNT", "Broadcast count", ("number",), "recommended"),
+    ("NOTION_PROP_BLAST_SENT", "Blast sent (last)", ("number",), "recommended"),
+    ("NOTION_PROP_BLAST_FAILED", "Blast failed (last)", ("number",), "recommended"),
+    ("NOTION_PROP_BLAST_STATUS", "Blast status (last)", ("rich_text", "select"), "recommended"),
+    ("NOTION_PROP_SYNCED_AT", "Data synced at", ("date",), "recommended"),
+    ("NOTION_PROP_WINDOW_END", "Window end", ("date",), "recommended"),
+)
+
+
+def _resolved_prop_name(env_key: str, default: str) -> str:
+    return (os.getenv(env_key) or default).strip()
+
+
+def run_check_schema() -> None:
+    """Print Notion DB properties and a checklist — needs NOTION_TOKEN + NOTION_DATABASE_ID only."""
+    token = (os.getenv("NOTION_TOKEN") or "").strip()
+    database_id = (os.getenv("NOTION_DATABASE_ID") or "").strip()
+    if not token or not database_id:
+        _log.error("NOTION_TOKEN and NOTION_DATABASE_ID are required for --check-schema")
+        sys.exit(1)
+
+    schema = notion_retrieve_database(database_id)
+    props = schema.get("properties") or {}
+
+    print("\n=== Your Notion database (as the API sees it) ===\n", flush=True)
+    for name in sorted(props.keys(), key=lambda x: x.lower()):
+        print(f"  {name!r}  →  type={props[name].get('type')!r}", flush=True)
+
+    print("\n=== Fix checklist for Zarna live-show sync ===\n", flush=True)
+    print(
+        "Add any row marked MISSING or WRONG TYPE (Database → + New property).\n"
+        "Names must match exactly, or set the NOTION_PROP_* env var to your custom name.\n",
+        flush=True,
+    )
+
+    for env_key, default_name, ok_types, tier in _SYNC_COLUMN_SPEC:
+        pname = _resolved_prop_name(env_key, default_name)
+        actual = props.get(pname)
+        atype = actual.get("type") if actual else None
+        if atype is None:
+            status = "MISSING — add this property"
+        elif atype not in ok_types:
+            status = f"WRONG TYPE (is {atype!r}, need one of {ok_types})"
+        else:
+            status = "OK"
+        print(f"  [{tier:11}] {pname!r}  →  {status}", flush=True)
+
+    print(
+        "\nLeave Owner, Notes, Important updates, and pre/during/post checkboxes as manual fields; "
+        "the sync does not overwrite them.\n"
+        "Stage: keep NOTION_SYNC_STAGE=0 until your Stage options include Planned, Live, Done "
+        "(or set NOTION_STAGE_* to match your options), then set NOTION_SYNC_STAGE=1.\n",
+        flush=True,
+    )
+
+
+def main_sync() -> None:
     _banner("START")
     token = (os.getenv("NOTION_TOKEN") or "").strip()
     database_id = (os.getenv("NOTION_DATABASE_ID") or "").strip()
@@ -502,6 +574,22 @@ def main() -> None:
         _banner(f"DONE synced={ok}/{len(shows)}")
     finally:
         conn.close()
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(
+        description="Sync live_shows from Postgres into a Notion database."
+    )
+    p.add_argument(
+        "--check-schema",
+        action="store_true",
+        help="List Notion properties and show which columns to add (no DATABASE_URL needed).",
+    )
+    args = p.parse_args()
+    if args.check_schema:
+        run_check_schema()
+    else:
+        main_sync()
 
 
 if __name__ == "__main__":

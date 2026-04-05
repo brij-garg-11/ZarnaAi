@@ -1,18 +1,18 @@
-# Weekly Notion sync for live shows (separate Railway service from web + nightly backfill).
+# Weekly Notion sync for live shows — use a NEW Railway service (do not reuse the web app
+# or the nightly backfill "incredible-reprieve" service).
 #
-# Create a new Railway service from this repo, set this config file under Settings:
-#   Service → Settings → Config-as-code → operator/railway.notion_sync.toml
+# 1) Railway project → + New → GitHub Repo → same repo as Zarna.
+# 2) Service → Settings → Config-as-code → set path: operator/railway.notion_sync.toml
+# 3) Variables (same DATABASE_URL as production — reference it, do not create a new DB):
+#      DATABASE_URL     → "Variable Reference" → pick your Postgres plugin or the web service's DATABASE_URL
+#      NOTION_TOKEN     → internal integration secret (paste once)
+#      NOTION_DATABASE_ID → your database UUID
+# 4) Cron: enable a schedule on THIS service only, e.g.
+#      0 14 * * 1   = every Monday 14:00 UTC (10:00 AM Eastern during DST)
+# 5) Notion table: run locally  python scripts/sync_live_shows_to_notion.py --check-schema
+#    and add any properties marked MISSING.
 #
-# Variables (same as production DB + Notion):
-#   DATABASE_URL, NOTION_TOKEN, NOTION_DATABASE_ID
-#
-# Schedule (Railway dashboard → Cron or Deploy → Cron):
-#   e.g. 0 14 * * 1  (= Monday 14:00 UTC, adjust for your timezone)
-#
-# One-off backfill: Deploy once with "Run now" or run locally:
-#   python scripts/sync_live_shows_to_notion.py
-#
-# Notion: add Number column "App show ID" and optional columns listed in the script docstring.
+# One-off backfill: Run locally or trigger a one-off deploy; same startCommand.
 
 [build]
 builder = "nixpacks"
