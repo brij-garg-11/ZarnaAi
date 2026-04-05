@@ -226,11 +226,28 @@ class SlickTextAdapter:
     # Outbound
     # ------------------------------------------------------------------
 
+    # Hard cap: Unicode chars (—, …, emoji) force 67-char/segment encoding on SMS.
+    # 400 chars keeps us comfortably within 6 segments; SlickText rejects anything longer.
+    _SMS_HARD_CAP = 400
+
+    def _enforce_sms_length(self, body: str) -> str:
+        """Truncate to _SMS_HARD_CAP chars. Logs a warning if truncation occurs."""
+        if len(body) <= self._SMS_HARD_CAP:
+            return body
+        truncated = body[: self._SMS_HARD_CAP].rsplit(" ", 1)[0] + "…"
+        logger.warning(
+            "SMS body truncated from %d to %d chars before send",
+            len(body),
+            len(truncated),
+        )
+        return truncated
+
     def send_reply(self, to_number: str, body: str) -> bool:
         """Send an outbound SMS reply. Routes to v1 or v2 automatically."""
         if not (body or "").strip():
             logger.info("[REPLY TO %s]: skipped (empty body)", to_number)
             return False
+        body = self._enforce_sms_length(body)
         logger.info(f"[REPLY TO {to_number}]: {body}")
         if self._version == "v1":
             return self._send_v1(to_number, body)

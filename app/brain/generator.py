@@ -501,7 +501,8 @@ Background knowledge about Zarna (use to make responses richer and more specific
 {_STYLE_RULES}"""
 
 
-_MAX_CHARS = 480  # ~3 SMS segments; hard ceiling after generation
+_MAX_CHARS = 380  # Safe for 6-segment Unicode SMS (Unicode forces 67 chars/segment;
+                  # 380 chars leaves headroom for the ellipsis and any emoji)
 
 
 def _apply_emphasis_policy(text: str, suppress_all: bool) -> str:
@@ -603,6 +604,34 @@ _FALLBACK_REPLIES = [
     "My brain went on a little vacation (must be the immigrant-parent guilt). Send that again?",
 ]
 _fallback_idx = 0
+
+# Detects when someone is asking for coding help — we redirect rather than attempt it.
+# Matches: code fences, Python/JS function defs, or explicit "write me code" requests.
+_CODE_REQUEST_RE = re.compile(
+    r"```[\s\S]*```"                                                   # fenced code block
+    r"|^```"                                                           # opening fence at start
+    r"|\bdef [a-z_]\w*\s*\("                                          # Python def
+    r"|\bfunction [a-z_]\w*\s*\("                                     # JS function
+    r"|\bclass [A-Z]\w*[\s:\{]"                                       # class definition
+    r"|(?:write|fix|debug|solve|implement|code up|give me)\b.{0,60}"
+    r"\b(?:function|algorithm|code|program|solution|method|class)\b"  # "write me a function"
+    r"|\b(?:leetcode|hackerrank|codewars|homework|assignment)\b",     # explicit homework platforms
+    re.IGNORECASE | re.DOTALL,
+)
+
+_CODE_REDIRECT_REPLIES = [
+    "I'm a comedian, not a compiler. Stack Overflow is two exits down.",
+    "Coding help is above my pay grade — I handle mother-in-law drama, not merge conflicts.",
+    "My algorithm is: make people laugh. Actual algorithms are not my department.",
+]
+_code_redirect_idx = 0
+
+
+def _get_code_redirect() -> str:
+    global _code_redirect_idx
+    reply = _CODE_REDIRECT_REPLIES[_code_redirect_idx % len(_CODE_REDIRECT_REPLIES)]
+    _code_redirect_idx += 1
+    return reply
 
 
 def _get_fallback() -> str:
@@ -730,6 +759,11 @@ def generate_zarna_reply(
     quiz_context, when set, injects pop-quiz framing so the AI reacts to the fan's answer.
     winning_examples, when set, injects high-engagement past replies as dynamic few-shot examples.
     """
+    # Redirect coding/homework requests before they reach the AI
+    if _CODE_REQUEST_RE.search(user_message or ""):
+        _LOGGER.info("Code/homework request detected — returning redirect reply")
+        return _get_code_redirect()
+
     prompt = _build_prompt(
         intent,
         user_message,
