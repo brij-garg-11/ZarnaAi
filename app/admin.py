@@ -1198,11 +1198,12 @@ def _render_impact_section(impact: dict, era: str = "post") -> str:
 
 def _fetch_quality_reports() -> list:
     """Return quality reports newest-first (up to 12)."""
+    import psycopg2.extras as _pge
     conn = _get_db()
     if not conn:
         return []
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(cursor_factory=_pge.RealDictCursor) as cur:
             cur.execute("""
                 SELECT id, created_at, week_start, headline_json, findings_json,
                        notion_page_id, reviewed_at
@@ -1210,7 +1211,7 @@ def _fetch_quality_reports() -> list:
                 ORDER BY created_at DESC
                 LIMIT 12
             """)
-            return cur.fetchall()
+            return [dict(r) for r in cur.fetchall()]
     except Exception:
         return []
     finally:
