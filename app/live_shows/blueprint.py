@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 from urllib.parse import quote
 
@@ -130,8 +131,13 @@ textarea {{ min-height:100px; max-width:100%; }}
 .btn-danger {{ background:#991b1b; }}
 .btn-secondary {{ background:#374151; }}
 .btn-secondary:hover {{ background:#4b5563; }}
+.btn-sm {{ padding:6px 12px; font-size:12px; margin:0; }}
 small.hint {{ color:#64748b; display:block; margin-top:6px; font-size:12px; }}
 table {{ width:100%; border-collapse:collapse; font-size:13px; margin-top:12px; }}
+table .actions {{ white-space:nowrap; vertical-align:middle; }}
+table .actions form {{ display:inline-block; vertical-align:middle; margin:2px 4px 2px 0; }}
+table .actions input[type=text] {{ max-width:min(200px,42vw); padding:6px 8px; font-size:12px; margin:0; }}
+.danger-zone {{ border-color:#7f1d1d !important; background:#1c1917; }}
 th, td {{ text-align:left; padding:8px 10px; border-bottom:1px solid #1f2937; }}
 th {{ color:#6b7280; font-size:11px; text-transform:uppercase; }}
 .badge {{ display:inline-block; padding:2px 10px; border-radius:12px; font-size:12px; }}
@@ -174,7 +180,7 @@ def _before():
 
 def _show_table_rows(show_list: list, empty_msg: str) -> str:
     if not show_list:
-        return f'<tr><td colspan="6" style="color:#6b7280">{_e(empty_msg)}</td></tr>'
+        return f'<tr><td colspan="7" style="color:#6b7280">{_e(empty_msg)}</td></tr>'
     rows = ""
     for s in show_list:
         st = (s.get("status") or "draft").lower()
@@ -189,14 +195,31 @@ def _show_table_rows(show_list: list, empty_msg: str) -> str:
             et = "Live stream"
         else:
             et = "Other"
-        exp = f'<a class="btn btn-secondary" style="padding:6px 12px;font-size:12px;margin:0" href="/admin/live-shows/{sid}/export">CSV</a>'
+        exp = f'<a class="btn btn-secondary btn-sm" href="/admin/live-shows/{sid}/export">CSV</a>'
+        nm = _e(s["name"])
+        raw_name = (s.get("name") or "")[:80]
+        confirm_js = json.dumps(
+            f'Delete "{raw_name}" (show #{sid})? All signups and blast history for this show '
+            f"will be removed. This cannot be undone."
+        )
         rows += f"""<tr>
-          <td><a href="/admin/live-shows/{sid}" style="color:#a78bfa;font-weight:500">{_e(s['name'])}</a></td>
+          <td><a href="/admin/live-shows/{sid}" style="color:#a78bfa;font-weight:500">{nm}</a></td>
           <td><span class="badge {badge}">{st}</span></td>
           <td>{_e(et)}</td>
           <td><strong>{n}</strong></td>
           <td class="mono">{kw}</td>
           <td>{exp}</td>
+          <td class="actions">
+            <form method="post" action="/admin/live-shows/{sid}/rename">
+              <input type="hidden" name="next" value="/admin/live-shows">
+              <input type="text" name="name" value="{nm}" aria-label="Rename show" title="New name">
+              <button type="submit" class="btn btn-secondary btn-sm">Save name</button>
+            </form>
+            <form method="post" action="/admin/live-shows/{sid}/delete" style="display:inline-block"
+              onsubmit='return confirm({confirm_js});'>
+              <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
         </tr>"""
     return rows
 
@@ -217,18 +240,18 @@ def list_shows():
 <p><a class="btn" href="/admin/live-shows/new">+ New live show</a></p>
 <div class="card">
   <h2 style="margin-top:0;font-size:16px">Live now</h2>
-  <table><thead><tr><th>Name</th><th>Status</th><th>Type</th><th>Signups</th><th>Keyword</th><th>Export</th></tr></thead>
+  <table><thead><tr><th>Name</th><th>Status</th><th>Type</th><th>Signups</th><th>Keyword</th><th>Export</th><th>Actions</th></tr></thead>
   <tbody>{_show_table_rows(live_s, "No live show — start one from a draft.")}</tbody></table>
 </div>
 <div class="card">
   <h2 style="margin-top:0;font-size:16px">Drafts</h2>
-  <table><thead><tr><th>Name</th><th>Status</th><th>Type</th><th>Signups</th><th>Keyword</th><th>Export</th></tr></thead>
+  <table><thead><tr><th>Name</th><th>Status</th><th>Type</th><th>Signups</th><th>Keyword</th><th>Export</th><th>Actions</th></tr></thead>
   <tbody>{_show_table_rows(draft_s, "No drafts.")}</tbody></table>
 </div>
 <div class="card">
   <h2 style="margin-top:0;font-size:16px">Past events</h2>
   <p style="color:#64748b;font-size:13px;margin:0 0 8px 0">Ended shows — audience is saved. Click the name for the full list.</p>
-  <table><thead><tr><th>Name</th><th>Status</th><th>Type</th><th>Signups</th><th>Keyword</th><th>Export</th></tr></thead>
+  <table><thead><tr><th>Name</th><th>Status</th><th>Type</th><th>Signups</th><th>Keyword</th><th>Export</th><th>Actions</th></tr></thead>
   <tbody>{_show_table_rows(ended_s, "No ended shows yet.")}</tbody></table>
 </div>"""
     return _shell("Live shows", body)
@@ -489,12 +512,31 @@ def show_detail(show_id: int):
   <table><thead><tr><th>When</th><th>Action</th><th>Detail</th></tr></thead><tbody>{audit_rows}</tbody></table>
 </div>"""
 
+    rename_block = f"""
+  <form method="post" action="/admin/live-shows/{show_id}/rename" style="margin-top:14px">
+    <label>Show name</label>
+    <input type="text" name="name" value="{_e(show["name"])}" style="max-width:100%">
+    <p style="margin:8px 0 0 0"><button type="submit" class="btn btn-secondary">Save name</button></p>
+  </form>"""
+    del_confirm = json.dumps(
+        "Delete this show and all signups and broadcast history? This cannot be undone."
+    )
+    danger_card = f"""
+<div class="card danger-zone">
+  <h3 style="margin-top:0;color:#fca5a5">Danger zone</h3>
+  <p style="color:#94a3b8;font-size:13px;margin:0 0 10px 0">Removes this event, its audience list rows, and blast job records. Notion pages are not deleted automatically.</p>
+  <form method="post" action="/admin/live-shows/{show_id}/delete" onsubmit='return confirm({del_confirm});'>
+    <button type="submit" class="btn btn-danger">Delete show</button>
+  </form>
+</div>"""
+
     header_card = f"""
 <div class="card">
   <h2 style="margin-top:0">{_e(show["name"])}</h2>
   <p style="margin:0">Status: <span class="badge badge-{st_lower if st_lower in ('live','draft','ended') else 'draft'}">{st}</span></p>
   {created_line}
   {stats_block}
+  {rename_block}
 </div>"""
 
     body = f"""
@@ -507,7 +549,8 @@ def show_detail(show_id: int):
 {header_card}
 {schedule_card}
 {signups_card}
-{broadcast_form}"""
+{broadcast_form}
+{danger_card}"""
     return _shell(show["name"], body)
 
 
@@ -535,6 +578,42 @@ def show_status(show_id: int):
     repo.update_show_status(show_id, new_st)
     repo.log_audit("show_status", f"status → {new_st}", show_id)
     return redirect(url_for("live_shows.show_detail", show_id=show_id))
+
+
+def _safe_admin_redirect(url: str, fallback_show_id: int) -> str:
+    if (
+        url.startswith("/admin")
+        and not url.startswith("//")
+        and "\n" not in url
+        and "\r" not in url
+        and ".." not in url
+    ):
+        return url
+    return url_for("live_shows.show_detail", show_id=fallback_show_id)
+
+
+@live_shows_bp.route("/admin/live-shows/<int:show_id>/rename", methods=["POST"])
+def show_rename(show_id: int):
+    if not repo.get_show(show_id):
+        return redirect("/admin/live-shows")
+    name = (request.form.get("name") or "").strip()
+    next_url = (request.form.get("next") or "").strip()
+    if not name:
+        return redirect(_safe_admin_redirect(next_url, show_id))
+    if repo.update_show_name(show_id, name):
+        repo.log_audit("show_rename", "show name updated", show_id)
+    return redirect(_safe_admin_redirect(next_url, show_id))
+
+
+@live_shows_bp.route("/admin/live-shows/<int:show_id>/delete", methods=["POST"])
+def show_delete(show_id: int):
+    show = repo.get_show(show_id)
+    if not show:
+        return redirect("/admin/live-shows")
+    label = (show.get("name") or "")[:120]
+    repo.delete_show(show_id)
+    repo.log_audit("show_delete", f"deleted show_id={show_id} ({label})", None)
+    return redirect("/admin/live-shows")
 
 
 @live_shows_bp.route("/admin/live-shows/<int:show_id>/broadcast-test", methods=["POST"])

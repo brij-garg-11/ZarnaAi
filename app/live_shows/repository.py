@@ -98,6 +98,29 @@ def create_show(
         c.close()
 
 
+def update_show_name(show_id: int, name: str) -> bool:
+    """Trim and persist show name. Returns False if name is empty or no DB."""
+    n = (name or "").strip()
+    if not n:
+        return False
+    n = n[:500]
+    c = _conn()
+    if not c:
+        return False
+    try:
+        with c:
+            with c.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE live_shows SET name = %s, updated_at = NOW() WHERE id = %s
+                    """,
+                    (n, show_id),
+                )
+                return cur.rowcount > 0
+    finally:
+        c.close()
+
+
 def update_show_schedule(
     show_id: int,
     window_start: Optional[datetime],
