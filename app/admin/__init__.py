@@ -36,8 +36,10 @@ admin_bp = Blueprint("admin", __name__)
 def _register_submodule_routes():
     from app.admin.quality import register_quality_routes
     from app.admin.actions import register_action_routes
+    from app.admin.smb import register_smb_routes
     register_quality_routes(admin_bp)
     register_action_routes(admin_bp)
+    register_smb_routes(admin_bp)
 
 _register_submodule_routes()
 del _register_submodule_routes
@@ -1119,6 +1121,11 @@ def _render_quality_tab() -> str:
     return render_quality_tab()
 
 
+def _render_smb_tab() -> str:
+    from app.admin.smb import render_smb_tab
+    return render_smb_tab()
+
+
 @admin_bp.route("/admin")
 def admin():
     if not admin_password_configured():
@@ -1628,6 +1635,7 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
   <a href="/admin?tab=insights" class="nav-tab {'active' if tab == 'insights' else ''}">🧠 Insights</a>
   <a href="/admin?tab=learning" class="nav-tab {'active' if tab == 'learning' else ''}">✨ Learning</a>
   <a href="/admin?tab=quality" class="nav-tab {'active' if tab == 'quality' else ''}">🔍 Quality</a>
+  <a href="/admin?tab=smb" class="nav-tab {'active' if tab == 'smb' else ''}">🏪 SMB Clients</a>
   <a href="/admin/live-shows" class="nav-tab">🎤 Live shows</a>
 </nav>
 
@@ -1751,6 +1759,10 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
 
   <div class="tab-content {'active' if tab == 'quality' else ''}" id="tab-quality">
     {_render_quality_tab() if tab == 'quality' else ''}
+  </div>
+
+  <div class="tab-content {'active' if tab == 'smb' else ''}" id="tab-smb">
+    {_render_smb_tab() if tab == 'smb' else ''}
   </div>
 
   <div class="tab-content {'active' if tab == 'conversions' else ''}" id="tab-conversions">
