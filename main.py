@@ -25,6 +25,7 @@ from app.messaging.twilio_adapter import create_twilio_adapter
 from app.admin import admin_bp
 from app.analytics.blueprint import analytics_bp
 from app.live_shows.blueprint import live_shows_bp
+from app.smb.blueprint import smb_bp
 from app.live_shows.signup import LiveShowSignupResult, try_live_show_signup
 from app.live_shows.quiz import get_active_quiz_for_fan, record_quiz_response, build_quiz_context
 from app.ops_metrics import ai_reply_enter, ai_reply_leave, bump as ops_bump
@@ -121,6 +122,7 @@ app = Flask(__name__)
 app.register_blueprint(admin_bp)
 app.register_blueprint(analytics_bp)
 app.register_blueprint(live_shows_bp)
+app.register_blueprint(smb_bp)
 
 brain     = create_brain()
 slicktext = create_slicktext_adapter()
