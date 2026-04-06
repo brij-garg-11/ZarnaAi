@@ -226,6 +226,18 @@ _SMB_MIGRATIONS = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_smb_preferences_subscriber ON smb_preferences(subscriber_id)",
+    """
+    CREATE TABLE IF NOT EXISTS smb_blasts (
+        id              BIGSERIAL PRIMARY KEY,
+        tenant_slug     TEXT        NOT NULL,
+        owner_message   TEXT        NOT NULL DEFAULT '',
+        body            TEXT        NOT NULL DEFAULT '',
+        attempted       INT         NOT NULL DEFAULT 0,
+        succeeded       INT         NOT NULL DEFAULT 0,
+        sent_at         TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_smb_blasts_tenant ON smb_blasts(tenant_slug, sent_at DESC)",
 )
 
 
