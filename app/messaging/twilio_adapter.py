@@ -154,8 +154,12 @@ class TwilioAdapter:
     # Outbound
     # ------------------------------------------------------------------
 
-    def send_reply(self, to_number: str, body: str) -> bool:
-        """Send an outbound reply via Twilio SMS or WhatsApp."""
+    def send_reply(self, to_number: str, body: str, from_number: Optional[str] = None) -> bool:
+        """Send an outbound reply via Twilio SMS or WhatsApp.
+
+        from_number: override the adapter's default sender. Pass the tenant's
+        SMS number here for SMB replies so they come from the right number.
+        """
         if not (body or "").strip():
             logger.info("[TWILIO REPLY TO %s]: skipped (empty body)", to_number)
             return False
@@ -165,7 +169,8 @@ class TwilioAdapter:
             logger.warning("Twilio client not configured — reply not sent.")
             return False
 
-        if not self._from_number:
+        effective_from = from_number or self._from_number
+        if not effective_from:
             logger.warning("TWILIO_PHONE_NUMBER not configured — reply not sent.")
             return False
 
@@ -176,7 +181,7 @@ class TwilioAdapter:
             final_from = _ensure_whatsapp_prefix(whatsapp_from)
         else:
             final_to = _strip_whatsapp_prefix(to_number)
-            final_from = _strip_whatsapp_prefix(self._from_number)
+            final_from = _strip_whatsapp_prefix(effective_from)
 
         logger.info(
             "Sending Twilio reply via channel=%s from=%s to=%s",

@@ -110,7 +110,8 @@ def _process_smb_message(from_number: str, to_number: str, message_text: str) ->
         return
 
     try:
-        _twilio.send_reply(from_number, reply)
+        # Reply FROM the tenant's SMS number, not from Zarna's default number.
+        _twilio.send_reply(from_number, reply, from_number=to_number)
     except Exception:
         logger.exception(
             "SMB twilio send failed: to=...%s",
