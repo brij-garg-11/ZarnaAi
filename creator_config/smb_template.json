@@ -1,0 +1,25 @@
+{
+  "_note": "Template for SMB client persona configs. Copy this file to creator_config/[slug].json when onboarding a new business.",
+  "slug": "your_business_slug",
+  "display_name": "Your Business Name",
+  "business_type": "e.g. comedy_club | barbershop | wine_shop | salon",
+  "owner_phone": "+1XXXXXXXXXX",
+  "sms_keyword": "KEYWORD",
+  "tone": "e.g. fun and casual | professional and warm | energetic",
+  "value_content_topics": [
+    "topic 1",
+    "topic 2",
+    "topic 3"
+  ],
+  "signup_questions": [
+    "Question to ask subscriber at signup (preference 1)",
+    "Question to ask subscriber at signup (preference 2)"
+  ],
+  "blast_triggers": [
+    "opening",
+    "deal",
+    "discount",
+    "available",
+    "tonight"
+  ]
+}

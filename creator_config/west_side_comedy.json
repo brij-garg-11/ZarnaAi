@@ -1,0 +1,32 @@
+{
+  "_note": "Client #1 — West Side Comedy Club, New York NY. First SMB pilot. Free for 3 months to prove the model. Fill in all TBD fields once owner details are confirmed.",
+  "slug": "west_side_comedy",
+  "display_name": "West Side Comedy Club",
+  "business_type": "comedy_club",
+  "location": "New York, NY",
+  "website": "https://www.westsidecomedyclub.com",
+  "owner_phone": "TBD",
+  "sms_keyword": "TBD",
+  "tone": "fun, casual, hype — like a friend telling you about a great show in NYC",
+  "value_content_topics": [
+    "behind the scenes at the club",
+    "featured comic spotlight",
+    "comedy tips and funniest moments",
+    "what makes a great comedy show",
+    "how to get the best seats"
+  ],
+  "signup_questions": [
+    "What kind of comedy do you love most? Reply: STANDUP, IMPROV, or BOTH",
+    "How often do you want to hear from us? Reply: WEEKLY or DEALS ONLY"
+  ],
+  "blast_triggers": [
+    "opening",
+    "seats available",
+    "tonight",
+    "last minute",
+    "discount",
+    "deal",
+    "special",
+    "show"
+  ]
+}

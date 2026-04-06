@@ -200,6 +200,34 @@ _QUALITY_DIGEST_MIGRATIONS = (
     "CREATE INDEX IF NOT EXISTS idx_quality_reports_week ON ai_quality_reports(week_start DESC)",
 )
 
+# SMB (Small-Medium Business) vertical tables
+_SMB_MIGRATIONS = (
+    """
+    CREATE TABLE IF NOT EXISTS smb_subscribers (
+        id              BIGSERIAL PRIMARY KEY,
+        phone_number    TEXT        NOT NULL,
+        tenant_slug     TEXT        NOT NULL,
+        status          TEXT        NOT NULL DEFAULT 'onboarding',
+        onboarding_step INT         NOT NULL DEFAULT 0,
+        created_at      TIMESTAMPTZ DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (phone_number, tenant_slug)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_smb_subscribers_tenant ON smb_subscribers(tenant_slug, status)",
+    """
+    CREATE TABLE IF NOT EXISTS smb_preferences (
+        id              BIGSERIAL PRIMARY KEY,
+        subscriber_id   BIGINT      NOT NULL REFERENCES smb_subscribers(id) ON DELETE CASCADE,
+        question_key    TEXT        NOT NULL,
+        answer          TEXT        NOT NULL DEFAULT '',
+        answered_at     TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (subscriber_id, question_key)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_smb_preferences_subscriber ON smb_preferences(subscriber_id)",
+)
+
 
 class PostgresStorage(BaseStorage):
     """Thread-safe Postgres storage using a connection pool."""
@@ -240,6 +268,8 @@ class PostgresStorage(BaseStorage):
                     for sql in _QUIZ_MIGRATIONS:
                         cur.execute(sql)
                     for sql in _QUALITY_DIGEST_MIGRATIONS:
+                        cur.execute(sql)
+                    for sql in _SMB_MIGRATIONS:
                         cur.execute(sql)
                 # conversation_sessions lives in session_manager — ensure it exists here too
                 try:
