@@ -36,3 +36,18 @@ The bot detects it's an owner message, parses it as a blast, and sends it to rel
 - `SMB_WEST_SIDE_COMEDY_OWNER_PHONE`
 - `SMB_WEST_SIDE_COMEDY_SMS_NUMBER`
 - `SMB_WEST_SIDE_COMEDY_KEYWORD`
+- `SMB_WEST_SIDE_COMEDY_PORTAL_TOKEN` — random secret that acts as the magic-link token
+
+## Client Portal
+Once `SMB_WEST_SIDE_COMEDY_PORTAL_TOKEN` is set in Railway, share this URL with the owner:
+
+```
+https://<your-railway-domain>/portal/west_side_comedy?token=<token>
+```
+
+The portal shows:
+- Active subscriber count and onboarding funnel
+- Full blast history (date, message, delivery rate)
+- Breakdown of audience preferences from sign-up questions
+
+No login required — the token in the URL is the auth. Rotate the env var to invalidate the link.
