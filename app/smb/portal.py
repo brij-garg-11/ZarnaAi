@@ -155,82 +155,102 @@ def _render_hero(tenant, subs: dict) -> str:
     active = subs.get("active") or 0
     onboarding = subs.get("onboarding") or 0
     pct = round((active / total) * 100) if total else 0
-    bar_color = "#4ade80" if pct >= 70 else "#fbbf24" if pct >= 40 else "#f87171"
+    bar_gradient = (
+        "linear-gradient(90deg,#10b981,#059669)" if pct >= 70
+        else "linear-gradient(90deg,#f59e0b,#d97706)" if pct >= 40
+        else "linear-gradient(90deg,#ef4444,#dc2626)"
+    )
 
-    # Status badge
     if not tenant.sms_number:
-        badge = '<span class="badge badge-warn">Setup in progress</span>'
+        badge = '<span class="badge badge-warn"><span class="badge-dot"></span>Setup in progress</span>'
     elif total == 0:
-        badge = '<span class="badge badge-info">Waiting for first subscriber</span>'
+        badge = '<span class="badge badge-info"><span class="badge-dot"></span>Waiting for first subscriber</span>'
     else:
-        badge = '<span class="badge badge-live">Live</span>'
+        badge = '<span class="badge badge-live"><span class="badge-dot"></span>Live</span>'
+
+    website = tenant.raw.get("website", "")
+    website_html = (
+        f'<a href="{_esc(website)}" target="_blank" rel="noopener" class="hero-website">'
+        f'{_esc(website.replace("https://", "").rstrip("/"))}</a>'
+    ) if website else ""
 
     return f"""
-    <header class="hero">
-      <div class="hero-inner">
-        <div class="hero-icon">{_esc(tenant.display_name[0].upper())}</div>
-        <div class="hero-text">
-          <div class="hero-name">{_esc(tenant.display_name)}</div>
-          <div class="hero-meta">
-            {_esc(tenant.business_type.replace("_", " ").title())}
-            &nbsp;·&nbsp;
-            {_esc(tenant.raw.get("location", ""))}
-            &nbsp;&nbsp;{badge}
+    <div class="hero">
+      <div class="hero-card">
+        <div class="hero-left">
+          <div class="hero-icon">{_esc(tenant.display_name[0].upper())}</div>
+          <div>
+            <div class="hero-name">{_esc(tenant.display_name)}</div>
+            <div class="hero-meta">
+              {_esc(tenant.business_type.replace("_", " ").title())}
+              &nbsp;·&nbsp;
+              {_esc(tenant.raw.get("location", ""))}
+            </div>
+            {website_html}
           </div>
         </div>
+        <div>{badge}</div>
       </div>
-    </header>
+    </div>
 
-    <section class="stats-strip">
-      <div class="stat-tile">
-        <div class="stat-num">{active:,}</div>
+    <div class="stats-strip">
+      <div class="stat-tile c-indigo">
+        <div class="stat-icon">👥</div>
+        <div class="stat-num c-indigo">{active:,}</div>
         <div class="stat-lbl">Active subscribers</div>
       </div>
-      <div class="stat-tile">
-        <div class="stat-num accent-purple">{onboarding:,}</div>
+      <div class="stat-tile c-violet">
+        <div class="stat-icon">⏳</div>
+        <div class="stat-num c-violet">{onboarding:,}</div>
         <div class="stat-lbl">Finishing sign-up</div>
       </div>
-      <div class="stat-tile">
-        <div class="stat-num accent-teal">{total:,}</div>
+      <div class="stat-tile c-teal">
+        <div class="stat-icon">📋</div>
+        <div class="stat-num c-teal">{total:,}</div>
         <div class="stat-lbl">Total sign-ups</div>
       </div>
-      <div class="stat-tile">
-        <div class="stat-num accent-amber">{pct}%</div>
+      <div class="stat-tile c-amber">
+        <div class="stat-icon">✅</div>
+        <div class="stat-num c-amber">{pct}%</div>
         <div class="stat-lbl">Completion rate</div>
       </div>
-    </section>
+    </div>
 
-    <section class="card">
-      <div class="card-title">Sign-up funnel</div>
-      <div class="funnel-wrap">
+    <div class="section">
+      <div class="card">
+        <div class="card-title">Sign-up funnel</div>
         <div class="funnel-labels">
-          <span>Signed up · {total:,}</span>
-          <span>Completed · {active:,}</span>
+          <span>{total:,} people texted in</span>
+          <span>{active:,} fully enrolled</span>
         </div>
         <div class="funnel-track">
-          <div class="funnel-fill" style="width:{pct}%;background:{bar_color}"></div>
+          <div class="funnel-fill" style="width:{pct}%;background:{bar_gradient}"></div>
         </div>
         <div class="funnel-sub">
-          {pct}% of people who texted in finished the sign-up questions.
-          {f'First sign-up {_fmt_dt(subs.get("first_signup"))} · latest {_fmt_dt(subs.get("last_signup"))}.' if total else ''}
+          {pct}% of sign-ups completed all onboarding questions.
+          {f'&nbsp;First sign-up <strong>{_fmt_dt(subs.get("first_signup"))}</strong> · most recent <strong>{_fmt_dt(subs.get("last_signup"))}</strong>.' if total else ' Share your sign-up keyword to start growing your list.'}
         </div>
       </div>
-    </section>"""
+    </div>"""
 
 
 def _render_blasts(blasts: list) -> str:
     if not blasts:
         return """
-        <section class="card">
-          <div class="card-title">Blast history</div>
-          <div class="empty-state">
-            <div class="empty-icon">📢</div>
-            <div class="empty-msg">No blasts sent yet.</div>
-            <div class="empty-sub">Text your business number with a message like<br>
-              <em>"Seats available tonight at 8pm — come through!"</em><br>
-              and it will go out to all your subscribers instantly.</div>
+        <div class="section">
+          <div class="card">
+            <div class="card-title">Blast history</div>
+            <div class="empty-state">
+              <div class="empty-icon">📢</div>
+              <div class="empty-msg">No blasts sent yet</div>
+              <div class="empty-sub">
+                Text your business number with something like<br>
+                <em>"Seats available tonight at 8pm — come through!"</em><br>
+                and it goes out to all your subscribers instantly.
+              </div>
+            </div>
           </div>
-        </section>"""
+        </div>"""
 
     total_sent = sum(b.get("attempted") or 0 for b in blasts)
     total_ok = sum(b.get("succeeded") or 0 for b in blasts)
@@ -241,58 +261,67 @@ def _render_blasts(blasts: list) -> str:
         attempted = b.get("attempted") or 0
         succeeded = b.get("succeeded") or 0
         rate = round((succeeded / attempted) * 100) if attempted else 0
-        rate_color = "#4ade80" if rate >= 90 else "#fbbf24" if rate >= 70 else "#f87171"
-        msg = b.get("body") or b.get("owner_message") or ""
+        rate_cls = "rate-green" if rate >= 90 else "rate-yellow" if rate >= 70 else "rate-red"
+        sent_msg = b.get("body") or b.get("owner_message") or ""
+        owner_msg = b.get("owner_message") or ""
         rows.append(f"""
           <tr>
             <td class="td-date">{_fmt_dt_full(b.get("sent_at"))}</td>
-            <td class="td-msg" title="{_esc(msg)}">{_esc(msg[:100])}{"…" if len(msg) > 100 else ""}</td>
+            <td class="td-msg">
+              {_esc(sent_msg[:90])}{"…" if len(sent_msg) > 90 else ""}
+              {f'<small>Owner sent: {_esc(owner_msg[:60])}{"…" if len(owner_msg) > 60 else ""}</small>' if owner_msg and owner_msg != sent_msg else ""}
+            </td>
             <td class="td-num">{attempted:,}</td>
-            <td class="td-rate" style="color:{rate_color}">{rate}%</td>
+            <td class="td-rate"><span class="rate-pill {rate_cls}">{rate}%</span></td>
           </tr>""")
 
     return f"""
-    <section class="card">
-      <div class="card-header-row">
-        <div class="card-title">Blast history</div>
-        <div class="card-meta">{len(blasts)} blasts · {total_sent:,} total sends · {overall_rate}% avg delivery</div>
+    <div class="section">
+      <div class="card">
+        <div class="card-header-row">
+          <div class="card-title">Blast history</div>
+          <div class="card-meta">{len(blasts)} blasts &nbsp;·&nbsp; {total_sent:,} sends &nbsp;·&nbsp; {overall_rate}% avg delivery</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Message</th>
+                <th style="text-align:right">Sent to</th>
+                <th style="text-align:right">Delivered</th>
+              </tr>
+            </thead>
+            <tbody>
+              {"".join(rows)}
+            </tbody>
+          </table>
+        </div>
       </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Message</th>
-              <th>Sent to</th>
-              <th>Delivered</th>
-            </tr>
-          </thead>
-          <tbody>
-            {"".join(rows)}
-          </tbody>
-        </table>
-      </div>
-    </section>"""
+    </div>"""
 
 
 def _render_preferences(prefs: dict, signup_questions: list) -> str:
     if not prefs:
         return """
-        <section class="card">
-          <div class="card-title">Audience preferences</div>
-          <div class="empty-state">
-            <div class="empty-icon">🎯</div>
-            <div class="empty-msg">No preference data yet.</div>
-            <div class="empty-sub">Once subscribers answer your sign-up questions,<br>
-              you'll see a breakdown of their preferences here.</div>
+        <div class="section">
+          <div class="card">
+            <div class="card-title">Audience preferences</div>
+            <div class="empty-state">
+              <div class="empty-icon">🎯</div>
+              <div class="empty-msg">No preference data yet</div>
+              <div class="empty-sub">
+                Once your subscribers answer the sign-up questions,
+                you'll see a breakdown of their preferences here —
+                like which types of content they want and how often.
+              </div>
+            </div>
           </div>
-        </section>"""
+        </div>"""
 
-    # Map question key → question text from config
     q_label_map = {}
     for q in signup_questions:
         if isinstance(q, str):
-            # Use first 6 words as label, key is the full string normalised
             key = q.lower().replace(" ", "_")[:40]
             q_label_map[key] = q
         elif isinstance(q, dict):
@@ -312,23 +341,25 @@ def _render_preferences(prefs: dict, signup_questions: list) -> str:
                 <div class="pref-bar-wrap">
                   <div class="pref-bar" style="width:{pct}%"></div>
                 </div>
-                <div class="pref-pct">{pct}%&nbsp;<span class="pref-cnt">({a["cnt"]:,})</span></div>
+                <div class="pref-pct">{pct}% <span class="pref-cnt">({a["cnt"]:,})</span></div>
               </div>""")
 
         blocks.append(f"""
           <div class="pref-block">
             <div class="pref-q">{_esc(label)}</div>
             {"".join(bars)}
-            <div class="pref-total">{total_q:,} responses</div>
+            <div class="pref-total">Based on {total_q:,} response{"s" if total_q != 1 else ""}</div>
           </div>""")
 
     return f"""
-    <section class="card">
-      <div class="card-title">Audience preferences</div>
-      <div class="pref-grid">
-        {"".join(blocks)}
+    <div class="section">
+      <div class="card">
+        <div class="card-title">Audience preferences</div>
+        <div class="pref-grid">
+          {"".join(blocks)}
+        </div>
       </div>
-    </section>"""
+    </div>"""
 
 
 # ---------------------------------------------------------------------------
@@ -336,125 +367,229 @@ def _render_preferences(prefs: dict, signup_questions: list) -> str:
 # ---------------------------------------------------------------------------
 
 _CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html { font-size: 16px; }
+html { font-size: 16px; -webkit-font-smoothing: antialiased; }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: #060912;
-  color: #e2e8f0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #f3f4f6;
+  color: #111827;
   min-height: 100vh;
-  padding-bottom: 60px;
+  padding-bottom: 80px;
 }
 
-/* ── header ── */
+/* ── topbar ── */
 .topbar {
-  background: #0d1117;
-  border-bottom: 1px solid #1a2035;
-  padding: 14px 24px;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 0 32px;
+  height: 56px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
-.topbar-brand { font-size: 13px; color: #4b5563; letter-spacing: 0.08em; text-transform: uppercase; }
-.topbar-powered { font-size: 12px; color: #374151; }
-.topbar-powered span { color: #4ade80; }
+.topbar-brand {
+  font-size: 13px; font-weight: 600; color: #6b7280;
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+.topbar-powered { font-size: 12px; color: #9ca3af; display: flex; align-items: center; gap: 5px; }
+.topbar-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #10b981; display: inline-block;
+}
 
 /* ── hero ── */
-.hero { padding: 32px 24px 0; max-width: 860px; margin: 0 auto; }
-.hero-inner { display: flex; align-items: center; gap: 18px; }
-.hero-icon {
-  width: 56px; height: 56px; border-radius: 14px;
-  background: linear-gradient(135deg, #1d4ed8 0%, #7c3aed 100%);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 24px; font-weight: 800; color: #fff; flex-shrink: 0;
+.hero { padding: 36px 32px 0; max-width: 900px; margin: 0 auto; }
+.hero-card {
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.06), 0 4px 16px rgba(0,0,0,.04);
+  padding: 28px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
 }
-.hero-name { font-size: 26px; font-weight: 700; color: #f8fafc; line-height: 1.2; }
-.hero-meta { font-size: 13px; color: #6b7280; margin-top: 4px; }
+.hero-left { display: flex; align-items: center; gap: 18px; }
+.hero-icon {
+  width: 60px; height: 60px; border-radius: 14px;
+  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 26px; font-weight: 800; color: #fff; flex-shrink: 0;
+  box-shadow: 0 4px 12px rgba(79,70,229,.3);
+}
+.hero-name { font-size: 22px; font-weight: 800; color: #111827; line-height: 1.2; }
+.hero-meta { font-size: 13px; color: #9ca3af; margin-top: 4px; }
+.hero-website { font-size: 12px; color: #6366f1; text-decoration: none; margin-top: 3px; display: inline-block; }
+.hero-website:hover { text-decoration: underline; }
 
 /* badges */
 .badge {
-  display: inline-block; padding: 2px 8px; border-radius: 20px;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 20px;
   font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
   text-transform: uppercase;
 }
-.badge-live    { background: #052e16; color: #4ade80; border: 1px solid #166534; }
-.badge-warn    { background: #1c1917; color: #fbbf24; border: 1px solid #78350f; }
-.badge-info    { background: #0c1a3a; color: #60a5fa; border: 1px solid #1e3a6e; }
+.badge-dot { width: 6px; height: 6px; border-radius: 50%; }
+.badge-live { background: #d1fae5; color: #065f46; }
+.badge-live .badge-dot { background: #10b981; }
+.badge-warn { background: #fef3c7; color: #92400e; }
+.badge-warn .badge-dot { background: #f59e0b; }
+.badge-info { background: #dbeafe; color: #1e40af; }
+.badge-info .badge-dot { background: #3b82f6; }
 
 /* ── stat strip ── */
 .stats-strip {
   display: grid; grid-template-columns: repeat(4, 1fr);
-  gap: 12px; padding: 24px 24px 0; max-width: 860px; margin: 0 auto;
+  gap: 16px; padding: 20px 32px 0; max-width: 900px; margin: 0 auto;
 }
 .stat-tile {
-  background: #0d1117; border: 1px solid #1a2035; border-radius: 12px;
-  padding: 18px 16px; text-align: center;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.06), 0 2px 8px rgba(0,0,0,.03);
+  padding: 20px 20px 18px;
+  border-top: 3px solid transparent;
 }
-.stat-num { font-size: 28px; font-weight: 800; color: #f8fafc; line-height: 1; }
-.stat-lbl { font-size: 11px; color: #4b5563; margin-top: 6px; text-transform: uppercase; letter-spacing: 0.06em; }
-.accent-purple { color: #a78bfa; }
-.accent-teal   { color: #34d399; }
-.accent-amber  { color: #fbbf24; }
+.stat-tile.c-indigo { border-color: #6366f1; }
+.stat-tile.c-violet { border-color: #8b5cf6; }
+.stat-tile.c-teal   { border-color: #14b8a6; }
+.stat-tile.c-amber  { border-color: #f59e0b; }
+.stat-icon { font-size: 18px; margin-bottom: 10px; }
+.stat-num { font-size: 32px; font-weight: 800; color: #111827; line-height: 1; letter-spacing: -0.02em; }
+.stat-num.c-indigo { color: #4f46e5; }
+.stat-num.c-violet { color: #7c3aed; }
+.stat-num.c-teal   { color: #0d9488; }
+.stat-num.c-amber  { color: #d97706; }
+.stat-lbl { font-size: 12px; font-weight: 500; color: #6b7280; margin-top: 6px; }
+
+/* ── section wrapper ── */
+.section { padding: 20px 32px 0; max-width: 900px; margin: 0 auto; }
 
 /* ── cards ── */
 .card {
-  background: #0d1117; border: 1px solid #1a2035; border-radius: 14px;
-  padding: 24px; margin: 16px auto 0; max-width: 860px;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.06), 0 2px 8px rgba(0,0,0,.03);
+  padding: 28px 28px;
 }
-.card-title { font-size: 14px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 18px; }
-.card-header-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 18px; flex-wrap: wrap; gap: 8px; }
-.card-meta { font-size: 12px; color: #4b5563; }
+.card + .card { margin-top: 16px; }
+.card-title {
+  font-size: 13px; font-weight: 700; color: #6b7280;
+  text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 20px;
+}
+.card-header-row {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 20px; flex-wrap: wrap; gap: 8px;
+}
+.card-meta {
+  font-size: 12px; font-weight: 500; color: #9ca3af;
+  background: #f9fafb; padding: 4px 10px; border-radius: 20px;
+}
 
 /* ── funnel ── */
-.funnel-wrap { }
-.funnel-labels { display: flex; justify-content: space-between; font-size: 12px; color: #6b7280; margin-bottom: 8px; }
-.funnel-track { background: #1f2937; border-radius: 6px; height: 10px; overflow: hidden; }
-.funnel-fill { height: 100%; border-radius: 6px; transition: width 0.5s ease; }
-.funnel-sub { font-size: 12px; color: #4b5563; margin-top: 10px; line-height: 1.5; }
+.funnel-labels {
+  display: flex; justify-content: space-between;
+  font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 10px;
+}
+.funnel-labels span:last-child { color: #6b7280; }
+.funnel-track {
+  background: #f3f4f6; border-radius: 8px; height: 12px;
+  overflow: hidden; box-shadow: inset 0 1px 2px rgba(0,0,0,.06);
+}
+.funnel-fill { height: 100%; border-radius: 8px; }
+.funnel-sub {
+  font-size: 13px; color: #9ca3af; margin-top: 12px; line-height: 1.6;
+}
 
 /* ── blast table ── */
-.table-wrap { overflow-x: auto; }
+.table-wrap { overflow-x: auto; margin: 0 -4px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
-thead tr { border-bottom: 1px solid #1f2937; }
-th { color: #4b5563; font-weight: 600; padding: 8px 12px; text-align: left; white-space: nowrap; }
-td { padding: 12px 12px; border-bottom: 1px solid #111827; color: #9ca3af; vertical-align: middle; }
+thead tr { border-bottom: 2px solid #f3f4f6; }
+th {
+  color: #9ca3af; font-weight: 600; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.06em; padding: 0 12px 12px; text-align: left; white-space: nowrap;
+}
+td { padding: 14px 12px; border-bottom: 1px solid #f9fafb; color: #374151; vertical-align: middle; }
 tr:last-child td { border-bottom: none; }
-.td-date { white-space: nowrap; font-size: 12px; color: #4b5563; width: 1px; padding-right: 20px; }
-.td-msg  { color: #d1d5db; max-width: 360px; }
-.td-num  { text-align: right; width: 80px; color: #6b7280; }
-.td-rate { text-align: right; width: 80px; font-weight: 700; }
+tbody tr:hover td { background: #fafafa; }
+.td-date { white-space: nowrap; font-size: 12px; color: #9ca3af; width: 1px; padding-right: 24px; }
+.td-msg  { color: #111827; font-weight: 500; max-width: 380px; }
+.td-msg small { display: block; font-size: 11px; color: #9ca3af; font-weight: 400; margin-top: 2px; }
+.td-num  { text-align: right; width: 80px; color: #6b7280; font-variant-numeric: tabular-nums; }
+.td-rate { text-align: right; width: 90px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.rate-pill {
+  display: inline-block; padding: 2px 8px; border-radius: 20px;
+  font-size: 12px; font-weight: 700;
+}
+.rate-green  { background: #d1fae5; color: #065f46; }
+.rate-yellow { background: #fef3c7; color: #92400e; }
+.rate-red    { background: #fee2e2; color: #991b1b; }
 
 /* ── preferences ── */
-.pref-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 28px; }
+.pref-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 32px; }
 .pref-block { }
-.pref-q { font-size: 13px; color: #e2e8f0; font-weight: 600; margin-bottom: 14px; line-height: 1.4; }
-.pref-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.pref-label { font-size: 12px; color: #9ca3af; width: 90px; flex-shrink: 0; }
-.pref-bar-wrap { flex: 1; background: #1f2937; border-radius: 4px; height: 8px; overflow: hidden; }
-.pref-bar { height: 100%; background: linear-gradient(90deg, #34d399, #059669); border-radius: 4px; transition: width 0.4s ease; }
-.pref-pct { font-size: 12px; color: #6b7280; width: 70px; text-align: right; white-space: nowrap; }
-.pref-cnt { color: #374151; }
-.pref-total { font-size: 11px; color: #374151; margin-top: 6px; text-align: right; }
+.pref-q {
+  font-size: 13px; font-weight: 700; color: #374151;
+  margin-bottom: 16px; line-height: 1.4; padding-bottom: 10px;
+  border-bottom: 1px solid #f3f4f6;
+}
+.pref-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.pref-label { font-size: 12px; font-weight: 600; color: #374151; width: 100px; flex-shrink: 0; }
+.pref-bar-wrap {
+  flex: 1; background: #f3f4f6; border-radius: 6px; height: 8px;
+  overflow: hidden;
+}
+.pref-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  border-radius: 6px;
+}
+.pref-pct { font-size: 12px; font-weight: 700; color: #374151; width: 36px; text-align: right; }
+.pref-cnt { font-size: 11px; color: #9ca3af; font-weight: 400; }
+.pref-total {
+  font-size: 11px; color: #9ca3af; margin-top: 4px;
+  display: flex; align-items: center; gap: 4px;
+}
 
 /* ── empty states ── */
-.empty-state { text-align: center; padding: 36px 24px; }
-.empty-icon { font-size: 36px; margin-bottom: 12px; }
-.empty-msg { font-size: 15px; font-weight: 600; color: #6b7280; margin-bottom: 8px; }
-.empty-sub { font-size: 13px; color: #374151; line-height: 1.6; }
+.empty-state {
+  text-align: center; padding: 48px 24px;
+  border: 1.5px dashed #e5e7eb; border-radius: 12px;
+}
+.empty-icon { font-size: 32px; margin-bottom: 14px; opacity: .7; }
+.empty-msg { font-size: 15px; font-weight: 700; color: #374151; margin-bottom: 8px; }
+.empty-sub { font-size: 13px; color: #9ca3af; line-height: 1.7; max-width: 340px; margin: 0 auto; }
+.empty-sub em { color: #6b7280; font-style: normal; font-weight: 500; }
+
+/* ── divider ── */
+.divider { height: 1px; background: #f3f4f6; margin: 20px 0; }
 
 /* ── footer ── */
 .footer {
-  text-align: center; font-size: 12px; color: #1f2937;
-  padding: 40px 24px 0; max-width: 860px; margin: 0 auto;
+  text-align: center; font-size: 12px; color: #d1d5db;
+  padding: 40px 32px 0; max-width: 900px; margin: 0 auto;
 }
+.footer a { color: #9ca3af; text-decoration: none; }
+.footer a:hover { color: #6b7280; }
 
 /* ── mobile ── */
-@media (max-width: 600px) {
-  .stats-strip { grid-template-columns: repeat(2, 1fr); }
-  .card { padding: 18px 16px; border-radius: 10px; }
-  .hero-name { font-size: 20px; }
+@media (max-width: 640px) {
+  .topbar { padding: 0 16px; }
+  .hero { padding: 20px 16px 0; }
+  .hero-card { padding: 20px; }
+  .stats-strip { grid-template-columns: repeat(2, 1fr); gap: 10px; padding: 14px 16px 0; }
+  .section { padding: 14px 16px 0; }
+  .card { padding: 20px 18px; }
+  .hero-name { font-size: 18px; }
+  .stat-num { font-size: 26px; }
   .pref-grid { grid-template-columns: 1fr; }
   .td-date { display: none; }
+  .hero-card { flex-direction: column; align-items: flex-start; }
 }
 """
 
@@ -474,13 +609,18 @@ def _render_page(tenant, data: dict, token: str) -> str:
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{_esc(tenant.display_name)} — Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <style>{_CSS}</style>
 </head>
 <body>
 
 <div class="topbar">
   <div class="topbar-brand">Client Dashboard</div>
-  <div class="topbar-powered">Powered by <span>Zarna AI</span></div>
+  <div class="topbar-powered">
+    <span class="topbar-dot"></span>
+    Powered by Zarna AI
+  </div>
 </div>
 
 {hero_html}
@@ -488,8 +628,8 @@ def _render_page(tenant, data: dict, token: str) -> str:
 {pref_html}
 
 <div class="footer">
-  Data refreshes each time you load this page.
-  Share this link only with people you trust — it gives read access to your subscriber stats.
+  Data refreshes every time you load this page &nbsp;·&nbsp;
+  Keep this link private — it provides read access to your subscriber stats.
 </div>
 
 </body>
@@ -504,12 +644,17 @@ def _render_error(code: int, headline: str, detail: str) -> tuple:
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{code} — Client Portal</title>
   <style>
-    body {{ font-family: -apple-system, sans-serif; background:#060912; color:#6b7280;
-           display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; }}
-    .box {{ text-align:center; padding:40px; }}
-    .code {{ font-size:64px; font-weight:800; color:#1f2937; line-height:1; }}
-    .msg  {{ font-size:18px; color:#4b5563; margin-top:12px; }}
-    .sub  {{ font-size:13px; color:#1f2937; margin-top:8px; }}
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           background: #f3f4f6; color: #374151;
+           display: flex; align-items: center; justify-content: center;
+           min-height: 100vh; margin: 0; }}
+    .box {{ text-align: center; padding: 40px; max-width: 360px; }}
+    .code {{
+      font-size: 72px; font-weight: 800; color: #e5e7eb; line-height: 1;
+      letter-spacing: -0.04em;
+    }}
+    .msg  {{ font-size: 17px; font-weight: 700; color: #374151; margin-top: 16px; }}
+    .sub  {{ font-size: 13px; color: #9ca3af; margin-top: 8px; line-height: 1.6; }}
   </style>
 </head>
 <body>
