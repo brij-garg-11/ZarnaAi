@@ -68,18 +68,25 @@ def _fetch_logo_b64(logo_url: str):
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = resp.read()
 
-        img = Image.open(io.BytesIO(data)).convert("RGB")
+        img = Image.open(io.BytesIO(data)).convert("RGBA")
 
-        # Centre-crop to square then resize to 300×300
-        w, h = img.size
-        side = min(w, h)
-        left = (w - side) // 2
-        top = (h - side) // 2
-        img = img.crop((left, top, left + side, top + side))
-        img = img.resize((300, 300), Image.LANCZOS)
+        # iOS contact photo is a circle — put the logo on a white square canvas
+        # with 15% padding on each side so nothing gets clipped by the circle crop.
+        canvas_size = 300
+        padding_pct = 0.15
+        logo_size = int(canvas_size * (1 - 2 * padding_pct))  # 255px
+
+        # Resize logo to fit within logo_size × logo_size, preserving aspect ratio
+        img.thumbnail((logo_size, logo_size), Image.LANCZOS)
+        lw, lh = img.size
+
+        canvas = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
+        offset_x = (canvas_size - lw) // 2
+        offset_y = (canvas_size - lh) // 2
+        canvas.paste(img, (offset_x, offset_y), mask=img.split()[3] if img.mode == "RGBA" else None)
 
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=85)
+        canvas.save(buf, format="JPEG", quality=85)
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         return "image/jpeg", b64
 
