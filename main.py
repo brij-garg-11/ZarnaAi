@@ -405,6 +405,21 @@ def twilio_webhook():
         logging.info("Duplicate Twilio webhook ignored (MessageSid=%s)", message_sid)
         return ("", 204)
 
+    # Hard firewall: if this message was addressed to an SMB tenant number it must
+    # be handled exclusively by /smb/twilio/webhook — never by Zarna's brain.
+    _to_number = form_data.get("To", "")
+    try:
+        from app.smb.tenants import get_registry as _smb_registry
+        if _smb_registry().is_smb_number(_to_number):
+            logging.warning(
+                "Zarna webhook received message addressed to SMB number ...%s — dropping. "
+                "Check Twilio webhook config for that number.",
+                _to_number[-4:] if _to_number else "?",
+            )
+            return ("", 204)
+    except Exception:
+        logging.exception("SMB firewall check failed — continuing with Zarna handler")
+
     raw_from, raw_body = twilio.peek_inbound(form_data)
     signup_res = LiveShowSignupResult()
     if raw_from and raw_body:

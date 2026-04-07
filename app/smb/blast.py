@@ -332,16 +332,32 @@ def _run_blast_async(
 
 
 def _twilio_send_smb(to: str, body: str, from_number: str) -> bool:
-    """Send a single SMS via Twilio from the tenant's dedicated number."""
+    """
+    Send a single SMS via Twilio from the tenant's dedicated number.
+
+    Hard guard: refuses to send if from_number is not a registered SMB tenant
+    number, preventing accidental blasts from Zarna's number or any other number.
+    """
+    if not from_number:
+        logger.error("SMB blast: tenant has no sms_number configured — refusing to send")
+        return False
+
+    # Firewall: only send from a number that belongs to an SMB tenant.
+    from app.smb.tenants import get_registry
+    if not get_registry().is_smb_number(from_number):
+        logger.error(
+            "SMB blast: from_number ...%s is not a registered SMB number — "
+            "refusing to send. This is a routing bug.",
+            from_number[-4:],
+        )
+        return False
+
     try:
         from twilio.rest import Client
         from app.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
 
         if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
             logger.error("SMB blast: Twilio credentials not configured")
-            return False
-        if not from_number:
-            logger.error("SMB blast: tenant has no sms_number configured")
             return False
 
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)

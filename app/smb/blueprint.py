@@ -77,6 +77,17 @@ def smb_twilio_webhook():
         logger.info("SMB webhook: missing From or Body — ignored")
         return ("", 204)
 
+    # Hard firewall: only process messages addressed to a known SMB number.
+    # Anything addressed to Zarna's number or an unknown number is dropped here.
+    from app.smb.tenants import get_registry as _smb_registry
+    if not _smb_registry().is_smb_number(to_number):
+        logger.warning(
+            "SMB webhook received message addressed to non-SMB number ...%s — dropping. "
+            "Check Twilio webhook config for that number.",
+            to_number[-4:] if to_number else "?",
+        )
+        return ("", 204)
+
     # Fire-and-forget so Twilio gets its 204 within the 15-second window
     threading.Thread(
         target=_process_smb_message,

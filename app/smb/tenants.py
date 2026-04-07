@@ -125,6 +125,10 @@ class TenantRegistry:
     def all_tenants(self) -> list[BusinessTenant]:
         return list(self._by_slug.values())
 
+    def is_smb_number(self, phone: str) -> bool:
+        """Return True if *phone* is the inbound SMS number of any registered SMB tenant."""
+        return phone in self._by_sms_number
+
 
 # Module-level singleton — loaded once at startup, shared across all requests.
 _registry: Optional[TenantRegistry] = None
