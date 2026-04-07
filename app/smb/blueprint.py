@@ -18,7 +18,7 @@ import logging
 import os
 import threading
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from app.messaging.twilio_adapter import create_twilio_adapter
 from app.smb.brain import create_smb_brain
@@ -39,6 +39,36 @@ _twilio = create_twilio_adapter()
 @smb_bp.route("/health", methods=["GET"])
 def smb_health():
     return jsonify({"status": "ok", "service": "smb"})
+
+
+# ---------------------------------------------------------------------------
+# vCard endpoint — used for MMS contact-save on subscriber signup
+# ---------------------------------------------------------------------------
+
+@smb_bp.route("/vcard/<slug>.vcf", methods=["GET"])
+def smb_vcard(slug: str):
+    """
+    Serve a vCard for a tenant so subscribers can save the business
+    as a contact with one tap. Linked in an MMS sent on first signup.
+    """
+    from app.smb.tenants import get_registry
+    tenant = get_registry().get_by_slug(slug)
+    if tenant is None:
+        return ("Not found", 404)
+
+    lines = [
+        "BEGIN:VCARD",
+        "VERSION:3.0",
+        f"FN:{tenant.display_name}",
+        f"ORG:{tenant.display_name}",
+    ]
+    if tenant.sms_number:
+        lines.append(f"TEL;TYPE=CELL:{tenant.sms_number}")
+    lines.append("END:VCARD")
+
+    vcf = "\r\n".join(lines) + "\r\n"
+    return Response(vcf, mimetype="text/vcard",
+                    headers={"Content-Disposition": f'attachment; filename="{slug}.vcf"'})
 
 
 # ---------------------------------------------------------------------------

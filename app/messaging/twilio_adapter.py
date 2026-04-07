@@ -154,14 +154,21 @@ class TwilioAdapter:
     # Outbound
     # ------------------------------------------------------------------
 
-    def send_reply(self, to_number: str, body: str, from_number: Optional[str] = None) -> bool:
+    def send_reply(
+        self,
+        to_number: str,
+        body: str,
+        from_number: Optional[str] = None,
+        media_url: Optional[str] = None,
+    ) -> bool:
         """Send an outbound reply via Twilio SMS or WhatsApp.
 
         from_number: override the adapter's default sender. Pass the tenant's
         SMS number here for SMB replies so they come from the right number.
+        media_url: optional public URL for MMS attachment (e.g. a vCard .vcf).
         """
-        if not (body or "").strip():
-            logger.info("[TWILIO REPLY TO %s]: skipped (empty body)", to_number)
+        if not (body or "").strip() and not media_url:
+            logger.info("[TWILIO REPLY TO %s]: skipped (empty body and no media)", to_number)
             return False
         logger.info("[TWILIO REPLY TO %s]: %s", to_number, body)
 
@@ -190,13 +197,13 @@ class TwilioAdapter:
             final_to,
         )
 
+        create_kwargs: dict = {"to": final_to, "from_": final_from, "body": body}
+        if media_url:
+            create_kwargs["media_url"] = [media_url]
+
         for attempt in range(3):
             try:
-                msg = self._client.messages.create(
-                    to=final_to,
-                    from_=final_from,
-                    body=body,
-                )
+                msg = self._client.messages.create(**create_kwargs)
                 logger.info("Twilio reply sent: SID=%s", msg.sid)
                 return True
             except TwilioRestException as e:

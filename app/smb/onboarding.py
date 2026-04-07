@@ -17,6 +17,8 @@ or None if it should be handled by the main SMB brain instead.
 """
 
 import logging
+import os
+import threading
 from typing import Optional
 
 from app.admin_auth import get_db_connection
@@ -71,6 +73,12 @@ def get_onboarding_reply(
                         "SMB new subscriber: tenant=%s phone=...%s",
                         tenant.slug, phone_number[-4:] if phone_number else "?",
                     )
+                    # Send vCard as a follow-up MMS so they can save the contact
+                    threading.Thread(
+                        target=_send_vcard_mms,
+                        args=(phone_number, tenant),
+                        daemon=True,
+                    ).start()
                 return _welcome_and_question(tenant)
 
             # step == 0 means signed up but hasn't answered the preference question yet
@@ -218,6 +226,44 @@ def _classify_answer(answer: str, tenant: BusinessTenant) -> dict:
 
     # Fallback: save raw answer
     return {"0": answer.strip()}
+
+
+def _send_vcard_mms(phone_number: str, tenant: BusinessTenant) -> None:
+    """
+    Send the tenant vCard as a follow-up MMS so the subscriber can save
+    the business as a named contact with one tap.
+    Requires RAILWAY_PUBLIC_DOMAIN to build the absolute URL.
+    """
+    domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    if not domain:
+        logger.warning("SMB vcard: RAILWAY_PUBLIC_DOMAIN not set — skipping vCard MMS")
+        return
+    if not domain.startswith("http"):
+        domain = f"https://{domain}"
+
+    vcard_url = f"{domain}/smb/vcard/{tenant.slug}.vcf"
+
+    try:
+        from twilio.rest import Client
+        from app.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
+
+        if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not tenant.sms_number:
+            logger.warning("SMB vcard: Twilio credentials or sms_number not set — skipping")
+            return
+
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        msg = client.messages.create(
+            to=phone_number,
+            from_=tenant.sms_number,
+            body=f"Tap to save {tenant.display_name} to your contacts.",
+            media_url=[vcard_url],
+        )
+        logger.info("SMB vcard sent: to=...%s SID=%s", phone_number[-4:], msg.sid)
+    except Exception:
+        logger.warning(
+            "SMB vcard: failed to send to ...%s", phone_number[-4:] if phone_number else "?",
+            exc_info=True,
+        )
 
 
 def _completion_message(tenant: BusinessTenant, classified: dict) -> str:
