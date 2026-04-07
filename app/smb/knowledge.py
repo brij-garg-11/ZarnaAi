@@ -161,6 +161,8 @@ def build_context(tenant, message: str) -> str:  # noqa: ARG001  message unused 
         tonight_line,
         f"Food & drinks: {kb.get('food_and_drinks', '')}",
         f"Policies: {kb.get('policies', '')}",
+        f"Ticket support (lost / missing tickets): {kb.get('ticket_support', '')}",
+        f"Cancellation policy: {kb.get('cancellation_policy', '')}",
         f"Private events: {kb.get('private_events', '')}",
         f"Notable performers: {kb.get('notable_performers', '')}",
     ]

@@ -41,7 +41,10 @@
     "calendar_url": "https://www.westsidecomedyclub.com/calendar",
     "ticket_info": "For official pricing and to grab tickets: westsidecomedyclub.com",
     "food_and_drinks": "Full dinner menu with Mexican fare and cocktails, including our famous margaritas.",
-    "policies": "Ages 16+ with a guardian, 18+ without. Smart casual dress — no formal dress code. Two-item minimum per person.",
+    "policies": "Ages 16+ with a guardian, 18+ without. Smart casual dress — no formal dress code. Two-item minimum per person. No refunds or exchanges — all ticket sales are final. If West Side Comedy Club cancels or significantly changes a show, they will offer a refund or transfer.",
+    "_ticket_support_note": "TODO: ask owner if guests can self-serve lost tickets from the website — if yes, add the link to ticket_support below",
+    "ticket_support": "Can't find your tickets or never got a confirmation email? Email bookingswestsidecomedy@gmail.com and they'll look it up for you.",
+    "cancellation_policy": "Tickets are non-refundable. If you genuinely can't make it, email bookingswestsidecomedy@gmail.com — they'll do their best to help (credits to a future show are sometimes possible). For sold-out shows, letting them know frees up your seat for someone on the waitlist.",
     "private_events": "Yes! For private events, group bookings, or buyouts contact us through westsidecomedyclub.com. Great for birthdays, corporate events, and private parties.",
     "notable_performers": "Past performers include Bill Burr, Ronnie Chieng, Jessica Kirson, and more top national talent mixed with exciting up-and-comers."
   },
