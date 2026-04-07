@@ -54,7 +54,11 @@ def _fetch_logo_b64(logo_url: str):
     try:
         import base64
         import urllib.request
-        with urllib.request.urlopen(logo_url, timeout=5) as resp:
+        req = urllib.request.Request(
+            logo_url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; SMBVCard/1.0)"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
             data = resp.read()
             content_type = resp.headers.get_content_type() or "image/jpeg"
             return content_type, base64.b64encode(data).decode("ascii")
