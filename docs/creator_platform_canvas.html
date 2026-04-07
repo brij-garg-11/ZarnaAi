@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Creator Platform — Operator Guide</title>
+  <style>
+    :root {
+      --bg: #0f0f13;
+      --surface: #18181f;
+      --surface2: #22222c;
+      --border: #2e2e3a;
+      --accent: #7c6ff7;
+      --accent2: #f7a76f;
+      --accent3: #6ff7c4;
+      --accent4: #f76f9a;
+      --text: #e8e8f0;
+      --muted: #888898;
+      --green: #4ade80;
+      --yellow: #fbbf24;
+      --red: #f87171;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 2.5rem 2rem 2rem;
+    }
+    header h1 { font-size: 2rem; font-weight: 800; letter-spacing: -0.5px; }
+    header h1 span { color: var(--accent); }
+    header p { color: var(--muted); margin-top: 0.4rem; font-size: 0.95rem; }
+    .tabs {
+      display: flex;
+      gap: 0.25rem;
+      padding: 1rem 2rem 0;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      overflow-x: auto;
+    }
+    .tab {
+      padding: 0.6rem 1.2rem;
+      border-radius: 8px 8px 0 0;
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--muted);
+      border: 1px solid transparent;
+      border-bottom: none;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+    .tab:hover { color: var(--text); background: var(--surface2); }
+    .tab.active {
+      color: var(--text);
+      background: var(--bg);
+      border-color: var(--border);
+      border-bottom-color: var(--bg);
+    }
+    .content { padding: 2rem; max-width: 1100px; margin: 0 auto; }
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    /* Cards */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+    .card-title {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .card-title .icon {
+      width: 28px; height: 28px;
+      border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.85rem;
+      flex-shrink: 0;
+    }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.25rem; }
+    @media (max-width: 700px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+    /* Tags / pills */
+    .pill {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 99px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .pill-green { background: #052e16; color: var(--green); border: 1px solid #166534; }
+    .pill-yellow { background: #2d1a00; color: var(--yellow); border: 1px solid #92400e; }
+    .pill-red { background: #2d0a0a; color: var(--red); border: 1px solid #991b1b; }
+    .pill-purple { background: #1e1b4b; color: #a5b4fc; border: 1px solid #3730a3; }
+    .pill-blue { background: #0c1a2e; color: #60a5fa; border: 1px solid #1d4ed8; }
+
+    /* Build items */
+    .build-item {
+      display: flex;
+      gap: 1rem;
+      padding: 1rem;
+      border-radius: 10px;
+      background: var(--surface2);
+      margin-bottom: 0.75rem;
+      border-left: 3px solid transparent;
+    }
+    .build-item.must { border-left-color: var(--accent4); }
+    .build-item.should { border-left-color: var(--yellow); }
+    .build-item.nice { border-left-color: var(--accent3); }
+    .build-num {
+      width: 32px; height: 32px;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800;
+      font-size: 0.85rem;
+      flex-shrink: 0;
+    }
+    .build-item.must .build-num { background: #3d0a1a; color: var(--accent4); }
+    .build-item.should .build-num { background: #2d1a00; color: var(--yellow); }
+    .build-item.nice .build-num { background: #012a1a; color: var(--accent3); }
+    .build-body h3 { font-size: 0.9rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .build-body p { font-size: 0.82rem; color: var(--muted); }
+    .build-body .sub { margin-top: 0.4rem; font-size: 0.8rem; color: var(--muted); }
+    .build-body .sub li { margin-left: 1rem; margin-top: 0.15rem; }
+
+    /* Control matrix */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    th {
+      text-align: left;
+      padding: 0.75rem 1rem;
+      background: var(--surface2);
+      color: var(--muted);
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    th:first-child { border-radius: 8px 0 0 0; }
+    th:last-child { border-radius: 0 8px 0 0; }
+    td {
+      padding: 0.7rem 1rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+
+    /* Pitch sections */
+    .pitch-step {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    .pitch-num {
+      width: 36px; height: 36px;
+      min-width: 36px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: white;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800;
+      font-size: 0.85rem;
+    }
+    .pitch-body h3 { font-size: 0.95rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .pitch-body p { font-size: 0.83rem; color: var(--muted); }
+    .pitch-body .quote {
+      margin-top: 0.5rem;
+      font-style: italic;
+      color: #aaa;
+      background: var(--surface2);
+      border-left: 3px solid var(--accent);
+      padding: 0.4rem 0.75rem;
+      border-radius: 0 6px 6px 0;
+      font-size: 0.82rem;
+    }
+
+    /* Stats */
+    .stat-row { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+    .stat-box {
+      flex: 1;
+      min-width: 130px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.2rem;
+      text-align: center;
+    }
+    .stat-val { font-size: 1.6rem; font-weight: 800; }
+    .stat-label { font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem; }
+
+    /* Checklist */
+    .check-item {
+      display: flex;
+      gap: 0.75rem;
+      align-items: flex-start;
+      padding: 0.6rem 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.875rem;
+    }
+    .check-item:last-child { border-bottom: none; }
+    .check-icon { margin-top: 0.1rem; flex-shrink: 0; }
+    .check-item.op .check-icon { color: var(--accent); }
+    .check-item.client .check-icon { color: var(--accent2); }
+    .check-item h4 { font-weight: 600; margin-bottom: 0.1rem; }
+    .check-item p { font-size: 0.8rem; color: var(--muted); }
+
+    .section-label {
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+      margin-bottom: 0.75rem;
+    }
+    .divider { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
+    .highlight {
+      background: linear-gradient(135deg, #1a1a2e, #16213e);
+      border: 1px solid var(--accent);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.25rem;
+      font-size: 0.875rem;
+    }
+    .highlight strong { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Creator Platform — <span>Operator Playbook</span></h1>
+    <p>Packaging this for other creators: what to build, what to pitch, and who controls what.</p>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" onclick="show('build', this)">1. What to Build</div>
+    <div class="tab" onclick="show('pitch', this)">2. What to Explain</div>
+    <div class="tab" onclick="show('control', this)">3. Operator vs. Client Control</div>
+    <div class="tab" onclick="show('proof', this)">4. Proof Points</div>
+    <div class="tab" onclick="show('onboard', this)">5. Client Onboarding</div>
+  </div>
+
+  <!-- TAB 1: WHAT TO BUILD -->
+  <div id="build" class="panel active content">
+    <div class="highlight">
+      <strong>The core challenge:</strong> Everything right now is hardcoded for Zarna — her voice, her training data, her phone number, her keywords. To offer this to other creators, you need a configurable layer between the engine and each client's identity.
+    </div>
+
+    <p class="section-label" style="margin-top:1.5rem">Must-Have Before You Can Sell This</p>
+
+    <div class="build-item must">
+      <div class="build-num">1</div>
+      <div class="build-body">
+        <h3>Voice & Persona Configuration System</h3>
+        <p>Right now Zarna's style guide, tone rules, and "what to avoid" are baked into the prompt. You need a per-client config that swaps in a different creator's voice, name, brand rules, and reply style without touching code.</p>
+        <ul class="sub">
+          <li>Creator name, pronouns, brand tone (edgy, warm, dry, etc.)</li>
+          <li>What topics are off-limits for them</li>
+          <li>Signature phrases / emojis they use</li>
+          <li>How they want fans to feel after texting</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="build-item must">
+      <div class="build-num">2</div>
+      <div class="build-body">
+        <h3>Content Ingestion Onboarding Kit</h3>
+        <p>You already have scripts for YouTube, podcasts, specials, books. Package them into a repeatable onboarding checklist — a client gives you their links, you run the pipeline, embeddings are built. Clients can't go live until this is done.</p>
+        <ul class="sub">
+          <li>Intake form: YouTube channel, podcast RSS, specials, book PDF, social voice notes</li>
+          <li>A "knowledge health" check — how many chunks exist, are there gaps?</li>
+          <li>Minimum viable corpus: what's the floor before the AI sounds coherent?</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="build-item must">
+      <div class="build-num">3</div>
+      <div class="build-body">
+        <h3>Per-Client Deployment Template (or Multi-Tenancy)</h3>
+        <p>You have two options: deploy a separate isolated instance per client (simpler, safer), or build one multi-tenant system. For now, separate Railway deployments with a shared template is the right call — less risk, faster to ship.</p>
+        <ul class="sub">
+          <li>One Railway project template with env vars for: client name, SMS creds, AI config, DB URL</li>
+          <li>A deployment checklist so you can spin up a new client in &lt;1 day</li>
+          <li>Separate databases per client — fan data must not cross</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="build-item must">
+      <div class="build-num">4</div>
+      <div class="build-body">
+        <h3>Live Demo You Can Text Right Now</h3>
+        <p>The single best sales tool is handing a prospect your phone number and saying "text it." Keep a generic "demo creator" instance live — or use Zarna's live instance as proof. A creator who texts the AI and hears a personality that sounds human is sold.</p>
+        <ul class="sub">
+          <li>A demo number they can text during your pitch meeting</li>
+          <li>Dashboard screen recording or live walkthrough ready to go</li>
+        </ul>
+      </div>
+    </div>
+
+    <hr class="divider" />
+    <p class="section-label">Should Build Soon</p>
+
+    <div class="build-item should">
+      <div class="build-num">5</div>
+      <div class="build-body">
+        <h3>Client Onboarding Document & Admin Walkthrough</h3>
+        <p>A PDF or Notion doc the client keeps — explains exactly what the dashboard does, what the AI knows, what they can and can't control, and who to contact when something is off.</p>
+      </div>
+    </div>
+
+    <div class="build-item should">
+      <div class="build-num">6</div>
+      <div class="build-body">
+        <h3>Blast Approval Workflow</h3>
+        <p>Right now blasts require two checkboxes in the dashboard. For liability, you want a paper trail — either a Slack/email approval step, or a "client approves in the dashboard with their own login." This protects you on TCPA exposure.</p>
+      </div>
+    </div>
+
+    <div class="build-item should">
+      <div class="build-num">7</div>
+      <div class="build-body">
+        <h3>Per-Client Admin Login (not shared password)</h3>
+        <p>Currently one shared admin password. For client deployments, each client needs their own login so you can audit who did what, and they can't accidentally see another client's data if you ever consolidate.</p>
+      </div>
+    </div>
+
+    <div class="build-item should">
+      <div class="build-num">8</div>
+      <div class="build-body">
+        <h3>Monthly Reporting / Engagement Summary</h3>
+        <p>Clients will want to see numbers even if they don't log in. An auto-generated monthly email or PDF showing subscriber growth, engagement rate, top fan messages, and blast performance keeps them engaged and justifies renewal.</p>
+      </div>
+    </div>
+
+    <hr class="divider" />
+    <p class="section-label">Nice to Have (Differentiation)</p>
+
+    <div class="build-item nice">
+      <div class="build-num">9</div>
+      <div class="build-body">
+        <h3>Voice Refresh Workflow</h3>
+        <p>When a creator drops a new special, podcast, or book — a process to add new content to the knowledge base without breaking what's already there. Right now this is a manual re-ingestion.</p>
+      </div>
+    </div>
+
+    <div class="build-item nice">
+      <div class="build-num">10</div>
+      <div class="build-body">
+        <h3>AI Quality Monitoring Dashboard</h3>
+        <p>A way to flag replies the AI gave that were off-brand, weird, or wrong. Either you review them, or the client can flag a reply in the thread view and you get notified. This is your QA layer at scale.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 2: WHAT TO EXPLAIN (PITCH) -->
+  <div id="pitch" class="panel content">
+    <div class="highlight">
+      <strong>The pitch in one sentence:</strong> "Your fans can text a number and get replies that sound exactly like you — and you can see, understand, and message your audience from a dashboard, without ever touching a phone."
+    </div>
+
+    <p class="section-label" style="margin-top:1.5rem">Walk Them Through This, In Order</p>
+
+    <div class="pitch-step">
+      <div class="pitch-num">1</div>
+      <div class="pitch-body">
+        <h3>The Fan Experience</h3>
+        <p>Start with what their fans will feel — not what the tech does. Fans text a number. They get replies in the creator's voice, drawn from their real material (specials, podcasts, interviews, books). It feels personal. The AI doesn't pretend to be human — it's a companion that sounds like them.</p>
+        <div class="quote">"Imagine a fan texting you after a show and getting a reply that actually sounds like you answered — instantly, at 2am, to 4,000 people."</div>
+      </div>
+    </div>
+
+    <div class="pitch-step">
+      <div class="pitch-num">2</div>
+      <div class="pitch-body">
+        <h3>The Live Show / Stream Feature</h3>
+        <p>This is often the hook for comedians and performers. At a show, fans text a keyword to get on the list. They get a personalized welcome text right away. After the show, you can blast the whole room with tour announcements, merch drops, anything. For live streams, same thing — people watching from home join a list.</p>
+        <div class="quote">"You leave every show with every phone number in the room, and a direct line to all of them forever."</div>
+      </div>
+    </div>
+
+    <div class="pitch-step">
+      <div class="pitch-num">3</div>
+      <div class="pitch-body">
+        <h3>The Dashboard — Their Command Center</h3>
+        <p>Show them the admin. Walk through: subscriber count, engagement rate, conversation threads, fan profiles with memory, and the live show blasting tool. Make it feel like having a CRM that actually works for a performer.</p>
+        <div class="quote">"You can see who's texting, what they're asking, where they're from — and message all of them in one click."</div>
+      </div>
+    </div>
+
+    <div class="pitch-step">
+      <div class="pitch-num">4</div>
+      <div class="pitch-body">
+        <h3>How It's Trained on Them</h3>
+        <p>Explain that the AI isn't generic — it's trained on their specials, their podcast, their book, their voice. It knows their bits, their stories, their opinions. You feed it their content; it learns how they talk.</p>
+        <div class="quote">"It's not ChatGPT. It knows your last special. It knows the bit you do about your dad. It answers like you would."</div>
+      </div>
+    </div>
+
+    <div class="pitch-step">
+      <div class="pitch-num">5</div>
+      <div class="pitch-body">
+        <h3>What You Handle (Everything Technical)</h3>
+        <p>They don't manage hosting, phone numbers, AI APIs, databases, or any of it. You run all of it. They get a product. This is your managed service pitch — what you absorb so they don't have to think about it.</p>
+      </div>
+    </div>
+
+    <div class="pitch-step">
+      <div class="pitch-num">6</div>
+      <div class="pitch-body">
+        <h3>What They're Responsible For</h3>
+        <p>Be upfront: they own their SMS opt-in consent records, their privacy policy, and approving any blast before it goes out. You handle the technical side; they handle the legal relationship with their fans. This protects both of you.</p>
+      </div>
+    </div>
+
+    <div class="pitch-step">
+      <div class="pitch-num">7</div>
+      <div class="pitch-body">
+        <h3>Show the Numbers (Social Proof from Zarna)</h3>
+        <p>Use the Rhode Island beta data. Real engagement numbers from a real show. 4,500+ subscribers, 16% engagement rate, fans texting back at 2.8 texts per active user. Show them this is not a concept — it's live and working.</p>
+      </div>
+    </div>
+
+    <div class="pitch-step">
+      <div class="pitch-num">8</div>
+      <div class="pitch-body">
+        <h3>Timeline to Go Live</h3>
+        <p>Tell them what it takes: they give you their content (YouTube, podcast, specials), you build the knowledge base and configure the voice, you set up SMS, they test it, you go live. Frame a realistic timeline (2–4 weeks) and what you need from them to start.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 3: OPERATOR vs CLIENT CONTROL -->
+  <div id="control" class="panel content">
+    <div class="highlight">
+      <strong>Mental model:</strong> You are the infrastructure owner and technical operator. The client is the brand owner. You give them the steering wheel (dashboard) — you own the engine, the road, and the car.
+    </div>
+
+    <p class="section-label" style="margin-top: 1.5rem">You (Operator) Control</p>
+    <div class="card" style="padding: 0.5rem 1rem;">
+      <div class="check-item op">
+        <div class="check-icon">◆</div>
+        <div>
+          <h4>The codebase and all updates</h4>
+          <p>You ship new features, fix bugs, update the AI models. Client never touches the code.</p>
+        </div>
+      </div>
+      <div class="check-item op">
+        <div class="check-icon">◆</div>
+        <div>
+          <h4>Hosting and infrastructure (Railway)</h4>
+          <p>Server uptime, scaling, deployments — all yours. Client gets no server access.</p>
+        </div>
+      </div>
+      <div class="check-item op">
+        <div class="check-icon">◆</div>
+        <div>
+          <h4>Database — all fan data</h4>
+          <p>You hold the fan phone numbers, conversation history, profile memory, and show signup lists. You back it up, secure it, and manage access.</p>
+        </div>
+      </div>
+      <div class="check-item op">
+        <div class="check-icon">◆</div>
+        <div>
+          <h4>The AI layer (Gemini API)</h4>
+          <p>Model selection, prompt engineering, reply quality, voice configuration, safety rules — all yours. Client doesn't write prompts.</p>
+        </div>
+      </div>
+      <div class="check-item op">
+        <div class="check-icon">◆</div>
+        <div>
+          <h4>SMS pipeline (Twilio / SlickText accounts)</h4>
+          <p>Phone numbers, webhook routing, delivery, opt-out filtering, STOP handling — you manage the accounts and credentials.</p>
+        </div>
+      </div>
+      <div class="check-item op">
+        <div class="check-icon">◆</div>
+        <div>
+          <h4>Knowledge base / training data</h4>
+          <p>You ingest the client's content, build embeddings, and control what the AI knows. You also control when and how it gets updated.</p>
+        </div>
+      </div>
+      <div class="check-item op">
+        <div class="check-icon">◆</div>
+        <div>
+          <h4>Rate limiting and abuse protection</h4>
+          <p>Spam filters, concurrent AI limits, deduplication — you configure and tune these for each deployment.</p>
+        </div>
+      </div>
+      <div class="check-item op">
+        <div class="check-icon">◆</div>
+        <div>
+          <h4>Security and credentials</h4>
+          <p>API keys, webhook secrets, admin passwords — you rotate and manage all of this.</p>
+        </div>
+      </div>
+    </div>
+
+    <p class="section-label" style="margin-top: 1.5rem">Client Controls (via Dashboard)</p>
+    <div class="card" style="padding: 0.5rem 1rem;">
+      <div class="check-item client">
+        <div class="check-icon">◇</div>
+        <div>
+          <h4>Creating and managing live shows / streams</h4>
+          <p>They set up the event, pick the keyword, set timing, choose the event type. They go live when ready. They end the show. They own the event setup.</p>
+        </div>
+      </div>
+      <div class="check-item client">
+        <div class="check-icon">◇</div>
+        <div>
+          <h4>Sending bulk blasts to show lists</h4>
+          <p>They write the message, review the sample, check the two confirmation boxes, and hit send. You require their sign-off — this is their content going to their fans.</p>
+        </div>
+      </div>
+      <div class="check-item client">
+        <div class="check-icon">◇</div>
+        <div>
+          <h4>Viewing fan profiles and conversations</h4>
+          <p>They can see who's texting, what was said, what the AI remembered about a fan. Read access to the audience they built.</p>
+        </div>
+      </div>
+      <div class="check-item client">
+        <div class="check-icon">◇</div>
+        <div>
+          <h4>Exporting their audience (CSV downloads)</h4>
+          <p>They can download subscriber lists and conversation exports. It's their audience — they should be able to take the list.</p>
+        </div>
+      </div>
+      <div class="check-item client">
+        <div class="check-icon">◇</div>
+        <div>
+          <h4>Their privacy policy and SMS terms</h4>
+          <p>They publish this on their website. It's their legal relationship with their fans. You don't write it or own it.</p>
+        </div>
+      </div>
+      <div class="check-item client">
+        <div class="check-icon">◇</div>
+        <div>
+          <h4>Original fan opt-in consent</h4>
+          <p>How fans originally signed up (website, show, social) is on the client. They are responsible for valid consent before those numbers exist in the system.</p>
+        </div>
+      </div>
+      <div class="check-item client">
+        <div class="check-icon">◇</div>
+        <div>
+          <h4>What content they give you to train on</h4>
+          <p>They choose what specials, podcasts, interviews, and other material go into the knowledge base. That input shapes the AI's personality and accuracy.</p>
+        </div>
+      </div>
+    </div>
+
+    <p class="section-label" style="margin-top: 1.5rem">The Key Line to Communicate</p>
+    <div class="card" style="background: #12182e; border-color: var(--accent);">
+      <p style="font-size: 0.9rem; line-height: 1.7;">
+        <strong style="color: var(--accent);">You run the machine. They drive it.</strong><br>
+        They get a dashboard that feels like theirs — and it is, in terms of what matters to them (their audience, their events, their blasts). But the infrastructure, the AI, the security, the uptime — that's yours. When something breaks, you fix it. When Gemini updates their pricing, you absorb it. When a new AI model drops that improves quality, you ship it. That's what they're paying for.
+      </p>
+    </div>
+  </div>
+
+  <!-- TAB 4: PROOF POINTS -->
+  <div id="proof" class="panel content">
+    <p class="section-label">Live Beta Results — What You Can Show Prospects</p>
+    <div class="highlight">
+      These are real numbers from Zarna's deployment. Use them as social proof. When a prospect asks "does this work?" — show them this.
+    </div>
+
+    <div class="stat-row">
+      <div class="stat-box">
+        <div class="stat-val" style="color: var(--accent);">4,504</div>
+        <div class="stat-label">Total subscribers</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val" style="color: var(--accent3);">16.5%</div>
+        <div class="stat-label">Engagement rate (7-day)</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val" style="color: var(--accent2);">2.7×</div>
+        <div class="stat-label">AI replies per fan text</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val" style="color: var(--yellow);">482</div>
+        <div class="stat-label">Fans with saved profile memory</div>
+      </div>
+    </div>
+
+    <div class="stat-row">
+      <div class="stat-box">
+        <div class="stat-val" style="color: var(--green);">323</div>
+        <div class="stat-label">New subscribers in 1 show day</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val" style="color: var(--accent4);">1,553</div>
+        <div class="stat-label">Fan texts in 1 day (Rhode Island)</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val" style="color: var(--accent);">522</div>
+        <div class="stat-label">New contacts in 7 days</div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">
+          <div class="icon" style="background:#1e1b4b;">💬</div>
+          What these numbers mean to a prospect
+        </div>
+        <p style="font-size:0.85rem; color: var(--muted); line-height: 1.7;">
+          A 16% weekly engagement rate is extremely high for SMS. Industry average for SMS marketing is 2–5%. The fact that active fans send 2.8 texts each (not just one and done) shows the AI is creating real conversations, not just auto-replies that end the thread.
+        </p>
+      </div>
+      <div class="card">
+        <div class="card-title">
+          <div class="icon" style="background:#0a2a1a;">📍</div>
+          What the Rhode Island show proves
+        </div>
+        <p style="font-size:0.85rem; color: var(--muted); line-height: 1.7;">
+          323 new subscribers from a single live show. That's every person in that room who texted the keyword — now in a permanent, direct-contact list the creator owns. No algorithm, no platform, no middleman. One night = 323 direct lines.
+        </p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">
+        <div class="icon" style="background:#2d1a00;">📊</div>
+        What to say about the numbers
+      </div>
+      <table>
+        <thead>
+          <tr><th>What they'll ask</th><th>What you say</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>"Do fans actually text back?"</td>
+            <td>Active users sent 2.8 texts each in one week. One fan sent 220. The conversations are real.</td>
+          </tr>
+          <tr>
+            <td>"Is 16% engagement good?"</td>
+            <td>Industry SMS average is 2–5%. A creator with a real fanbase will perform as well or better.</td>
+          </tr>
+          <tr>
+            <td>"What happens at a live show?"</td>
+            <td>Rhode Island: 323 new subscribers in one night. They joined by texting a word during the show.</td>
+          </tr>
+          <tr>
+            <td>"Can the AI really sound like me?"</td>
+            <td>Text the demo number right now. The AI is trained on that creator's actual content — not a template.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- TAB 5: CLIENT ONBOARDING -->
+  <div id="onboard" class="panel content">
+    <p class="section-label">What You Need From Every New Client to Go Live</p>
+    <div class="highlight">
+      This is the intake checklist. Send this to a new client when they sign. Nothing gets built until you have these.
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">
+          <div class="icon" style="background:#1e1b4b;">🎭</div>
+          Voice & Persona
+        </div>
+        <div class="check-item" style="border-color: var(--border);">
+          <div>✦</div>
+          <div><h4>Their name and how fans should address the AI</h4><p>Do fans text "Sarah" or "@sarahcomedy"? What name does the AI sign as?</p></div>
+        </div>
+        <div class="check-item" style="border-color: var(--border);">
+          <div>✦</div>
+          <div><h4>3–5 sentences describing their voice</h4><p>Dry? Warm? Self-deprecating? Brutally honest? This seeds the style guide.</p></div>
+        </div>
+        <div class="check-item" style="border-color: var(--border);">
+          <div>✦</div>
+          <div><h4>Topics to avoid</h4><p>Any subjects they don't want the AI touching — politics, ex-partners, anything sensitive.</p></div>
+        </div>
+        <div class="check-item" style="border-color: var(--border);">
+          <div>✦</div>
+          <div><h4>Sample replies (optional but powerful)</h4><p>Even 5–10 real DMs or texts they'd actually send helps calibrate the voice enormously.</p></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          <div class="icon" style="background:#0a2a1a;">📚</div>
+          Content for the Knowledge Base
+        </div>
+        <div class="check-item" style="border-color: var(--border);">
+          <div>✦</div>
+          <div><h4>YouTube channel or video links</h4><p>Specials, clips, interviews. More content = smarter AI answers about their work.</p></div>
+        </div>
+        <div class="check-item" style="border-color: var(--border);">
+          <div>✦</div>
+          <div><h4>Podcast RSS feed or episodes</h4><p>Long-form content gives the AI the most material to work with.</p></div>
+        </div>
+        <div class="check-item" style="border-color: var(--border);">
+          <div>✦</div>
+          <div><h4>Book or written material (PDF/link)</h4><p>If they have a book, newsletter, or Substack — all fair game.</p></div>
+        </div>
+        <div class="check-item" style="border-color: var(--border);">
+          <div>✦</div>
+          <div><h4>Tour dates / current shows</h4><p>The AI should be able to tell fans where they're performing.</p></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-2" style="margin-top: 0;">
+      <div class="card">
+        <div class="card-title">
+          <div class="icon" style="background:#2d1a00;">📱</div>
+          SMS Setup
+        </div>
+        <div class="check-item" style="border-color: var(--border);">
+          <div>✦</div>
+          <div><h4>Existing SMS platform (SlickText / Twilio / none)</h4><p>Do they already have a texting list? Bring it over or start fresh.</p></div>
+        </div>
+        <div class="check-item" style="border-color: var(--border);">
+          <div>✦</div>
+          <div><h4>Desired keyword(s)</h4><p>What word do fans text to subscribe? Should match their brand.</p></div>
+        </div>
+        <div class="check-item" style="border-color: var(--border);">
+          <div>✦</div>
+          <div><h4>Existing subscriber list (if any)</h4><p>Numbers to import. You'll need to confirm valid opt-in consent exists for these.</p></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          <div class="icon" style="background:#1a0a2e;">⚖️</div>
+          Legal / Compliance (Client Owns)
+        </div>
+        <div class="check-item" style="border-color: var(--border);">
+          <div>✦</div>
+          <div><h4>Privacy policy URL</h4><p>Must be live on their site before you can launch. They write it; you verify it exists.</p></div>
+        </div>
+        <div class="check-item" style="border-color: var(--border);">
+          <div>✦</div>
+          <div><h4>SMS terms of service</h4><p>Message frequency, opt-out instructions. Required for compliant SMS marketing.</p></div>
+        </div>
+        <div class="check-item" style="border-color: var(--border);">
+          <div>✦</div>
+          <div><h4>Consent documentation for imported lists</h4><p>Where and how did those subscribers opt in? This is their legal exposure, not yours — but you need confirmation before importing.</p></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="background: #0e1a0e; border-color: var(--green);">
+      <div class="card-title" style="color: var(--green);">
+        <div class="icon" style="background:#052e16;">✓</div>
+        Go-Live Checklist (Your Side)
+      </div>
+      <table>
+        <thead><tr><th>Step</th><th>What You Do</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Content ingestion</td><td>Run YouTube, podcast, book ingestion scripts. Build embeddings.</td><td><span class="pill pill-yellow">Per client</span></td></tr>
+          <tr><td>Voice config</td><td>Write and test the style guide / persona prompt for this creator.</td><td><span class="pill pill-yellow">Per client</span></td></tr>
+          <tr><td>SMS setup</td><td>Create SlickText or Twilio account, configure keyword and webhook URL.</td><td><span class="pill pill-yellow">Per client</span></td></tr>
+          <tr><td>Railway deploy</td><td>Deploy from template, set all env vars, connect to their DB.</td><td><span class="pill pill-yellow">Per client</span></td></tr>
+          <tr><td>Test run</td><td>Text 20+ messages as a fan. Verify voice, edge cases, opt-out, keywords.</td><td><span class="pill pill-yellow">Per client</span></td></tr>
+          <tr><td>Client test</td><td>Creator texts the number themselves. They sign off before going live.</td><td><span class="pill pill-yellow">Per client</span></td></tr>
+          <tr><td>Launch</td><td>Announce keyword at show or on social. Monitor for 24–48hrs.</td><td><span class="pill pill-green">Go live</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    function show(id, el) {
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.getElementById(id).classList.add('active');
+      el.classList.add('active');
+    }
+  </script>
+</body>
+</html>

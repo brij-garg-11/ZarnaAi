@@ -63,10 +63,11 @@ def parse_sent(raw: str) -> datetime | None:
 # ── DB helpers ───────────────────────────────────────────────────────────────
 
 def ensure_source_column(conn):
-    """Add source column if missing — marks rows as csv_import vs bot."""
+    """Add source column if missing (no DEFAULT to avoid table lock)."""
     with conn.cursor() as cur:
+        # No DEFAULT clause — avoids full table rewrite lock on large tables
         cur.execute(
-            "ALTER TABLE messages ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'bot'"
+            "ALTER TABLE messages ADD COLUMN IF NOT EXISTS source TEXT"
         )
     conn.commit()
 
@@ -109,20 +110,30 @@ def load_csv(path: str) -> list[dict]:
 
 
 def insert_rows(conn, rows: list[dict]) -> int:
-    """Bulk-insert rows, skipping exact duplicates (same phone+role+text+ts)."""
-    inserted = 0
+    """Bulk-insert all rows in one statement, then count what landed."""
+    import psycopg2.extras as _extras
+    tuples = [(r["phone_number"], r["role"], r["text"], r["created_at"]) for r in rows]
     with conn.cursor() as cur:
-        for r in rows:
-            cur.execute(
-                """
-                INSERT INTO messages (phone_number, role, text, created_at, source)
-                VALUES (%s, %s, %s, %s, 'csv_import')
-                ON CONFLICT DO NOTHING
-                """,
-                (r["phone_number"], r["role"], r["text"], r["created_at"]),
-            )
-            if cur.rowcount > 0:
-                inserted += 1
+        # Temp table to stage rows, then insert-select to skip dupes
+        cur.execute(
+            "CREATE TEMP TABLE _csv_stage "
+            "(phone_number TEXT, role TEXT, text TEXT, created_at TIMESTAMPTZ) ON COMMIT DROP"
+        )
+        _extras.execute_values(
+            cur,
+            "INSERT INTO _csv_stage (phone_number, role, text, created_at) VALUES %s",
+            tuples,
+            page_size=500,
+        )
+        cur.execute(
+            """
+            INSERT INTO messages (phone_number, role, text, created_at, source)
+            SELECT phone_number, role, text, created_at, 'csv_import'
+            FROM _csv_stage
+            ON CONFLICT DO NOTHING
+            """
+        )
+        inserted = cur.rowcount
     conn.commit()
     return inserted
 
@@ -192,7 +203,7 @@ def main(csv_path: str):
     print(f"  Incoming (fans)    : {incoming:,}  from {fans:,} unique fans")
     print(f"  Outgoing (Zarna)   : {outgoing:,}")
 
-    conn = psycopg2.connect(DSN)
+    conn = psycopg2.connect(DSN, connect_timeout=15)
     try:
         print("\n🔧  Ensuring source column exists …")
         ensure_source_column(conn)

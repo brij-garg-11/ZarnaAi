@@ -1,0 +1,11 @@
+Vendor,What It's For,Plan / Tier,Monthly Cost,Billing Type,Notes
+Railway,App hosting + PostgreSQL + autoscaling workers,Pro,$100,Fixed + usage,Upgrade from Hobby; autoscaling adds workers under load; needed for 1000+ concurrent texters
+Google Gemini,AI reply generation + intent classification + embeddings,Paid (5000 RPM quota),,$1500–2500 estimated,Usage-based; free quota increase request at aistudio.google.com → Rate Limit → Request increase; 5000 RPM needed before any large show
+OpenAI,Mid-tier AI replies (gpt-4o-mini),Pay-as-you-go,$150,Usage-based,Proportional to message volume; estimated at 100k+ DAU scale
+Anthropic,High-tier AI replies (Claude Sonnet),Pay-as-you-go,$150,Usage-based,Proportional to message volume; estimated at 100k+ DAU scale
+SlickText,SMS delivery to fans (primary channel),Enterprise (over $939),,Custom,Highest listed plan = $939/mo for 50k credits; enterprise needed above that; carrier fees apply on top
+Twilio,SMS / WhatsApp (secondary channel),Enterprise volume discounts,,Usage-based,Pure usage-based ($0.0079/SMS); at millions of messages/mo negotiate volume pricing directly with Twilio
+Redis (Railway),Bulletproof dedup + rate limiting + message queue across all workers,Redis add-on,$30,Fixed monthly,New component — not in current stack; eliminates per-worker dedup gaps; smooths spike bursts via queue
+Pinecone,Vector database for embeddings at scale,Starter,$70,Fixed monthly,New component — needed when training data grows beyond ~50k chunks; replaces in-memory embedding search
+UptimeRobot,Uptime monitoring + downtime alerts,Business,$54.99,Fixed monthly,Upgrade from Solo ($7); faster check intervals + more monitors; needed for multi-client production reliability
+ngrok,Local dev tunnel (not production),Free,$0,N/A,Dev only — not a production cost at any scale

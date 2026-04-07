@@ -1,0 +1,34 @@
+---
+description: File organisation standards for the Zarna project
+alwaysApply: true
+---
+
+# File Organisation
+
+## New features go in new files when they have a clear boundary
+
+Create a new file when the new code:
+- Is a new tab or section in the admin dashboard (e.g. `app/admin/quality.py`)
+- Is a new cron/script with its own purpose (e.g. `scripts/generate_quality_digest.py`)
+- Is a new Flask blueprint or route group
+- Would push an existing file past ~500 lines
+
+Stay in the existing file when:
+- It's a small addition (a new helper, a column, a field)
+- It's tightly coupled to existing logic in that file
+- A new file would only be 20–30 lines
+
+## Admin dashboard modules
+
+New admin tabs belong in `app/admin/<tab_name>.py` with a `render_<tab>_tab()` function and a `register_<tab>_routes(bp)` function. Register both in `app/admin/__init__.py`.
+
+## Scripts
+
+New one-off or cron scripts go in `scripts/`. New Railway cron configs go in `operator/railway.<name>.toml`.
+
+## Never grow these files further
+
+| File | Why |
+|------|-----|
+| `app/admin/__init__.py` | Already 1,900+ lines — delegate to submodules |
+| `app/storage/postgres.py` | Add migrations to existing tuples only, no new logic |

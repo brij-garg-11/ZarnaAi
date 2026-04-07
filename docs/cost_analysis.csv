@@ -1,0 +1,9 @@
+Vendor,What It's For,Plan / Tier,Monthly Cost,Billing Type,Notes
+Railway,App hosting + PostgreSQL database,Hobby,$5,Fixed monthly,8 Gunicorn workers; 8GB RAM shared CPU; no uptime SLA
+Google Gemini,AI reply generation + intent classification + embeddings,Paid 1 (postpay; $250 cap),$124,Usage-based,Mar 2026 actual = $20.76 over ~5 active days; extrapolated to full month = ~$124/mo ($20.76 / 5 days * 30)
+OpenAI,Mid-tier AI replies (gpt-4o-mini),Pay-as-you-go,$15,Usage-based,Estimated worst-case; negligible current usage; combined OpenAI + Anthropic capped at ~$30/mo
+Anthropic,High-tier AI replies (Claude Sonnet),Pay-as-you-go,$15,Usage-based,Estimated worst-case; negligible current usage; combined OpenAI + Anthropic capped at ~$30/mo
+SlickText,SMS delivery to fans (primary channel),,$750,Fixed monthly,4146 subscribers on 'zarna' list + 747 on 'hello'; primary fan texting channel
+Twilio,SMS / WhatsApp (secondary channel),,$285.97,Usage-based per message,Mar 2026: 45647 messages ($282.67) + 3 phone numbers ($3.30); also used for WhatsApp
+ngrok,Local dev tunnel (not production),,,$0,Free tier; dev only — not a production cost
+UptimeRobot,Uptime monitoring + downtime alerts,Solo,$7 ($84/yr billed annually),Annual,Monitors Railway app URL; alerts if the service goes down

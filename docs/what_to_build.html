@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>What to Build — Creator Platform</title>
+  <style>
+    :root {
+      --bg: #0d0d12;
+      --surface: #16161e;
+      --surface2: #1e1e28;
+      --surface3: #252532;
+      --border: #2a2a38;
+      --accent: #7c6ff7;
+      --green: #4ade80;
+      --yellow: #fbbf24;
+      --red: #f87171;
+      --orange: #fb923c;
+      --blue: #60a5fa;
+      --text: #e4e4f0;
+      --muted: #7a7a90;
+      --done-bg: #0a1a0a;
+      --done-border: #1a4a1a;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    header {
+      padding: 2rem 2rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(135deg, #0d0d1a 0%, #12123a 100%);
+    }
+    header h1 { font-size: 1.75rem; font-weight: 800; }
+    header h1 span { color: var(--accent); }
+    header p { color: var(--muted); margin-top: 0.3rem; font-size: 0.875rem; }
+
+    .top-bar {
+      display: flex;
+      gap: 1rem;
+      padding: 1rem 2rem;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .legend-item {
+      display: flex; align-items: center; gap: 0.4rem;
+      font-size: 0.8rem; color: var(--muted);
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .dot-done { background: var(--green); }
+    .dot-must { background: var(--red); }
+    .dot-should { background: var(--yellow); }
+    .dot-nice { background: var(--blue); }
+
+    .layout { display: grid; grid-template-columns: 240px 1fr; min-height: calc(100vh - 120px); }
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 1.5rem 0;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+    }
+    .sidebar-label {
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+      padding: 0.5rem 1.25rem;
+      margin-top: 0.5rem;
+    }
+    .sidebar-item {
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.5rem 1.25rem;
+      cursor: pointer;
+      font-size: 0.82rem;
+      color: var(--muted);
+      transition: all 0.1s;
+      border-left: 3px solid transparent;
+    }
+    .sidebar-item:hover { background: var(--surface2); color: var(--text); }
+    .sidebar-item.active { background: var(--surface2); color: var(--text); border-left-color: var(--accent); }
+    .sidebar-item .badge {
+      margin-left: auto;
+      font-size: 0.65rem;
+      font-weight: 700;
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+    }
+    .badge-done { background: var(--done-bg); color: var(--green); border: 1px solid var(--done-border); }
+    .badge-must { background: #2a0a0a; color: var(--red); border: 1px solid #5a1a1a; }
+    .badge-should { background: #2a1a00; color: var(--yellow); border: 1px solid #5a3a00; }
+    .badge-nice { background: #0a1a2a; color: var(--blue); border: 1px solid #1a3a5a; }
+
+    .main { padding: 2rem; overflow-y: auto; }
+    .section { display: none; }
+    .section.active { display: block; }
+
+    .page-title {
+      font-size: 1.5rem;
+      font-weight: 800;
+      margin-bottom: 0.3rem;
+    }
+    .page-subtitle { color: var(--muted); font-size: 0.875rem; margin-bottom: 1.5rem; }
+
+    /* Status bar */
+    .status-bar {
+      display: flex; align-items: center; gap: 1rem;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+      font-size: 0.82rem;
+    }
+    .status-done { background: var(--done-bg); border: 1px solid var(--done-border); }
+    .status-must { background: #1a0808; border: 1px solid #4a1a1a; }
+    .status-should { background: #1a1000; border: 1px solid #4a3000; }
+    .status-nice { background: #081218; border: 1px solid #1a3040; }
+    .status-tag {
+      font-weight: 700;
+      font-size: 0.75rem;
+      padding: 0.2rem 0.6rem;
+      border-radius: 99px;
+    }
+    .tag-done { background: #166534; color: var(--green); }
+    .tag-must { background: #7f1d1d; color: var(--red); }
+    .tag-should { background: #78350f; color: var(--yellow); }
+    .tag-nice { background: #1e3a5f; color: var(--blue); }
+
+    /* Code block */
+    .code-block {
+      background: #0a0a14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 0.78rem;
+      color: #c8c8e8;
+      overflow-x: auto;
+      margin: 0.75rem 0;
+      line-height: 1.7;
+    }
+    .code-block .cmt { color: #666688; }
+    .code-block .key { color: #7c6ff7; }
+    .code-block .str { color: #4ade80; }
+    .code-block .fn { color: #fb923c; }
+    .code-block .var { color: #60a5fa; }
+    .code-block .hl { background: rgba(124,111,247,0.15); border-radius: 3px; padding: 0 2px; }
+
+    /* Cards */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+      margin-bottom: 1rem;
+    }
+    .card h3 { font-size: 0.95rem; font-weight: 700; margin-bottom: 0.5rem; }
+    .card p { font-size: 0.83rem; color: var(--muted); line-height: 1.6; }
+    .card ul { padding-left: 1.2rem; margin-top: 0.4rem; }
+    .card ul li { font-size: 0.82rem; color: var(--muted); margin-bottom: 0.2rem; }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    @media (max-width: 800px) { .two-col, .layout { grid-template-columns: 1fr; } .sidebar { position: static; height: auto; } }
+
+    /* File path badge */
+    .filepath {
+      display: inline-block;
+      font-family: monospace;
+      font-size: 0.75rem;
+      background: #1a1a2e;
+      color: #a5b4fc;
+      border: 1px solid #2d2d5e;
+      border-radius: 4px;
+      padding: 0.1rem 0.5rem;
+      margin: 0.1rem 0.15rem;
+    }
+    .new-file { background: #0a1a0a; color: var(--green); border-color: #1a4a1a; }
+    .change-file { background: #1a1000; color: var(--yellow); border-color: #4a3000; }
+
+    /* Step list */
+    .step-list { counter-reset: steps; margin: 0.75rem 0; }
+    .step {
+      display: flex; gap: 0.75rem; margin-bottom: 0.75rem;
+      counter-increment: steps;
+    }
+    .step-num {
+      width: 26px; height: 26px; min-width: 26px;
+      border-radius: 50%;
+      background: var(--surface3);
+      border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.72rem; font-weight: 700; color: var(--muted);
+    }
+    .step-body h4 { font-size: 0.85rem; font-weight: 700; margin-bottom: 0.15rem; }
+    .step-body p { font-size: 0.8rem; color: var(--muted); }
+
+    /* Table */
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin: 0.75rem 0; }
+    th {
+      text-align: left; padding: 0.6rem 0.75rem;
+      background: var(--surface2);
+      font-size: 0.7rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+    td { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+
+    /* Divider */
+    hr { border: none; border-top: 1px solid var(--border); margin: 1.25rem 0; }
+
+    .muted { color: var(--muted); }
+    .small { font-size: 0.8rem; }
+    strong.g { color: var(--green); }
+    strong.y { color: var(--yellow); }
+    strong.r { color: var(--red); }
+    strong.p { color: var(--accent); }
+
+    .inline-tag {
+      display: inline-block; font-size: 0.7rem; font-weight: 700;
+      padding: 0.1rem 0.45rem; border-radius: 99px; margin-right: 0.2rem;
+      vertical-align: middle;
+    }
+    .t-done { background: #166534; color: var(--green); }
+    .t-must { background: #7f1d1d; color: var(--red); }
+    .t-should { background: #78350f; color: var(--yellow); }
+    .t-nice { background: #1e3a5f; color: var(--blue); }
+  </style>
+</head>
+<body>
+<header>
+  <h1>What to <span>Build</span> — Creator Platform</h1>
+  <p>Grounded in the actual codebase. Shows what's already done, what's broken for multi-client, and exactly how to fix each gap.</p>
+</header>
+
+<div class="top-bar">
+  <div class="legend-item"><div class="dot dot-done"></div> Already exists</div>
+  <div class="legend-item"><div class="dot dot-must"></div> Must-build (blocks launch)</div>
+  <div class="legend-item"><div class="dot dot-should"></div> Should-build (quality / liability)</div>
+  <div class="legend-item"><div class="dot dot-nice"></div> Nice-to-have (retention / scale)</div>
+</div>
+
+<div class="layout">
+  <!-- SIDEBAR -->
+  <nav class="sidebar">
+    <div class="sidebar-label">Foundation</div>
+    <div class="sidebar-item active" onclick="show('voice', this)">
+      <div class="dot dot-must"></div> 1. Configurable Voice
+      <span class="badge badge-must">MUST</span>
+    </div>
+    <div class="sidebar-item" onclick="show('training', this)">
+      <div class="dot dot-must"></div> 2. Training Data Pipeline
+      <span class="badge badge-must">MUST</span>
+    </div>
+    <div class="sidebar-item" onclick="show('deploy', this)">
+      <div class="dot dot-must"></div> 3. Deploy Template
+      <span class="badge badge-must">MUST</span>
+    </div>
+
+    <div class="sidebar-label">Already Built</div>
+    <div class="sidebar-item" onclick="show('auth', this)">
+      <div class="dot dot-done"></div> Auth & Team Mgmt
+      <span class="badge badge-done">DONE</span>
+    </div>
+    <div class="sidebar-item" onclick="show('blast', this)">
+      <div class="dot dot-done"></div> Blast Workflow
+      <span class="badge badge-done">DONE</span>
+    </div>
+    <div class="sidebar-item" onclick="show('shows', this)">
+      <div class="dot dot-done"></div> Live Shows
+      <span class="badge badge-done">DONE</span>
+    </div>
+
+    <div class="sidebar-label">Should Build</div>
+    <div class="sidebar-item" onclick="show('clientrole', this)">
+      <div class="dot dot-should"></div> 4. Creator Access Role
+      <span class="badge badge-should">SHOULD</span>
+    </div>
+    <div class="sidebar-item" onclick="show('reporting', this)">
+      <div class="dot dot-should"></div> 5. Monthly Reports
+      <span class="badge badge-should">SHOULD</span>
+    </div>
+    <div class="sidebar-item" onclick="show('aiqa', this)">
+      <div class="dot dot-should"></div> 6. AI Quality Flags
+      <span class="badge badge-should">SHOULD</span>
+    </div>
+
+    <div class="sidebar-label">Nice to Have</div>
+    <div class="sidebar-item" onclick="show('refresh', this)">
+      <div class="dot dot-nice"></div> 7. Knowledge Refresh
+      <span class="badge badge-nice">NICE</span>
+    </div>
+    <div class="sidebar-item" onclick="show('multiapp', this)">
+      <div class="dot dot-nice"></div> 8. Multi-Client Hub
+      <span class="badge badge-nice">NICE</span>
+    </div>
+  </nav>
+
+  <!-- MAIN CONTENT -->
+  <main class="main">
+
+    <!-- 1. VOICE CONFIG -->
+    <div id="voice" class="section active">
+      <div class="page-title">1. Configurable Voice & Persona</div>
+      <div class="page-subtitle">The biggest blocker. The AI sounds like Zarna because her voice is hardcoded into Python.</div>
+
+      <div class="status-bar status-must">
+        <span class="status-tag tag-must">MUST BUILD</span>
+        <span>Nothing works for another creator without this. Every reply will still sound like Zarna.</span>
+      </div>
+
+      <div class="card">
+        <h3>The Problem — Where It Lives in Code</h3>
+        <p>In <span class="filepath change-file">app/brain/generator.py</span>, the AI voice is a hardcoded Python string called <code>_STYLE_RULES</code>. It references Zarna by name, her topics (Indian-mom, mother-in-law, Shalabh, Baba Ramdev), her specific openers, and her banned words. Below that is <code>_TONE_EXAMPLES</code> — real transcripts of Zarna's replies used to tune the tone. These are not configurable. A new client's AI will inherit all of this.</p>
+
+        <div class="code-block">
+<span class="cmt"># app/brain/generator.py  ← what exists today (lines 57–88)</span>
+_STYLE_RULES = <span class="str">"""
+Voice: sharp, high-energy, opinionated, family- and culture-aware —
+conversational stand-up energy, never generic or male-coded.
+Prefer parenting, marriage, immigrant-family, Indian-mom angles...
+Exception: if topic is Shalabh / husband / mother-in-law / Baba Ramdev...
+"""</span>
+        </div>
+
+        <div class="code-block">
+<span class="cmt"># app/config.py  ← training data paths are also hardcoded to zarna</span>
+CHUNKS_PATH     = os.path.join(_BASE_DIR, <span class="str">"training_data"</span>, <span class="hl"><span class="str">"zarna_chunks.json"</span></span>)
+EMBEDDINGS_PATH = os.path.join(_BASE_DIR, <span class="str">"training_data"</span>, <span class="hl"><span class="str">"zarna_embeddings.json.gz"</span></span>)
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>The Fix — What to Build</h3>
+        <p>Two things: (1) make <code>_STYLE_RULES</code> and <code>_TONE_EXAMPLES</code> loadable from a file on disk, (2) make the training data paths use a configurable <code>CREATOR_SLUG</code>. New creator = new config file + new training data files. Zero code changes per client.</p>
+
+        <div class="step-list">
+          <div class="step">
+            <div class="step-num">1</div>
+            <div class="step-body">
+              <h4>Create a creator config file format</h4>
+              <p>A JSON file per creator that holds their voice rules, tone examples, display name, and what topics to avoid. Stored as <span class="filepath new-file">creator_config/[creator_slug].json</span></p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">2</div>
+            <div class="step-body">
+              <h4>Add one env var: <code>CREATOR_SLUG</code></h4>
+              <p>Each client deployment sets <code>CREATOR_SLUG=sarah</code>. The app loads <code>creator_config/sarah.json</code> at startup. Training data becomes <code>training_data/sarah_chunks.json</code> and <code>sarah_embeddings.json.gz</code>.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">3</div>
+            <div class="step-body">
+              <h4>Modify <code>generator.py</code> to load from config</h4>
+              <p>Replace the hardcoded strings with a loader that reads from the JSON file. Falls back to default values if nothing is set, so Zarna's deployment is unchanged.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="code-block">
+<span class="cmt"># What the fix looks like in app/config.py</span>
+CREATOR_SLUG    = os.getenv(<span class="str">"CREATOR_SLUG"</span>, <span class="str">"zarna"</span>)
+CHUNKS_PATH     = os.path.join(_BASE_DIR, <span class="str">"training_data"</span>, <span class="str">f"</span><span class="var">{CREATOR_SLUG}</span><span class="str">_chunks.json"</span>)
+EMBEDDINGS_PATH = os.path.join(_BASE_DIR, <span class="str">"training_data"</span>, <span class="str">f"</span><span class="var">{CREATOR_SLUG}</span><span class="str">_embeddings.json.gz"</span>)
+CREATOR_CONFIG_PATH = os.path.join(_BASE_DIR, <span class="str">"creator_config"</span>, <span class="str">f"</span><span class="var">{CREATOR_SLUG}</span><span class="str">.json"</span>)
+        </div>
+
+        <div class="code-block">
+<span class="cmt"># What the fix looks like in app/brain/generator.py</span>
+<span class="key">import</span> json, os
+<span class="key">from</span> app.config <span class="key">import</span> CREATOR_CONFIG_PATH
+
+<span class="fn">def</span> <span class="fn">_load_creator_config</span>():
+    <span class="key">try</span>:
+        <span class="key">with</span> open(CREATOR_CONFIG_PATH) <span class="key">as</span> f:
+            <span class="key">return</span> json.load(f)
+    <span class="key">except</span> (FileNotFoundError, json.JSONDecodeError):
+        <span class="key">return</span> {}
+
+_creator = _load_creator_config()
+_STYLE_RULES   = _creator.get(<span class="str">"style_rules"</span>, _DEFAULT_STYLE_RULES)
+_TONE_EXAMPLES = _creator.get(<span class="str">"tone_examples"</span>, _DEFAULT_TONE_EXAMPLES)
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>What the Creator Config File Looks Like</h3>
+        <p>You fill this out for each new client during onboarding. It becomes the soul of the AI for that creator.</p>
+        <div class="code-block">
+<span class="cmt">// creator_config/sarah.json</span>
+{
+  <span class="key">"name"</span>: <span class="str">"Sarah"</span>,
+  <span class="key">"style_rules"</span>: <span class="str">"Voice: dry, self-deprecating, midwestern chaos energy..."</span>,
+  <span class="key">"tone_examples"</span>: <span class="str">"Fan: loved the show!\nSarah: Honestly thank you — my therapist will be thrilled to hear it."</span>,
+  <span class="key">"banned_words"</span>: [<span class="str">"honey"</span>, <span class="str">"darling"</span>],
+  <span class="key">"off_limits_topics"</span>: [<span class="str">"my ex"</span>, <span class="str">"politics"</span>],
+  <span class="key">"signature_phrases"</span>: [<span class="str">"not gonna lie"</span>, <span class="str">"anyway"</span>]
+}
+        </div>
+        <p class="muted small" style="margin-top: 0.5rem;">The <code>style_rules</code> field is the most important — it's the full voice guide. Writing a good one for a new client takes 1–2 hours and requires reading/watching their material.</p>
+      </div>
+    </div>
+
+    <!-- 2. TRAINING DATA PIPELINE -->
+    <div id="training" class="section">
+      <div class="page-title">2. Training Data Onboarding Pipeline</div>
+      <div class="page-subtitle">The scripts already exist. What's missing is a single entry point that runs them all for a new creator.</div>
+
+      <div class="status-bar status-must">
+        <span class="status-tag tag-must">MUST BUILD</span>
+        <span>Without training data, the AI gives generic answers. The pipeline exists but is manual and fragmented.</span>
+      </div>
+
+      <div class="card">
+        <h3>What Already Exists</h3>
+        <p>All the ingestion scripts are in <span class="filepath">scripts/</span>. They work — you used them all for Zarna.</p>
+        <table>
+          <thead><tr><th>Script</th><th>What it ingests</th><th>Input needed</th></tr></thead>
+          <tbody>
+            <tr><td><code>ingest_youtube.py</code></td><td>YouTube video transcripts</td><td>Channel URL or video list</td></tr>
+            <tr><td><code>ingest_podcast.py</code></td><td>Podcast episodes (audio → transcript)</td><td>RSS feed URL or episode files</td></tr>
+            <tr><td><code>ingest_special.py</code></td><td>Stand-up special transcript</td><td>Text or PDF file</td></tr>
+            <tr><td><code>ingest_book.py</code></td><td>Book chapters</td><td>PDF or text file</td></tr>
+            <tr><td><code>ingest_skits.py</code></td><td>Short video skits</td><td>File or URL list</td></tr>
+            <tr><td><code>build_embeddings.py</code></td><td>Turns all chunks into vectors</td><td>Runs after all ingestion</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3>What's Missing</h3>
+        <p>There's no unified entry point. To onboard a new creator today, you'd have to remember which scripts exist, run each manually, figure out the right arguments, and hope nothing breaks midway. There's also no way to see "what did I already ingest for this creator?"</p>
+      </div>
+
+      <div class="card">
+        <h3>What to Build: <span class="filepath new-file">scripts/onboard_creator.py</span></h3>
+        <p>One script that reads a creator's intake form (a JSON file you fill out after signing a client), runs all ingestion steps in the right order, and builds the embeddings at the end. Run it once and the creator is ready to deploy.</p>
+
+        <div class="step-list">
+          <div class="step">
+            <div class="step-num">1</div>
+            <div class="step-body">
+              <h4>Create intake form template: <span class="filepath new-file">creator_config/TEMPLATE.json</span></h4>
+              <p>A commented JSON template that documents every field. You copy it for each new client, fill it out, and the script reads it.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">2</div>
+            <div class="step-body">
+              <h4>Write <code>onboard_creator.py</code> — reads the config, runs everything</h4>
+              <p>Calls each ingestion script for the content sources listed in the config. Reports how many chunks were created from each source. Stops and tells you clearly if something fails.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">3</div>
+            <div class="step-body">
+              <h4>Output a "knowledge health" report</h4>
+              <p>After running, prints a summary: X chunks from YouTube, Y from podcast, Z from special. Flags if any category is empty (e.g. no YouTube content). Tells you the AI will be weaker in that area.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="code-block">
+<span class="cmt"># What running it looks like</span>
+$ python scripts/onboard_creator.py <span class="var">--creator sarah</span>
+
+<span class="cmt"># Output:</span>
+Loading creator config: creator_config/sarah.json
+→ YouTube (3 videos)         412 chunks  ✓
+→ Podcast (12 episodes)     1,840 chunks  ✓
+→ Special (1 file)            280 chunks  ✓
+→ Book                          0 chunks  ⚠ no book path configured
+Building embeddings...       2,532 total chunks
+Done. Saved: training_data/sarah_chunks.json
+       training_data/sarah_embeddings.json.gz
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>The Intake Config Template</h3>
+        <div class="code-block">
+<span class="cmt">// creator_config/TEMPLATE.json — copy this for each new client</span>
+{
+  <span class="key">"slug"</span>: <span class="str">"sarah"</span>,
+  <span class="key">"name"</span>: <span class="str">"Sarah"</span>,
+  <span class="key">"style_rules"</span>: <span class="str">"[FILL IN: voice description, tone, what to avoid]"</span>,
+  <span class="key">"tone_examples"</span>: <span class="str">"[FILL IN: 5-10 example fan/reply pairs]"</span>,
+  <span class="key">"content"</span>: {
+    <span class="key">"youtube_channel"</span>: <span class="str">"https://youtube.com/@sarahcomedian"</span>,
+    <span class="key">"youtube_videos"</span>: [],
+    <span class="key">"podcast_rss"</span>: <span class="str">"https://feed.example.com/sarah"</span>,
+    <span class="key">"podcast_episodes"</span>: [],
+    <span class="key">"specials"</span>: [<span class="str">"path/to/special_transcript.txt"</span>],
+    <span class="key">"book"</span>: <span class="str">""</span>,
+    <span class="key">"other"</span>: []
+  }
+}
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. DEPLOY TEMPLATE -->
+    <div id="deploy" class="section">
+      <div class="page-title">3. Deployment Template</div>
+      <div class="page-subtitle">Most of the config is already env-var driven. What's missing is a documented, repeatable process.</div>
+
+      <div class="status-bar status-must">
+        <span class="status-tag tag-must">MUST BUILD</span>
+        <span>Right now "deploying for a new client" lives in your head. It needs to be a checklist you can hand off.</span>
+      </div>
+
+      <div class="card">
+        <h3>What Already Works</h3>
+        <p><span class="filepath">app/config.py</span> is almost entirely env-var driven. A new client deployment would just need a Railway project with different env vars set. The hard parts are already abstracted — you just need to document them.</p>
+        <p class="muted small" style="margin-top: 0.5rem;">The only hardcoded part is the voice/training data (which Build #1 fixes).</p>
+      </div>
+
+      <div class="card">
+        <h3>What to Create: <span class="filepath new-file">.env.client.example</span></h3>
+        <p>A documented env var template for a new client deployment. Every variable with a comment explaining what it is and where to get the value.</p>
+
+        <div class="code-block">
+<span class="cmt"># ── REQUIRED for every deployment ──────────────────────────────</span>
+<span class="key">CREATOR_SLUG</span>=<span class="str">sarah</span>          <span class="cmt"># matches creator_config/sarah.json</span>
+<span class="key">DATABASE_URL</span>=<span class="str">postgresql://...</span> <span class="cmt"># Railway Postgres plugin → Database URL</span>
+<span class="key">SECRET_KEY</span>=<span class="str">...</span>               <span class="cmt"># 32+ random chars, generate with: openssl rand -hex 32</span>
+
+<span class="cmt"># ── AI ──────────────────────────────────────────────────────────</span>
+<span class="key">GEMINI_API_KEY</span>=<span class="str">...</span>           <span class="cmt"># console.cloud.google.com</span>
+<span class="key">OPENAI_API_KEY</span>=<span class="str">...</span>           <span class="cmt"># optional but improves conversational replies</span>
+<span class="key">ANTHROPIC_API_KEY</span>=<span class="str">...</span>        <span class="cmt"># optional but improves nuanced/advice replies</span>
+
+<span class="cmt"># ── SMS: SlickText (new accounts) ────────────────────────────────</span>
+<span class="key">SLICKTEXT_API_KEY</span>=<span class="str">...</span>        <span class="cmt"># Settings → API &amp; Webhooks</span>
+<span class="key">SLICKTEXT_BRAND_ID</span>=<span class="str">...</span>       <span class="cmt"># same page as API key</span>
+<span class="key">SLICKTEXT_WEBHOOK_SECRET</span>=<span class="str">...</span> <span class="cmt"># a long random string; set in SlickText webhook config too</span>
+
+<span class="cmt"># ── Operator dashboard login ─────────────────────────────────────</span>
+<span class="key">OPERATOR_BOOTSTRAP_EMAIL</span>=<span class="str">sarah@example.com</span>
+<span class="key">OPERATOR_BOOTSTRAP_PASSWORD</span>=<span class="str">...</span>
+
+<span class="cmt"># ── Optional ────────────────────────────────────────────────────</span>
+<span class="key">TWILIO_ACCOUNT_SID</span>=<span class="str">...</span>
+<span class="key">TWILIO_AUTH_TOKEN</span>=<span class="str">...</span>
+<span class="key">TWILIO_PHONE_NUMBER</span>=<span class="str">+1...</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>What to Create: <span class="filepath new-file">docs/deploy_checklist.md</span></h3>
+        <p>A step-by-step checklist for spinning up a new client. Every step is actionable with exact commands or URLs. Nothing lives in your head.</p>
+        <div class="step-list">
+          <div class="step"><div class="step-num">1</div><div class="step-body"><h4>Complete the intake form</h4><p>Fill out <code>creator_config/[slug].json</code> with voice rules and content sources.</p></div></div>
+          <div class="step"><div class="step-num">2</div><div class="step-body"><h4>Run the onboarding pipeline</h4><p><code>python scripts/onboard_creator.py --creator [slug]</code> — review the knowledge health report.</p></div></div>
+          <div class="step"><div class="step-num">3</div><div class="step-body"><h4>Set up SMS account</h4><p>Create SlickText account for this creator, get API key + brand ID, configure keyword and webhook URL.</p></div></div>
+          <div class="step"><div class="step-num">4</div><div class="step-body"><h4>Deploy on Railway</h4><p>Create new Railway project from template. Set all env vars from the template above.</p></div></div>
+          <div class="step"><div class="step-num">5</div><div class="step-body"><h4>Bootstrap the operator account</h4><p>Hit <code>/operator/setup</code> once to create the initial login. Then invite the creator as owner, add your team as operators.</p></div></div>
+          <div class="step"><div class="step-num">6</div><div class="step-body"><h4>Run 20+ test texts</h4><p>Use <code>scripts/test_zarna_responder.py</code> (rename to <code>test_creator.py</code>). Verify voice, keyword handling, edge cases, opt-out.</p></div></div>
+          <div class="step"><div class="step-num">7</div><div class="step-body"><h4>Creator signs off</h4><p>They text the number themselves. They must approve before going live — get it in writing (email/Slack).</p></div></div>
+          <div class="step"><div class="step-num">8</div><div class="step-body"><h4>Go live</h4><p>Announce keyword at their first show or on social. Monitor logs for 24–48hrs.</p></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ALREADY DONE: AUTH -->
+    <div id="auth" class="section">
+      <div class="page-title">Auth & Team Management</div>
+      <div class="page-subtitle">Already done — and better than you might think.</div>
+
+      <div class="status-bar status-done">
+        <span class="status-tag tag-done">ALREADY DONE</span>
+        <span>The operator app has email/password login, named accounts, and owner/operator roles.</span>
+      </div>
+
+      <div class="two-col">
+        <div class="card">
+          <h3>What's Built</h3>
+          <ul>
+            <li>Email + password login with hashed passwords (Werkzeug pbkdf2)</li>
+            <li><strong>Owner</strong> vs <strong>Operator</strong> roles — owner can add/remove team members</li>
+            <li>Bootstrap flow: hit <code>/operator/setup</code> to create the first account on a fresh deploy</li>
+            <li>Deactivate users without deleting (audit trail preserved)</li>
+            <li>Password reset by owner</li>
+            <li><code>last_login_at</code> tracking per user</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>How It Works for a New Client</h3>
+          <p>Each client deployment is isolated — its own Railway project, its own database, its own <code>operator_users</code> table. Setup looks like:</p>
+          <div class="step-list" style="margin-top: 0.5rem;">
+            <div class="step"><div class="step-num">1</div><div class="step-body"><h4>Bootstrap email/password → creator becomes owner</h4></div></div>
+            <div class="step"><div class="step-num">2</div><div class="step-body"><h4>You (Brij's team) get added as operators</h4></div></div>
+            <div class="step"><div class="step-num">3</div><div class="step-body"><h4>Creator can add their own manager/team as operators too</h4></div></div>
+          </div>
+          <p class="muted small">This already works — no changes needed for multi-client.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Relevant Files</h3>
+        <p>
+          <span class="filepath">operator/app/routes/auth.py</span> — login, logout, setup, session management<br/>
+          <span class="filepath">operator/app/routes/team.py</span> — add/deactivate/reset users, toggle owner<br/>
+          <span class="filepath">operator/app/templates/login.html</span> — login page<br/>
+          <span class="filepath">operator/app/templates/team.html</span> — team management UI
+        </p>
+      </div>
+    </div>
+
+    <!-- ALREADY DONE: BLAST -->
+    <div id="blast" class="section">
+      <div class="page-title">Blast Workflow</div>
+      <div class="page-subtitle">The blast tool is fully built — drafts, test send, scheduling, image upload, link tracking.</div>
+
+      <div class="status-bar status-done">
+        <span class="status-tag tag-done">ALREADY DONE</span>
+        <span>One of the most complete features in the platform. Supports Twilio and SlickText, draft saving, scheduled sends.</span>
+      </div>
+
+      <div class="two-col">
+        <div class="card">
+          <h3>What's Built</h3>
+          <ul>
+            <li>Draft board — compose and save before sending</li>
+            <li>Audience targeting: all subscribers, by tag, by location, by show list, random sample %</li>
+            <li>Send a test to your own phone before blasting</li>
+            <li>Confirmation checkbox required before live send</li>
+            <li>Scheduled sends (background scheduler)</li>
+            <li>Image / MMS support (stored in Postgres, served as public URL)</li>
+            <li>Link tracking with click counts per blast</li>
+            <li>Clone a sent blast for resend</li>
+            <li>Blast status polling (sent / sending / failed counts)</li>
+            <li>Stuck send recovery (resets drafts stuck in "sending" after 5 min)</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>TCPA Note — What You Still Need</h3>
+          <p>The technical blast safeguards are solid. What's missing is a <strong>paper trail</strong> of client approval for each blast.</p>
+          <p style="margin-top: 0.5rem;" class="muted small">Right now the blast tool has a confirmation checkbox, but there's no record of who confirmed or when. For liability purposes — especially if a blast goes to 10K+ people — you want an email/Slack confirmation step that creates an audit trail outside the app.</p>
+          <p style="margin-top: 0.5rem;" class="muted small">Simple fix: require the "owner" role (creator) to send, and log who pressed send with a timestamp. The <code>created_by</code> field in the database already captures this email — it just needs to be more visible.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Relevant Files</h3>
+        <p>
+          <span class="filepath">operator/app/routes/blast.py</span> — all blast routes (draft, send, schedule, clone, image upload)<br/>
+          <span class="filepath">operator/app/blast_sender.py</span> — background thread that executes sends<br/>
+          <span class="filepath">operator/app/templates/blast.html</span> — compose UI
+        </p>
+      </div>
+    </div>
+
+    <!-- ALREADY DONE: SHOWS -->
+    <div id="shows" class="section">
+      <div class="page-title">Live Shows & Streams</div>
+      <div class="page-subtitle">The live show system is complete — keyword signup, event types, timezone handling, join confirmations.</div>
+
+      <div class="status-bar status-done">
+        <span class="status-tag tag-done">ALREADY DONE</span>
+        <span>The battle-tested feature — used at the Rhode Island show that drove 323 signups in one night.</span>
+      </div>
+
+      <div class="two-col">
+        <div class="card">
+          <h3>What's Built</h3>
+          <ul>
+            <li>Create shows with keyword, time window, event type (comedy / live stream / other)</li>
+            <li>Draft → Live → Ended lifecycle with one-at-a-time enforcement</li>
+            <li>Auto-welcome texts: rotating comedy set vs. streaming-themed set vs. silent join</li>
+            <li>Typo forgiveness on longer keywords (fuzzy matching)</li>
+            <li>Keyword-only joins suppress the AI so fans don't get a chat reply on that text</li>
+            <li>Timezone-aware time windows (creator enters in their local time)</li>
+            <li>Show signups list saved permanently — downloadable CSV</li>
+            <li>Recent actions audit log per show</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>One Thing to Watch</h3>
+          <p>The welcome texts for comedy shows and live streams are hardcoded in <span class="filepath">app/live_shows/join_confirmations.py</span>. They work great for Zarna. For a new creator, they'll need to be either:</p>
+          <ul style="margin-top: 0.5rem;">
+            <li>Made configurable (add to the creator config JSON), or</li>
+            <li>Manually updated per deployment before launch</li>
+          </ul>
+          <p class="muted small" style="margin-top: 0.5rem;">This is a lower-urgency fix — the messages are generic enough to work for most performers. But a creator who wants their own welcome text will notice.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Relevant Files</h3>
+        <p>
+          <span class="filepath">app/live_shows/signup.py</span> — signup logic, join confirmation trigger<br/>
+          <span class="filepath">app/live_shows/join_confirmations.py</span> — the welcome text templates (hardcoded, consider making configurable)<br/>
+          <span class="filepath">app/live_shows/keyword_match.py</span> — fuzzy keyword matching<br/>
+          <span class="filepath">operator/app/routes/shows.py</span> — dashboard UI routes
+        </p>
+      </div>
+    </div>
+
+    <!-- 4. CLIENT ROLE -->
+    <div id="clientrole" class="section">
+      <div class="page-title">4. Creator Access Role</div>
+      <div class="page-subtitle">Creators need to get into the dashboard without being able to accidentally break their own setup.</div>
+
+      <div class="status-bar status-should">
+        <span class="status-tag tag-should">SHOULD BUILD</span>
+        <span>The current Owner/Operator model works but gives creators more access than they need.</span>
+      </div>
+
+      <div class="card">
+        <h3>The Problem</h3>
+        <p>Right now there are two roles: <strong>Owner</strong> (can manage team, change passwords, full access) and <strong>Operator</strong> (everything except team management). When you give a creator the "Owner" role, they can see your team members, manage them, and reset passwords. When you give them "Operator," they can't create their own team.</p>
+        <p style="margin-top:0.5rem;" class="muted small">This is a medium-urgency problem. For most creators, just making them "Operator" and adding your team as Owners is fine in the short term.</p>
+      </div>
+
+      <div class="card">
+        <h3>What to Build</h3>
+        <p>Add a <strong>Creator</strong> role to <span class="filepath change-file">operator/app/routes/auth.py</span> and <span class="filepath change-file">operator/app/routes/team.py</span>. This role can:</p>
+        <table>
+          <thead><tr><th>Feature</th><th>Creator</th><th>Operator (you)</th><th>Owner</th></tr></thead>
+          <tbody>
+            <tr><td>View dashboard / stats</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td>View conversations</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td>Create & manage shows</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td>Send blasts</td><td>✓ (with confirm)</td><td>✓</td><td>✓</td></tr>
+            <tr><td>Export audience CSV</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td>Add team members</td><td>✗</td><td>✗</td><td>✓</td></tr>
+            <tr><td>Reset passwords</td><td>✗</td><td>✗</td><td>✓</td></tr>
+          </tbody>
+        </table>
+        <p class="muted small" style="margin-top:0.5rem;">Owner stays as you (Brij). Creator gets full operational access but can't touch the team management. Minimal code change — just add <code>is_creator</code> boolean to the <code>operator_users</code> table and check it on the team routes.</p>
+      </div>
+    </div>
+
+    <!-- 5. REPORTING -->
+    <div id="reporting" class="section">
+      <div class="page-title">5. Monthly Reporting</div>
+      <div class="page-subtitle">Clients who don't log in every day need a reason to remember the platform is working.</div>
+
+      <div class="status-bar status-should">
+        <span class="status-tag tag-should">SHOULD BUILD</span>
+        <span>This is a retention play. Clients who don't see numbers forget the platform is delivering value.</span>
+      </div>
+
+      <div class="card">
+        <h3>What to Build</h3>
+        <p>A scheduled monthly email (or PDF) auto-generated from the database with the numbers that matter to a creator. Uses the scheduler that already exists in <span class="filepath">operator/app/scheduler.py</span>.</p>
+      </div>
+
+      <div class="two-col">
+        <div class="card">
+          <h3>What the Report Should Include</h3>
+          <ul>
+            <li><strong>Total subscribers</strong> (and change from last month)</li>
+            <li><strong>Engagement rate</strong> — active fans / total</li>
+            <li><strong>Messages sent by fans</strong> this month</li>
+            <li><strong>New subscribers from shows</strong> — by show name</li>
+            <li><strong>Blast performance</strong> — how many received, if any were sent</li>
+            <li><strong>Top 3 things fans asked about</strong> (intent breakdown)</li>
+            <li>One line: "Your fans are talking to you X times per week on average"</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Implementation</h3>
+          <p>Two options, in order of effort:</p>
+          <div class="step-list" style="margin-top: 0.5rem;">
+            <div class="step">
+              <div class="step-num">A</div>
+              <div class="step-body">
+                <h4>Simple: email with stats table</h4>
+                <p>Add a monthly cron job to the scheduler. Runs a query, formats stats as plain text email, sends via SendGrid or Postmark. Low effort, totally sufficient.</p>
+              </div>
+            </div>
+            <div class="step">
+              <div class="step-num">B</div>
+              <div class="step-body">
+                <h4>Better: add a /operator/report page</h4>
+                <p>A dedicated "monthly wrap" route that renders the stats as a clean HTML page. Can be linked from email or bookmarked. Same data, better presentation.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6. AI QA -->
+    <div id="aiqa" class="section">
+      <div class="page-title">6. AI Quality Flags</div>
+      <div class="page-subtitle">At scale, the AI will occasionally say something off-brand. You need a way to catch it.</div>
+
+      <div class="status-bar status-should">
+        <span class="status-tag tag-should">SHOULD BUILD</span>
+        <span>Without this, a bad reply can live in a fan's inbox for weeks before anyone notices.</span>
+      </div>
+
+      <div class="card">
+        <h3>What to Build</h3>
+        <p>Add a <strong>flag button</strong> to the conversation thread view in the operator dashboard. When a team member clicks it on a specific assistant message, it writes to a <code>flagged_messages</code> table with the message ID, reason, and who flagged it.</p>
+        <p style="margin-top:0.5rem;" class="muted small">This is your QA loop. You review flagged messages weekly. Patterns tell you when to update the voice config, add a banned topic, or adjust a style rule. Without this, you have no feedback signal.</p>
+      </div>
+
+      <div class="two-col">
+        <div class="card">
+          <h3>What Gets Flagged</h3>
+          <ul>
+            <li>Reply that sounded nothing like the creator</li>
+            <li>Reply that was factually wrong (wrong show date, wrong book title)</li>
+            <li>Reply that was off-brand or too generic</li>
+            <li>Reply that hit a topic the creator wanted to avoid</li>
+            <li>Reply that felt robotic or overly formal</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Minimal Implementation</h3>
+          <div class="step-list" style="margin-top:0.3rem;">
+            <div class="step"><div class="step-num">1</div><div class="step-body"><h4>Add <code>flagged_messages</code> table to DB</h4><p>Columns: message_id, flagged_by, reason, created_at</p></div></div>
+            <div class="step"><div class="step-num">2</div><div class="step-body"><h4>Add flag button to conversation thread UI</h4><p>Small icon next to each assistant message. Click → modal with "why is this wrong?" dropdown.</p></div></div>
+            <div class="step"><div class="step-num">3</div><div class="step-body"><h4>Add /operator/quality route</h4><p>A simple list of all flagged messages with their conversations. Review weekly.</p></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 7. KNOWLEDGE REFRESH -->
+    <div id="refresh" class="section">
+      <div class="page-title">7. Knowledge Base Refresh Workflow</div>
+      <div class="page-subtitle">When a creator drops new material, the AI needs to learn it without breaking what's already there.</div>
+
+      <div class="status-bar status-nice">
+        <span class="status-tag tag-nice">NICE TO HAVE</span>
+        <span>Not urgent for launch, but becomes necessary once creators start touring or releasing new content.</span>
+      </div>
+
+      <div class="card">
+        <h3>The Problem</h3>
+        <p>Right now, adding new content to the knowledge base means re-running ingestion scripts and rebuilding embeddings. If you do it wrong, you could overwrite existing chunks. There's no "add to" flow — only "rebuild from scratch." For a creator who releases a new special every year and a new podcast episode every week, this is a real operational burden.</p>
+      </div>
+
+      <div class="card">
+        <h3>What to Build</h3>
+        <div class="step-list">
+          <div class="step">
+            <div class="step-num">1</div>
+            <div class="step-body">
+              <h4>Add an <code>incremental</code> flag to ingestion scripts</h4>
+              <p>Instead of rebuilding the full chunk file, append new chunks to the existing one. Track which URLs/files have already been ingested in a small manifest file (<code>training_data/[slug]_manifest.json</code>) so nothing is ingested twice.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">2</div>
+            <div class="step-body">
+              <h4>Update embeddings incrementally</h4>
+              <p>Only embed the new chunks, then merge into the existing <code>.json.gz</code>. A full rebuild takes minutes; this takes seconds.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">3</div>
+            <div class="step-body">
+              <h4>(Optional) Add an /operator/knowledge-base page</h4>
+              <p>Shows the creator what their AI knows: chunk count by source, last updated date per source, and a button to trigger a refresh. Mostly useful as trust-building — lets creators see the AI isn't making things up.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 8. MULTI-CLIENT HUB -->
+    <div id="multiapp" class="section">
+      <div class="page-title">8. Multi-Client Hub (Your Operator View)</div>
+      <div class="page-subtitle">Once you have 3+ clients, you'll want a single view to monitor all of them.</div>
+
+      <div class="status-bar status-nice">
+        <span class="status-tag tag-nice">NICE TO HAVE</span>
+        <span>Not needed until you're managing multiple active deployments simultaneously.</span>
+      </div>
+
+      <div class="card">
+        <h3>The Problem</h3>
+        <p>Today there's no "Brij's view of all clients." If you have 5 client deployments, you'd have to log into 5 different dashboards to see if anything is broken. One deployment could be down and you wouldn't know until the client complains.</p>
+      </div>
+
+      <div class="card">
+        <h3>What to Build: A Hub Dashboard</h3>
+        <p>A separate internal app (or a new route on one of your existing apps) that queries all client deployments and shows you a health overview.</p>
+        <table>
+          <thead><tr><th>Column</th><th>What It Shows</th></tr></thead>
+          <tbody>
+            <tr><td>Client name</td><td>Creator slug / display name</td></tr>
+            <tr><td>Status</td><td>Green / Yellow / Red based on /health endpoint</td></tr>
+            <tr><td>Subscribers</td><td>Total fan count across all lists</td></tr>
+            <tr><td>Last activity</td><td>When the most recent inbound text was received</td></tr>
+            <tr><td>Errors (24h)</td><td>AI errors, webhook auth failures from ops_metrics</td></tr>
+            <tr><td>Quick link</td><td>→ opens that client's operator dashboard</td></tr>
+          </tbody>
+        </table>
+        <p class="muted small" style="margin-top:0.5rem;">This can be as simple as a static HTML page that fetches each client's <code>/health</code> endpoint and their stats API. No separate database needed.</p>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+  function show(id, el) {
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    document.querySelectorAll('.sidebar-item').forEach(s => s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    el.classList.add('active');
+  }
+</script>
+</body>
+</html>
