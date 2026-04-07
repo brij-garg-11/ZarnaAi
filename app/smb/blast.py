@@ -430,13 +430,14 @@ def _ai_enhance_blast(owner_message: str, tenant: BusinessTenant) -> str:
     in the tenant's tone. Falls back to a clean plain version if AI fails.
     """
     prompt = (
-        f"You are writing an SMS blast for {tenant.display_name} subscribers. "
-        f"Tone: {tenant.tone}.\n\n"
-        f"The owner wants to send this message:\n\"{owner_message}\"\n\n"
-        f"Rewrite it as an engaging, natural SMS that subscribers will want to read. "
-        f"Keep all the key facts (time, discount, details) intact. "
-        f"Keep it short — 2 sentences max. Plain text only, no emojis unless the original has them. "
-        f"Do NOT start with the business name — the sender ID handles that."
+        f"The owner of {tenant.display_name} sent this SMS to their subscribers:\n"
+        f"\"{owner_message}\"\n\n"
+        f"Lightly clean it up — fix any typos, make it read naturally. "
+        f"Do NOT rewrite it, do NOT make it sound like marketing or a brand. "
+        f"Keep every detail exactly as stated (discounts, times, numbers). "
+        f"It should still sound like the owner typed it themselves, just cleaner. "
+        f"Plain text only. No emojis unless the original has them. "
+        f"Return only the cleaned message, nothing else."
     )
 
     enhanced = smb_ai.generate(prompt)
