@@ -290,15 +290,7 @@ def handle_owner_blast(
             return f"Sending to your {segment['name']} subscribers now."
         return "Sending to all your active subscribers now."
 
-    # ── Not a blast command ──
-    if not is_blast_command(text, tenant):
-        sample = ", ".join(f'"{t}"' for t in tenant.blast_triggers[:4])
-        return (
-            f"To blast your subscribers, include a trigger word like {sample}. "
-            f'Example: "Opening tonight 8pm — 20% off tickets".'
-        )
-
-    # ── Blast command — ask who to send to (AI suggests the relevant segment) ──
+    # ── Treat everything else as a blast — ask who to send to ──
     _set_pending(phone_number, text, tenant)
     suggested = _ai_suggest_segment(text, tenant)
     if suggested:
@@ -432,19 +424,22 @@ def _ai_enhance_blast(owner_message: str, tenant: BusinessTenant) -> str:
     prompt = (
         f"The owner of {tenant.display_name} wants to send this SMS blast to subscribers:\n"
         f"\"{owner_message}\"\n\n"
-        f"Make it feel warm and inviting — like a text from someone who genuinely wants you there. "
-        f"Keep every fact exactly as stated (discounts, times, numbers — do not change or remove any). "
-        f"Do NOT make it sound like a brand or marketing campaign. "
-        f"Add a small human touch — a bit of excitement or personality — without going over the top. "
+        f"Lightly clean it up — fix typos, expand shorthand (e.g. 'tn' → 'tonight', 'tmrw' → 'tomorrow'), "
+        f"and make it feel warm and human, like a text from a friend who wants you to come out. "
+        f"CRITICAL: keep every fact exactly as stated — same discount %, same time, same event. "
+        f"Do NOT add, invent, or change any details. "
+        f"Do NOT make it sound like marketing or a brand. "
         f"1-2 sentences max. Plain text only. No emojis unless the original has them. "
-        f"Return only the message, nothing else.\n\n"
+        f"Return only the final message, nothing else.\n\n"
         f"Examples:\n"
         f"Input: '30% off standup tonight'\n"
-        f"Output: 'Hey, we got 30% off standup tonight — would love to see you there.'\n\n"
+        f"Output: 'Hey! 30% off standup tonight — would love to see you there :)'\n\n"
+        f"Input: 'we have 25% off stand up comedy 7pm tn'\n"
+        f"Output: 'Hey! We have 25% off stand up comedy tonight at 7pm — hope to see you there :)'\n\n"
         f"Input: 'last few seats for tonights show 8pm'\n"
-        f"Output: 'Just a heads up — only a few seats left for tonight at 8pm. Grab one while you can.'\n\n"
+        f"Output: 'Just a heads up — only a few seats left for tonight at 8. Grab one while you can.'\n\n"
         f"Input: 'improv night friday free drinks for first 20 people'\n"
-        f"Output: 'Improv night this Friday, and the first 20 people get free drinks. Come early.'"
+        f"Output: 'Improv night this Friday — first 20 people get free drinks. Come early.'"
     )
 
     enhanced = smb_ai.generate(prompt)
