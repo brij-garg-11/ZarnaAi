@@ -283,12 +283,12 @@ def handle_owner_blast(
         segment = _ai_classify_audience_reply(text, tenant)
         threading.Thread(
             target=_run_blast_async,
-            args=(pending["message_text"], tenant, segment),
+            args=(pending["message_text"], tenant, segment, phone_number),
             daemon=True,
         ).start()
         if segment:
-            return f"Got it! Sending to your {segment['name']} subscribers now."
-        return "Got it! Sending to all your active subscribers now."
+            return f"Sending to your {segment['name']} subscribers now."
+        return "Sending to all your active subscribers now."
 
     # ── Not a blast command ──
     if not is_blast_command(text, tenant):
@@ -319,6 +319,7 @@ def _run_blast_async(
     message_text: str,
     tenant: BusinessTenant,
     segment: Optional[dict] = None,
+    owner_phone: Optional[str] = None,
 ) -> None:
     conn = get_db_connection()
     if not conn:
@@ -374,6 +375,11 @@ def _run_blast_async(
     )
 
     _record_blast(tenant, message_text, body, attempted, succeeded, seg_name)
+
+    if owner_phone and tenant.sms_number:
+        audience = f"your {seg_name.lower()} subscribers" if seg_name else "all your subscribers"
+        confirmation = f"Done! Blast sent to {succeeded}/{attempted} {audience}."
+        _twilio_send_smb(owner_phone, confirmation, tenant.sms_number)
 
 
 def _twilio_send_smb(to: str, body: str, from_number: str) -> bool:
