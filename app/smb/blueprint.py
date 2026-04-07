@@ -17,6 +17,7 @@ belongs to — SMBBrain.handle_message() resolves the tenant from there.
 import logging
 import os
 import threading
+from pathlib import Path
 
 from flask import Blueprint, Response, jsonify, request
 
@@ -49,50 +50,58 @@ def smb_health():
 _logo_cache: dict = {}
 
 
-def _fetch_logo_b64(logo_url: str):
+def _load_logo_b64(slug: str, logo_url: str):
     """
-    Download logo, crop to a square, resize to 300×300, and return
-    (mime_type, base64_string). Returns None on any failure.
-    Squaring the image prevents iOS from zooming in on wide logos.
+    Return (mime_type, base64_string) for the tenant logo, or None on failure.
+
+    Preference order:
+      1. Local file: creator_config/<slug>_logo.png  (no network, always works)
+      2. Remote URL from config (fallback if no local file)
+
+    The image is resized to a 300×300 square — centred, preserving aspect ratio —
+    so it fits the iOS contact photo circle without clipping or appearing tiny.
     """
-    try:
-        import base64
-        import io
-        import urllib.request
-        from PIL import Image
+    import base64
+    import io
+    from pathlib import Path
+    from PIL import Image
 
-        req = urllib.request.Request(
-            logo_url,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; SMBVCard/1.0)"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = resp.read()
-
-        img = Image.open(io.BytesIO(data)).convert("RGBA")
-
-        # iOS contact photo is a circle — put the logo on a white square canvas
-        # with 15% padding on each side so nothing gets clipped by the circle crop.
+    def _process(img_bytes: bytes) -> tuple[str, str]:
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
         canvas_size = 300
-        padding_pct = 0.15
-        logo_size = int(canvas_size * (1 - 2 * padding_pct))  # 255px
-
-        # Resize logo to fit within logo_size × logo_size, preserving aspect ratio
-        img.thumbnail((logo_size, logo_size), Image.LANCZOS)
+        img.thumbnail((canvas_size, canvas_size), Image.LANCZOS)
         lw, lh = img.size
-
         canvas = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
-        offset_x = (canvas_size - lw) // 2
-        offset_y = (canvas_size - lh) // 2
-        canvas.paste(img, (offset_x, offset_y), mask=img.split()[3] if img.mode == "RGBA" else None)
-
+        canvas.paste(img, ((canvas_size - lw) // 2, (canvas_size - lh) // 2),
+                     mask=img.split()[3])
         buf = io.BytesIO()
         canvas.save(buf, format="JPEG", quality=85)
-        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        return "image/jpeg", b64
+        return "image/jpeg", base64.b64encode(buf.getvalue()).decode("ascii")
 
-    except Exception:
-        logger.warning("SMB vcard: failed to fetch/process logo from %s", logo_url, exc_info=True)
-        return None
+    # 1. Local file
+    local_path = Path(__file__).parent.parent.parent / "creator_config" / f"{slug}_logo.png"
+    if not local_path.exists():
+        local_path = local_path.with_suffix(".jpg")
+    if local_path.exists():
+        try:
+            return _process(local_path.read_bytes())
+        except Exception:
+            logger.warning("SMB vcard: failed to process local logo %s", local_path, exc_info=True)
+
+    # 2. Remote URL
+    if logo_url:
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                logo_url,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; SMBVCard/1.0)"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return _process(resp.read())
+        except Exception:
+            logger.warning("SMB vcard: failed to fetch logo from %s", logo_url, exc_info=True)
+
+    return None
 
 
 @smb_bp.route("/vcard/<slug>.vcf", methods=["GET"])
@@ -118,9 +127,9 @@ def smb_vcard(slug: str):
     if tenant.sms_number:
         lines.append(f"TEL;TYPE=CELL:{tenant.sms_number}")
 
-    if tenant.logo_url:
+    if tenant.logo_url or (Path(__file__).parent.parent.parent / "creator_config" / f"{slug}_logo.png").exists():
         if slug not in _logo_cache:
-            _logo_cache[slug] = _fetch_logo_b64(tenant.logo_url)
+            _logo_cache[slug] = _load_logo_b64(slug, tenant.logo_url)
         logo = _logo_cache[slug]
         if logo:
             mime, b64 = logo
