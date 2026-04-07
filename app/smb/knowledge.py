@@ -75,42 +75,56 @@ def _fetch_todays_shows(calendar_url: str, slug: str) -> str:
         _set_cached(slug, "")
         return ""
 
-    today = datetime.now(timezone.utc).strftime("%-d")   # day without leading zero
-    # The calendar page renders like: "Not Ripe Bananas8:00pm" on the day's cell
-    # We extract lines near today's date marker
-    result = _parse_todays_shows(text, today)
+    result = _parse_todays_shows(text, "")
     _set_cached(slug, result)
     return result
 
 
-def _parse_todays_shows(html: str, today_day: str) -> str:
+def _parse_todays_shows(html: str, _unused: str) -> str:
     """
-    Parse show names + times from raw HTML/text for today's date.
-    The calendar renders plain text with show names immediately followed by times.
-    """
-    # Strip HTML tags
-    plain = re.sub(r"<[^>]+>", " ", html)
-    plain = re.sub(r"\s+", " ", plain)
+    Extract tonight's shows from WSCC's Next.js page.
 
-    # Pattern: look for the day number followed by show entries on the same day cell
-    # Calendar text looks like: "7 Not Ripe Bananas8:00pm 8 SHOW: Comedy Idol7:00pm"
-    # We find the segment starting with today's day number
-    day_pattern = re.compile(
-        r"(?<!\d)" + re.escape(today_day) + r"(?!\d)"
-        r"\s*((?:[A-Za-z][^0-9]{2,60}?\d{1,2}:\d{2}(?:am|pm)\s*)+)"
+    The site double-escapes JSON inside JS push() calls, so event objects look like:
+        \\"datetime\\":\\"2026-04-07T20:00:00\\" ... \\"title\\":\\"Not Ripe Bananas\\"
+
+    We extract every (datetime, title) pair for today's date, parse the time,
+    and return a human-readable string like "Not Ripe Bananas 8pm, Friday Favs 10pm".
+    """
+    today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # The page embeds double-escaped JSON inside JS push() calls.
+    # In the raw HTML string, field names appear as \"field\" (backslash + quote).
+    # datetime always appears before title in each event object.
+    raw_matches = re.findall(
+        r'\\\"datetime\\\":\\\"(' + re.escape(today_iso) + r'[T0-9:+]+)\\\"[^}]*\\\"title\\\":\\\"([^\\\"]+)',
+        html,
     )
-    match = day_pattern.search(plain)
-    if not match:
-        return ""
 
-    segment = match.group(1)
-    # Split individual shows: text followed by time
-    shows = re.findall(r"([A-Za-z][^0-9]{2,60}?)(\d{1,2}:\d{2}(?:am|pm))", segment)
+    shows: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    for dt_str, title in raw_matches:
+        title = title.strip()
+        if not title or title in seen:
+            continue
+        seen.add(title)
+
+        try:
+            dt = datetime.fromisoformat(dt_str)
+            hour, minute = dt.hour, dt.minute
+            suffix = "am" if hour < 12 else "pm"
+            hour12 = hour % 12 or 12
+            time_str = f"{hour12}:{minute:02d}{suffix}" if minute else f"{hour12}{suffix}"
+        except Exception:
+            time_str = ""
+
+        shows.append((dt_str, f"{title} {time_str}".strip()))
+
     if not shows:
         return ""
 
-    parts = [f"{name.strip()} {time}" for name, time in shows]
-    return ", ".join(parts)
+    shows.sort(key=lambda x: x[0])
+    return ", ".join(label for _, label in shows)
 
 
 # ---------------------------------------------------------------------------
