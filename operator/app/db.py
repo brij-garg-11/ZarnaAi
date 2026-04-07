@@ -137,6 +137,19 @@ def init_db():
         "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS is_quiz BOOLEAN DEFAULT FALSE",
         "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS quiz_correct_answer TEXT DEFAULT ''",
 
+        # ── Blast context columns + session table ─────────────────────────
+        "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS blast_context_note TEXT DEFAULT ''",
+        """
+        CREATE TABLE IF NOT EXISTS blast_context_sessions (
+            id             BIGSERIAL PRIMARY KEY,
+            blast_draft_id BIGINT,
+            context_note   TEXT NOT NULL,
+            created_at     TIMESTAMPTZ DEFAULT NOW(),
+            expires_at     TIMESTAMPTZ
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_blast_context_sessions_active ON blast_context_sessions (expires_at, created_at)",
+
         # ── Analytics columns on blast_drafts ──────────────────────────────
         "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS opt_out_count INT DEFAULT 0",
         # manual_link_clicks: for external/SlickText blasts where we can't count from our DB

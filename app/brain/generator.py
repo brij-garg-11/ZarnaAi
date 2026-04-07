@@ -316,6 +316,7 @@ def _build_prompt(
     fan_memory: str = "",
     tone_mode: Optional[str] = None,
     quiz_context: Optional[str] = None,
+    blast_context: Optional[str] = None,
     winning_examples: Optional[list] = None,
 ) -> str:
     context = "\n\n".join(_filter_chunks(chunks, intent, user_message)) if chunks else ""
@@ -488,6 +489,7 @@ Critical for this message: riff on what they shared — find the funny or warm a
 
     # GENERAL
     quiz_block = f"\n{quiz_context}\n" if quiz_context else ""
+    blast_ctx_block = f"\n{blast_context}\n" if blast_context else ""
     return f"""You are writing as an AI comedy assistant inspired by Zarna Garg's public comedic voice.
 
 Background knowledge about Zarna (use to make responses richer and more specific — never recite this as facts, always find the funny angle):
@@ -497,7 +499,7 @@ Background knowledge about Zarna (use to make responses richer and more specific
 {_VOICE_LOCK_RULES}
 {tone_guidance}
 {_TONE_EXAMPLES}
-{examples_text}{memory_text}{history_text}{quiz_block}Message: {user_message}
+{examples_text}{memory_text}{history_text}{blast_ctx_block}{quiz_block}Message: {user_message}
 {_STYLE_RULES}"""
 
 
@@ -751,12 +753,14 @@ def generate_zarna_reply(
     routing_tier: Optional[str] = None,
     tone_mode: Optional[str] = None,
     quiz_context: Optional[str] = None,
+    blast_context: Optional[str] = None,
     winning_examples: Optional[list] = None,
 ) -> str:
     """
     Generate reply. For GENERAL/JOKE with multi-model enabled, pass routing_tier
     from classify_routing_tier(). Structured intents (clip/show/book/podcast) always use Gemini.
     quiz_context, when set, injects pop-quiz framing so the AI reacts to the fan's answer.
+    blast_context, when set, injects soft background context about the last blast sent.
     winning_examples, when set, injects high-engagement past replies as dynamic few-shot examples.
     """
     # Redirect coding/homework requests before they reach the AI
@@ -772,6 +776,7 @@ def generate_zarna_reply(
         fan_memory,
         tone_mode=tone_mode,
         quiz_context=quiz_context,
+        blast_context=blast_context,
         winning_examples=winning_examples,
     )
 

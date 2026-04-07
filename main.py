@@ -29,6 +29,7 @@ from app.smb.blueprint import smb_bp
 from app.smb.portal import portal_bp
 from app.live_shows.signup import LiveShowSignupResult, try_live_show_signup
 from app.live_shows.quiz import get_active_quiz_for_fan, record_quiz_response, build_quiz_context
+from app.live_shows.blast_context import get_active_blast_context, build_blast_context_prompt
 from app.ops_metrics import ai_reply_enter, ai_reply_leave, bump as ops_bump
 
 logging.basicConfig(level=logging.INFO)
@@ -239,14 +240,14 @@ def message():
 # ---------------------------------------------------------------------------
 
 
-def _process_slicktext_message(phone_number: str, message_text: str, quiz_context: str = None) -> None:
+def _process_slicktext_message(phone_number: str, message_text: str, quiz_context: str = None, blast_context: str = None) -> None:
     if not ai_reply_enter():
         ops_bump("ai_reply_capacity_reject")
         logging.warning("AI at capacity — SlickText message dropped (...%s)", phone_number[-4:])
         return
     try:
         try:
-            reply = brain.handle_incoming_message(phone_number, message_text, quiz_context=quiz_context)
+            reply = brain.handle_incoming_message(phone_number, message_text, quiz_context=quiz_context, blast_context=blast_context)
         except Exception as e:
             ops_bump("ai_reply_error")
             logging.error("Error processing SlickText message from %s: %s", phone_number, e)
@@ -336,9 +337,21 @@ def slicktext_webhook():
     except Exception:
         logging.exception("Quiz intercept failed — continuing with normal AI reply")
 
+    # Check for active blast context — soft background framing if no quiz is active.
+    blast_ctx = None
+    if not quiz_ctx:
+        try:
+            context_note = get_active_blast_context()
+            if context_note:
+                blast_ctx = build_blast_context_prompt(context_note)
+                logging.info("Blast context injected for ...%s", phone_number[-4:] if phone_number else "?")
+        except Exception:
+            logging.exception("Blast context lookup failed — continuing with normal AI reply")
+
     threading.Thread(
         target=_process_slicktext_message,
         args=(phone_number, message_text, quiz_ctx),
+        kwargs={"blast_context": blast_ctx},
         daemon=True,
     ).start()
 
@@ -350,14 +363,14 @@ def slicktext_webhook():
 # ---------------------------------------------------------------------------
 
 
-def _process_twilio_message(phone_number: str, message_text: str, quiz_context: str = None) -> None:
+def _process_twilio_message(phone_number: str, message_text: str, quiz_context: str = None, blast_context: str = None) -> None:
     if not ai_reply_enter():
         ops_bump("ai_reply_capacity_reject")
         logging.warning("AI at capacity — Twilio message dropped (...%s)", phone_number[-4:])
         return
     try:
         try:
-            reply = brain.handle_incoming_message(phone_number, message_text, quiz_context=quiz_context)
+            reply = brain.handle_incoming_message(phone_number, message_text, quiz_context=quiz_context, blast_context=blast_context)
         except Exception as e:
             ops_bump("ai_reply_error")
             logging.error("Error processing Twilio message from %s: %s", phone_number, e)
@@ -465,9 +478,21 @@ def twilio_webhook():
     except Exception:
         logging.exception("Quiz intercept failed — continuing with normal AI reply")
 
+    # Check for active blast context — soft background framing if no quiz is active.
+    blast_ctx = None
+    if not quiz_ctx:
+        try:
+            context_note = get_active_blast_context()
+            if context_note:
+                blast_ctx = build_blast_context_prompt(context_note)
+                logging.info("Blast context injected for ...%s", phone_number[-4:] if phone_number else "?")
+        except Exception:
+            logging.exception("Blast context lookup failed — continuing with normal AI reply")
+
     threading.Thread(
         target=_process_twilio_message,
         args=(phone_number, message_text, quiz_ctx),
+        kwargs={"blast_context": blast_ctx},
         daemon=True,
     ).start()
 

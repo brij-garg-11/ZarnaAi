@@ -398,6 +398,8 @@ def save_draft():
     is_quiz_raw = request.form.get("is_quiz") or request.form.get("is_quiz_hidden") or "0"
     is_quiz = is_quiz_raw in ("1", "true", "on")
     quiz_correct_answer = (request.form.get("quiz_correct_answer") or "").strip()[:500]
+    # Blast context — operator-only note giving AI background on the blast
+    blast_context_note = (request.form.get("blast_context_note") or "").strip()[:1000]
     draft_id_raw = request.form.get("draft_id")
     draft_id = int(draft_id_raw) if draft_id_raw and draft_id_raw.isdigit() else None
 
@@ -423,6 +425,7 @@ def save_draft():
             sample_pct=sample_pct, media_url=media_url,
             link_url=link_url, tracked_link_slug=tracked_link_slug,
             is_quiz=is_quiz, quiz_correct_answer=quiz_correct_answer,
+            blast_context_note=blast_context_note,
             created_by=user["email"], draft_id=draft_id,
         )
         logger.info("  saved draft id=%s", new_id)

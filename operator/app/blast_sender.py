@@ -109,6 +109,11 @@ def execute_blast(draft_id: int):
             correct_answer=draft["quiz_correct_answer"],
         )
 
+    # If this blast has a context note, create a blast_context_sessions row so inbound
+    # replies within 24h get soft AI context about what the blast was about.
+    if (draft.get("blast_context_note") or "").strip():
+        _create_blast_context_session(draft_id, draft["blast_context_note"])
+
     # Update tracked_links.sent_to with the number of recipients this blast reached
     if tracked_link_slug and len(phones) > 0:
         try:
@@ -159,6 +164,30 @@ def _create_quiz_session(
         )
     except Exception as e:
         logger.exception("_create_quiz_session failed: %s", e)
+
+
+def _create_blast_context_session(blast_draft_id: int, context_note: str) -> None:
+    """Insert a blast_context_sessions row so inbound replies get soft AI context."""
+    try:
+        from .db import get_conn
+        conn = get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO blast_context_sessions
+                      (blast_draft_id, context_note, expires_at)
+                    VALUES (%s, %s, NOW() + INTERVAL '24 hours')
+                    """,
+                    (blast_draft_id, context_note),
+                )
+        conn.close()
+        logger.info(
+            "_create_blast_context_session: created for blast_draft_id=%s",
+            blast_draft_id,
+        )
+    except Exception as e:
+        logger.exception("_create_blast_context_session failed: %s", e)
 
 
 def _send_one(phone: str, body: str, channel: str, *, media_url: str = "") -> bool:

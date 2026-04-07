@@ -282,6 +282,32 @@
           <input type="hidden" name="is_quiz_hidden" :value="isQuiz ? '1' : '0'">
         </div>
 
+        <!-- Blast Context (AI background note) -->
+        <div class="mb-5">
+          <div class="rounded-xl border p-4" style="border-color:var(--border);background:#0F0D0B;">
+            <div class="flex items-center justify-between mb-3">
+              <label class="section-label" style="color:var(--text);">🧠 AI Context</label>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" x-model="hasBlastContext"
+                       class="w-4 h-4 rounded" style="accent-color:var(--pink);">
+                <span class="text-sm" style="color:var(--text-muted);">Add context</span>
+              </label>
+            </div>
+            <div x-show="hasBlastContext" x-transition>
+              <p class="text-xs mb-3" style="color:var(--text-muted);">
+                Give the AI background on this blast so it responds intelligently when fans reply.
+                <strong style="color:var(--text);">Never shown to fans.</strong>
+              </p>
+              <textarea name="blast_context_note" class="zarna-input" rows="3"
+                        placeholder="e.g. This blast is about our June Chicago show — fans who reply are probably asking about tickets or the venue."
+                        {{ 'readonly' if active_draft.status in ('scheduled','sending') else '' }}>{{ active_draft.blast_context_note or '' }}</textarea>
+            </div>
+            <div x-show="!hasBlastContext">
+              <p class="text-xs" style="color:var(--text-dim);">Add context so the AI knows what this blast is about when fans reply.</p>
+            </div>
+          </div>
+        </div>
+
         <!-- Trackable link -->
         <div class="mb-5">
           <label class="section-label mb-2 block">
@@ -533,6 +559,7 @@ function blastCompose() {
     showSchedule: false,
     sendAt: '',
     isQuiz: {{ 'true' if active_draft and active_draft.is_quiz else 'false' }},
+    hasBlastContext: {{ 'true' if active_draft and active_draft.blast_context_note else 'false' }},
 
     get resolvedFilter() {
       if (this.audienceType === 'tag') return this.audienceFilter;

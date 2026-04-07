@@ -54,7 +54,7 @@ class ZarnaBrain:
         self.storage = storage
         self.retriever = retriever
 
-    def handle_incoming_message(self, phone_number: str, message_text: str, quiz_context: Optional[str] = None) -> str:
+    def handle_incoming_message(self, phone_number: str, message_text: str, quiz_context: Optional[str] = None, blast_context: Optional[str] = None) -> str:
         # 1. Ensure contact exists
         self.storage.save_contact(phone_number)
 
@@ -165,6 +165,7 @@ class ZarnaBrain:
             routing_tier=routing_tier,
             tone_mode=tone_mode,
             quiz_context=quiz_context,
+            blast_context=blast_context,
             winning_examples=winning_examples,
         )
         gen_ms = (time.perf_counter() - t_gen) * 1000
