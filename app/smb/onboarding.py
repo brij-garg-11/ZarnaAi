@@ -18,6 +18,7 @@ or None if it should be handled by the main SMB brain instead.
 
 import logging
 import os
+import re
 import threading
 from typing import Optional
 
@@ -81,8 +82,12 @@ def get_onboarding_reply(
                     ).start()
                 return _welcome_and_question(tenant)
 
-            # step == 0 means signed up but hasn't answered the preference question yet
+            # step == 0 means signed up but hasn't answered the preference question yet.
+            # Only intercept if the message looks like an actual answer, not a question or
+            # request directed at the bot — those should go to the conversational brain.
             if subscriber and subscriber["onboarding_step"] == 0:
+                if _looks_like_question_or_request(message_text):
+                    return None  # let the brain answer; preference remains unanswered for now
                 return _handle_answer(conn, subscriber, message_text, tenant)
 
     except Exception:
@@ -99,6 +104,26 @@ def get_onboarding_reply(
 # ---------------------------------------------------------------------------
 # Internal helpers — new open-ended flow
 # ---------------------------------------------------------------------------
+
+_QUESTION_WORDS = re.compile(
+    r"^\s*(who|what|when|where|how|is|are|do|does|can|will|would|should|could|any|got)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_question_or_request(text: str) -> bool:
+    """
+    Return True when the message looks like a question or conversational request
+    rather than an answer to the preference question.
+    Catches "Who's performing tonight?", "What time does it start?", etc.
+    """
+    stripped = text.strip()
+    if stripped.endswith("?"):
+        return True
+    if _QUESTION_WORDS.match(stripped):
+        return True
+    return False
+
 
 def _welcome_and_question(tenant: BusinessTenant) -> str:
     """
