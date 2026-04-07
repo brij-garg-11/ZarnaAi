@@ -143,6 +143,56 @@ def get_subscribers_by_segment(
 
 
 # ---------------------------------------------------------------------------
+# Pending blast confirmations (DB-backed so all gunicorn workers share state)
+# ---------------------------------------------------------------------------
+
+_PENDING_TTL_SECONDS = 600  # 10 minutes
+
+
+def set_pending_blast(conn, owner_phone: str, tenant_slug: str, message_text: str) -> None:
+    """Upsert a pending blast awaiting audience confirmation."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO smb_pending_blasts (owner_phone, tenant_slug, message_text, created_at)
+            VALUES (%s, %s, %s, NOW())
+            ON CONFLICT (owner_phone)
+            DO UPDATE SET tenant_slug = EXCLUDED.tenant_slug,
+                          message_text = EXCLUDED.message_text,
+                          created_at = NOW()
+            """,
+            (owner_phone, tenant_slug, message_text),
+        )
+
+
+def get_pending_blast(conn, owner_phone: str) -> Optional[dict]:
+    """Return the pending blast for this owner if it exists and hasn't expired."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT tenant_slug, message_text, created_at
+            FROM smb_pending_blasts
+            WHERE owner_phone = %s
+              AND created_at > NOW() - INTERVAL '%s seconds'
+            """,
+            (owner_phone, _PENDING_TTL_SECONDS),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {"tenant_slug": row[0], "message_text": row[1], "created_at": row[2]}
+
+
+def clear_pending_blast(conn, owner_phone: str) -> None:
+    """Delete the pending blast for this owner."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM smb_pending_blasts WHERE owner_phone = %s",
+            (owner_phone,),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Preferences
 # ---------------------------------------------------------------------------
 

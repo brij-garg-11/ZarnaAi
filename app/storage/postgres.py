@@ -240,6 +240,15 @@ _SMB_MIGRATIONS = (
     "CREATE INDEX IF NOT EXISTS idx_smb_blasts_tenant ON smb_blasts(tenant_slug, sent_at DESC)",
     # Add segment column for targeted blasts (idempotent ALTER)
     "ALTER TABLE smb_blasts ADD COLUMN IF NOT EXISTS segment TEXT DEFAULT NULL",
+    # Pending blast confirmations — shared across all gunicorn workers via DB
+    """
+    CREATE TABLE IF NOT EXISTS smb_pending_blasts (
+        owner_phone  TEXT        PRIMARY KEY,
+        tenant_slug  TEXT        NOT NULL,
+        message_text TEXT        NOT NULL,
+        created_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
 )
 
 

@@ -18,7 +18,7 @@ Owner sends that aren't blast commands get a friendly help reply instead.
 import logging
 import re
 import threading
-import time
+import time  # still used in _run_blast_async for rate-limiting sleep
 from typing import Optional
 
 from app.admin_auth import get_db_connection
@@ -29,35 +29,47 @@ from app.smb import storage as smb_storage
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Pending clarification state
-# In-memory store: owner_phone → {message_text, tenant_slug, hinted_segment, ts}
-# Expires after 10 minutes of inactivity.
+# Pending clarification state — DB-backed so all gunicorn workers share it
 # ---------------------------------------------------------------------------
-_PENDING: dict = {}
-_PENDING_TTL = 600  # seconds
 
-
-def _set_pending(owner_phone: str, message_text: str, tenant: BusinessTenant, hinted_segment: dict) -> None:
-    _PENDING[owner_phone] = {
-        "message_text": message_text,
-        "tenant_slug": tenant.slug,
-        "hinted_segment": hinted_segment,
-        "ts": time.monotonic(),
-    }
+def _set_pending(owner_phone: str, message_text: str, tenant: BusinessTenant) -> None:
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        with conn:
+            smb_storage.set_pending_blast(conn, owner_phone, tenant.slug, message_text)
+    except Exception:
+        logger.exception("SMB blast: failed to set pending state for %s", owner_phone[-4:])
+    finally:
+        conn.close()
 
 
 def _get_pending(owner_phone: str) -> Optional[dict]:
-    entry = _PENDING.get(owner_phone)
-    if not entry:
+    conn = get_db_connection()
+    if not conn:
         return None
-    if time.monotonic() - entry["ts"] > _PENDING_TTL:
-        _PENDING.pop(owner_phone, None)
+    try:
+        with conn:
+            return smb_storage.get_pending_blast(conn, owner_phone)
+    except Exception:
+        logger.exception("SMB blast: failed to get pending state for %s", owner_phone[-4:])
         return None
-    return entry
+    finally:
+        conn.close()
 
 
 def _clear_pending(owner_phone: str) -> None:
-    _PENDING.pop(owner_phone, None)
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        with conn:
+            smb_storage.clear_pending_blast(conn, owner_phone)
+    except Exception:
+        logger.exception("SMB blast: failed to clear pending state for %s", owner_phone[-4:])
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +299,7 @@ def handle_owner_blast(
         )
 
     # ── Blast command — ask who to send to (AI suggests the relevant segment) ──
-    _set_pending(phone_number, text, tenant, None)
+    _set_pending(phone_number, text, tenant)
     suggested = _ai_suggest_segment(text, tenant)
     if suggested:
         return f"Send to everyone or just your {suggested['name'].lower()} fans?"
