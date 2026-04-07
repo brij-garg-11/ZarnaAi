@@ -440,12 +440,15 @@ def save_draft():
         if not test_phone:
             flash("Enter a phone number to send the test to.", "error")
             return redirect(url_for("blast.blast_compose", draft_id=new_id))
-        from ..blast_sender import _send_one
+        from ..blast_sender import _send_one, _create_blast_context_session
         ok = _send_one(test_phone, f"[TEST] {body}", channel, media_url=media_url)
         logger.info("  TEST send result: ok=%s", ok)
         if ok:
             masked = test_phone[-4:].rjust(len(test_phone), "*")
             flash(f"Test sent to {masked}. Draft saved.", "success")
+            if blast_context_note:
+                _create_blast_context_session(new_id, blast_context_note)
+                logger.info("  TEST: blast_context_session created for draft %s", new_id)
         else:
             flash("Test send failed — check Twilio/SlickText credentials in Railway env vars.", "error")
         return redirect(url_for("blast.blast_compose", draft_id=new_id))
@@ -607,10 +610,14 @@ def send_test(draft_id: int):
         flash("Add a message before sending a test.", "error")
         return redirect(url_for("blast.blast_compose", draft_id=draft_id))
 
-    from ..blast_sender import _send_one
+    from ..blast_sender import _send_one, _create_blast_context_session
+    from ..queries import get_blast_draft
     ok = _send_one(test_phone, f"[TEST] {body}", channel)
     if ok:
         flash(f"Test message sent to {test_phone[-4:].rjust(len(test_phone), '*')}.", "success")
+        draft = get_blast_draft(draft_id)
+        if draft and (draft.get("blast_context_note") or "").strip():
+            _create_blast_context_session(draft_id, draft["blast_context_note"])
     else:
         flash("Test send failed — check that your Twilio/SlickText credentials are set on Railway.", "error")
     return redirect(url_for("blast.blast_compose", draft_id=draft_id))
