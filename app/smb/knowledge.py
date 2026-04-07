@@ -1,9 +1,10 @@
 """
 SMB knowledge base: static FAQ + live calendar scraping.
 
-Provides build_context(tenant, message) which returns a context string
-injected into the conversational AI prompt so the bot can answer questions
-about location, hours, tonight's lineup, tickets, food, etc.
+Provides build_context(tenant, message) which returns the full club knowledge
+base as a context string injected into the conversational AI prompt.  The AI
+decides what facts are relevant and composes a natural reply — no keyword
+routing on our side.
 
 Calendar data is fetched live from the tenant's calendar_url and cached
 in-process for 2 hours to avoid hammering the website on every message.
@@ -13,7 +14,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -116,44 +116,6 @@ def _parse_todays_shows(html: str, today_day: str) -> str:
 # Context builder
 # ---------------------------------------------------------------------------
 
-# Keywords that suggest the subscriber is asking about tonight / the schedule
-_TONIGHT_KEYWORDS = re.compile(
-    r"\b(tonight|today|this week|show|performing|lineup|who.s on|schedule|calendar|on stage|"
-    r"what.s happening|what.s on|any shows|shows tonight|shows today)\b",
-    re.IGNORECASE,
-)
-
-# Keywords that suggest location / directions
-_LOCATION_KEYWORDS = re.compile(
-    r"\b(where|address|location|directions|how do i get|subway|parking|far|near|map|"
-    r"upper west side|uws|75th)\b",
-    re.IGNORECASE,
-)
-
-# Keywords about tickets / reservations
-_TICKET_KEYWORDS = re.compile(
-    r"\b(ticket|tickets|buy|book|reserve|reservation|cost|price|how much|admission|cover)\b",
-    re.IGNORECASE,
-)
-
-# Keywords about food / drinks
-_FOOD_KEYWORDS = re.compile(
-    r"\b(food|eat|menu|drink|drinks|margarita|cocktail|dinner|kitchen|minimum|vegetarian|vegan)\b",
-    re.IGNORECASE,
-)
-
-# Keywords about age / policy
-_POLICY_KEYWORDS = re.compile(
-    r"\b(age|how old|minimum age|kids|children|id|dress code|attire|policy|rules)\b",
-    re.IGNORECASE,
-)
-
-# Keywords about private events
-_PRIVATE_KEYWORDS = re.compile(
-    r"\b(private|group|birthday|corporate|hire|event|party|buyout|book the|book for)\b",
-    re.IGNORECASE,
-)
-
 
 def _tracked_url(base_url: str, slug: str, link_key: str) -> str:
     """
@@ -166,69 +128,42 @@ def _tracked_url(base_url: str, slug: str, link_key: str) -> str:
     return base_url
 
 
-def build_context(tenant, message: str) -> str:
+def build_context(tenant, message: str) -> str:  # noqa: ARG001  message unused intentionally
     """
-    Return a context block injected into the AI prompt.
-    Only includes sections relevant to the subscriber's question to keep prompts short.
+    Pass the full knowledge base to the AI every time.
+    No keyword matching — let the AI decide what's relevant and how to respond naturally.
+    Tonight's shows are always fetched live so the answer is accurate.
     """
     kb = tenant.raw.get("knowledge_base", {})
     if not kb:
         return ""
 
-    sections: list[str] = []
+    ticket_link = _tracked_url(kb.get("website", ""), tenant.slug, "tickets")
+    cal_link    = _tracked_url(kb.get("calendar_url", ""), tenant.slug, "calendar")
+    map_link    = _tracked_url(kb.get("maps_link", ""), tenant.slug, "map")
 
-    # Always include core facts
-    if kb.get("address"):
-        sections.append(f"Address: {kb['address']}")
-    if kb.get("hours"):
-        sections.append(f"Hours: {kb['hours']}")
-    if kb.get("website"):
-        sections.append(f"Website: {kb['website']}")
+    # Fetch tonight's shows live
+    calendar_url = kb.get("calendar_url", "")
+    todays_shows = _fetch_todays_shows(calendar_url, tenant.slug) if calendar_url else ""
+    tonight_line = (
+        f"Tonight's shows: {todays_shows}"
+        if todays_shows
+        else f"Tonight's shows: check the live calendar at {cal_link}"
+    )
 
-    msg_lower = message.lower()
+    lines = [
+        f"Address: {kb.get('address', '')}",
+        f"Hours: {kb.get('hours', '')}",
+        f"Website: {kb.get('website', '')}",
+        f"Tickets: {ticket_link}",
+        f"Calendar: {cal_link}",
+        f"Map / directions: {map_link} — {kb.get('directions', '')}",
+        tonight_line,
+        f"Food & drinks: {kb.get('food_and_drinks', '')}",
+        f"Policies: {kb.get('policies', '')}",
+        f"Private events: {kb.get('private_events', '')}",
+        f"Notable performers: {kb.get('notable_performers', '')}",
+    ]
 
-    # Tonight's lineup — fetch live from calendar
-    if _TONIGHT_KEYWORDS.search(msg_lower):
-        calendar_url = kb.get("calendar_url", "")
-        if calendar_url:
-            todays_shows = _fetch_todays_shows(calendar_url, tenant.slug)
-            if todays_shows:
-                sections.append(f"Tonight's shows: {todays_shows}")
-            else:
-                cal_link = _tracked_url(calendar_url, tenant.slug, "calendar")
-                sections.append(f"Tonight's shows: Check the calendar at {cal_link}")
-        ticket_link = _tracked_url(kb.get("website", ""), tenant.slug, "tickets")
-        sections.append(f"Tickets: For official pricing and to grab tickets: {ticket_link}")
-
-    # Location / directions
-    if _LOCATION_KEYWORDS.search(msg_lower):
-        if kb.get("directions"):
-            sections.append(f"Directions / parking: {kb['directions']}")
-        if kb.get("maps_link"):
-            map_link = _tracked_url(kb["maps_link"], tenant.slug, "map")
-            sections.append(f"Google Maps: {map_link}")
-
-    # Tickets
-    if _TICKET_KEYWORDS.search(msg_lower):
-        ticket_link = _tracked_url(kb.get("website", ""), tenant.slug, "tickets")
-        sections.append(f"Tickets: For official pricing and to grab tickets: {ticket_link}")
-
-    # Food & drinks
-    if _FOOD_KEYWORDS.search(msg_lower):
-        if kb.get("food_and_drinks"):
-            sections.append(f"Food & drinks: {kb['food_and_drinks']}")
-
-    # Age / policy
-    if _POLICY_KEYWORDS.search(msg_lower):
-        if kb.get("policies"):
-            sections.append(f"Policies: {kb['policies']}")
-
-    # Private events
-    if _PRIVATE_KEYWORDS.search(msg_lower):
-        if kb.get("private_events"):
-            sections.append(f"Private events: {kb['private_events']}")
-
-    if not sections:
-        return ""
-
-    return "--- Club info ---\n" + "\n".join(sections) + "\n---"
+    facts = "\n".join(line for line in lines if line.split(": ", 1)[-1].strip())
+    return f"--- {tenant.display_name} facts ---\n{facts}\n---"
