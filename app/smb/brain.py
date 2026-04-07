@@ -25,7 +25,7 @@ from typing import Optional
 
 from app.admin_auth import get_db_connection
 from app.smb import ai as smb_ai
-from app.smb import blast, onboarding
+from app.smb import blast, onboarding, knowledge
 from app.smb import storage as smb_storage
 from app.smb.tenants import BusinessTenant, get_registry
 
@@ -124,18 +124,27 @@ def _signup_nudge(tenant: BusinessTenant) -> str:
 def _conversational_reply(message_text: str, tenant: BusinessTenant) -> Optional[str]:
     """
     Short friendly AI reply in the business's voice.
-    No RAG — keeps costs low and responses fast for subscriber conversation.
+    Injects relevant club knowledge (location, tonight's shows, tickets, etc.)
+    based on what the subscriber is asking.
     Falls back across Gemini → OpenAI → Anthropic automatically.
     """
     topics = ", ".join(tenant.value_content_topics) if tenant.value_content_topics else "general topics"
+    context = knowledge.build_context(tenant, message_text)
+
     prompt = (
         f"You are the friendly SMS assistant for {tenant.display_name}, a {tenant.business_type}. "
         f"Your tone: {tenant.tone}. "
         f"Keep replies very short (1-3 sentences), warm, and on-brand. "
-        f"Stay on topic: {topics}. "
         f"Never mention competitors. Do not use emojis unless the subscriber uses them first.\n\n"
-        f"Subscriber: {message_text}"
     )
+    if context:
+        prompt += (
+            f"Use the following facts to answer accurately. "
+            f"Only include what's relevant to the question — do not dump all the info.\n"
+            f"{context}\n\n"
+        )
+    prompt += f"Subscriber: {message_text}"
+
     reply = smb_ai.generate(prompt)
     if not reply:
         logger.warning("SMB brain: all AI providers failed for conversational reply")

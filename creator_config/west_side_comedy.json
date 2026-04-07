@@ -32,6 +32,20 @@
     "special",
     "show"
   ],
+  "knowledge_base": {
+    "address": "201 West 75th Street, New York, NY (Upper West Side)",
+    "maps_link": "https://maps.google.com/?q=201+West+75th+Street+New+York+NY",
+    "directions": "Located on the Upper West Side at 201 W 75th St. Subway: 1/2/3 to 72nd St or B/C to 72nd St. Street parking available nearby.",
+    "hours": "Tue–Fri 4pm–midnight, Sat 1pm–midnight, Sun 2pm–11pm, Mon closed",
+    "website": "https://www.westsidecomedyclub.com",
+    "calendar_url": "https://www.westsidecomedyclub.com/calendar",
+    "ticket_info": "Tickets $20–$30 at westsidecomedyclub.com. Two-item minimum (food or drink) per person.",
+    "food_and_drinks": "Full dinner menu with Mexican fare. Famous margaritas. Two-item minimum per person (food and/or drinks).",
+    "policies": "Ages 16+ with a guardian, 18+ without. Smart casual dress — no formal dress code. Two-item minimum per person.",
+    "private_events": "Yes! For private events, group bookings, or buyouts contact us through westsidecomedyclub.com. Great for birthdays, corporate events, and private parties.",
+    "notable_performers": "Past performers include Bill Burr, Ronnie Chieng, Jessica Kirson, and more top national talent mixed with exciting up-and-comers."
+  },
+
   "segments": [
     {
       "_note": "question_key '0' = step 0 = 'What kind of comedy do you love most?'",
