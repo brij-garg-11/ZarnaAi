@@ -439,7 +439,7 @@ def _ai_enhance_blast(owner_message: str, tenant: BusinessTenant) -> str:
         f"1-2 sentences max. Plain text only. No emojis unless the original has them. "
         f"Return only the message, nothing else.\n\n"
         f"Example input: '30% off standup tonight'\n"
-        f"Example output: '30% off standup tonight — would love to see you there.'"
+        f"Example output: 'Hey, we got 30% off standup tonight — would love to see you there.'"
     )
 
     enhanced = smb_ai.generate(prompt)
