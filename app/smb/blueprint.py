@@ -60,7 +60,7 @@ def smb_vcard(slug: str):
         "BEGIN:VCARD",
         "VERSION:3.0",
         f"FN:{tenant.display_name}",
-        f"N:{tenant.display_name};;;;",   # structured name iOS needs to pre-fill the field
+        "N:;;;;",                          # empty structured name → iOS treats as company contact
         f"ORG:{tenant.display_name}",
     ]
     if tenant.sms_number:
