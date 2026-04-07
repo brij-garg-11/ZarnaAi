@@ -438,8 +438,13 @@ def _ai_enhance_blast(owner_message: str, tenant: BusinessTenant) -> str:
         f"Add a small human touch — a bit of excitement or personality — without going over the top. "
         f"1-2 sentences max. Plain text only. No emojis unless the original has them. "
         f"Return only the message, nothing else.\n\n"
-        f"Example input: '30% off standup tonight'\n"
-        f"Example output: 'Hey, we got 30% off standup tonight — would love to see you there.'"
+        f"Examples:\n"
+        f"Input: '30% off standup tonight'\n"
+        f"Output: 'Hey, we got 30% off standup tonight — would love to see you there.'\n\n"
+        f"Input: 'last few seats for tonights show 8pm'\n"
+        f"Output: 'Just a heads up — only a few seats left for tonight at 8pm. Grab one while you can.'\n\n"
+        f"Input: 'improv night friday free drinks for first 20 people'\n"
+        f"Output: 'Improv night this Friday, and the first 20 people get free drinks. Come early.'"
     )
 
     enhanced = smb_ai.generate(prompt)
