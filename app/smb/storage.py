@@ -73,7 +73,7 @@ def advance_onboarding(conn, subscriber_id: int, new_step: int, new_status: str)
 
 
 def get_active_subscribers(conn, tenant_slug: str) -> list:
-    """Return all active (fully onboarded) subscribers for a tenant."""
+    """Return all active subscribers for a tenant (includes step=0 preference-pending)."""
     with conn.cursor() as cur:
         cur.execute(
             """

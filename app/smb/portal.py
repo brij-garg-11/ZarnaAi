@@ -241,14 +241,14 @@ def _render_hero(tenant, subs: dict) -> str:
       <div class="card">
         <div class="card-title">Sign-up funnel</div>
         <div class="funnel-labels">
-          <span>{total:,} people texted in</span>
-          <span>{active:,} fully enrolled</span>
+          <span>Signed up · {total:,}</span>
+          <span>Preference answered · {active:,}</span>
         </div>
         <div class="funnel-track">
           <div class="funnel-fill" style="width:{pct}%;background:{bar_gradient}"></div>
         </div>
         <div class="funnel-sub">
-          {pct}% of sign-ups completed all onboarding questions.
+          {pct}% of subscribers answered the preference question — the rest still receive all blasts.
           {f'&nbsp;First sign-up <strong>{_fmt_dt(subs.get("first_signup"))}</strong> · most recent <strong>{_fmt_dt(subs.get("last_signup"))}</strong>.' if total else ' Share your sign-up keyword to start growing your list.'}
         </div>
       </div>
