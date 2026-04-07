@@ -74,6 +74,7 @@ def _fetch_smb_stats() -> dict:
                 "active": 0, "onboarding": 0, "total": 0,
                 "first_signup": None, "last_signup": None,
             })
+            # total is our canonical "active subscribers" count (status='active', any onboarding_step)
             blasts_info = blast_counts.get(tenant.slug, {"blast_count": 0, "last_blast": None})
             clients.append({
                 "tenant": tenant,
@@ -88,8 +89,8 @@ def _fetch_smb_stats() -> dict:
 
         totals = {
             "clients": len(clients),
-            "active_subscribers": sum(c["active"] for c in clients),
-            "total_subscribers": sum(c["total"] for c in clients),
+            "active_subscribers": sum(c["total"] for c in clients),
+            "pref_answered": sum(c["active"] for c in clients),
             "total_blasts": sum(c["blast_count"] for c in clients),
         }
 
@@ -142,12 +143,12 @@ def render_smb_tab() -> str:
       <div class="stat-card">
         <div class="stat-label">Active Subscribers</div>
         <div class="stat-value purple">{totals.get("active_subscribers", 0):,}</div>
-        <div class="stat-trend" style="color:#64748b;font-size:12px">fully onboarded</div>
+        <div class="stat-trend" style="color:#64748b;font-size:12px">all signed-up subscribers</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Total Signups</div>
-        <div class="stat-value teal">{totals.get("total_subscribers", 0):,}</div>
-        <div class="stat-trend" style="color:#64748b;font-size:12px">incl. in onboarding</div>
+        <div class="stat-label">Preference Answered</div>
+        <div class="stat-value teal">{totals.get("pref_answered", 0):,}</div>
+        <div class="stat-trend" style="color:#64748b;font-size:12px">completed preference question</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Blasts Sent</div>
@@ -211,12 +212,12 @@ def render_smb_tab() -> str:
 
               <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
                 <div style="background:#0f172a;border-radius:8px;padding:12px;text-align:center">
-                  <div style="font-size:22px;font-weight:700;color:#f3f4f6">{c["active"]}</div>
+                  <div style="font-size:22px;font-weight:700;color:#f3f4f6">{c["total"]}</div>
                   <div style="font-size:11px;color:#6b7280;margin-top:2px">Active subscribers</div>
                 </div>
                 <div style="background:#0f172a;border-radius:8px;padding:12px;text-align:center">
                   <div style="font-size:22px;font-weight:700;color:#a78bfa">{c["onboarding"]}</div>
-                  <div style="font-size:11px;color:#6b7280;margin-top:2px">In onboarding</div>
+                  <div style="font-size:11px;color:#6b7280;margin-top:2px">Pref. pending</div>
                 </div>
                 <div style="background:#0f172a;border-radius:8px;padding:12px;text-align:center">
                   <div style="font-size:22px;font-weight:700;color:#34d399">{c["blast_count"]}</div>
@@ -224,14 +225,14 @@ def render_smb_tab() -> str:
                 </div>
                 <div style="background:#0f172a;border-radius:8px;padding:12px;text-align:center">
                   <div style="font-size:22px;font-weight:700;color:#fbbf24">{completion_pct}%</div>
-                  <div style="font-size:11px;color:#6b7280;margin-top:2px">Onboarding completion</div>
+                  <div style="font-size:11px;color:#6b7280;margin-top:2px">Pref. answered</div>
                 </div>
               </div>
 
               <div style="margin-bottom:6px">
                 <div style="display:flex;justify-content:space-between;font-size:11px;color:#6b7280;margin-bottom:4px">
-                  <span>Onboarding funnel</span>
-                  <span>{c["active"]} of {c["total"]} completed</span>
+                  <span>Preference answered</span>
+                  <span>{c["active"]} of {c["total"]} answered</span>
                 </div>
                 <div style="background:#1f2937;border-radius:4px;height:6px;overflow:hidden">
                   <div style="width:{completion_pct}%;height:100%;background:{bar_color};border-radius:4px;transition:width 0.3s"></div>
