@@ -156,31 +156,81 @@ def _ai_classify_audience_reply(reply: str, tenant: BusinessTenant) -> Optional[
 
 
 def _get_audience_stats(tenant: BusinessTenant) -> str:
-    """Return a formatted audience breakdown for the owner."""
+    """Fetch live subscriber data and return an AI-written natural reply in the tenant's tone."""
     conn = get_db_connection()
     if not conn:
-        return "Sorry, I can't reach the database right now."
+        return "Sorry, can't reach the database right now — try again in a sec."
     try:
         with conn:
             all_subs = smb_storage.get_active_subscribers(conn, tenant.slug)
             total = len(all_subs)
-            if not total:
-                return f"You have 0 active subscribers on {tenant.display_name} yet."
 
-            lines = [f"Your {tenant.display_name} audience ({total} active subscribers):"]
+            seg_data = []
             for seg in tenant.segments:
                 seg_subs = smb_storage.get_subscribers_by_segment(
                     conn, tenant.slug, seg["question_key"], seg["answers"]
                 )
                 pct = round((len(seg_subs) / total) * 100) if total else 0
-                lines.append(f"  {seg['name']}: {len(seg_subs)} people ({pct}%)")
-
-            return "\n".join(lines)
+                seg_data.append(
+                    {"name": seg["name"], "description": seg.get("description", ""), "count": len(seg_subs), "pct": pct}
+                )
     except Exception:
         logger.exception("SMB: failed to get audience stats for tenant=%s", tenant.slug)
-        return "Error fetching stats — check logs."
+        return "Couldn't pull stats right now — check the logs."
     finally:
         conn.close()
+
+    return _ai_narrate_stats(total, seg_data, tenant)
+
+
+def _ai_narrate_stats(total: int, seg_data: list, tenant: BusinessTenant) -> str:
+    """Use AI to write a natural, tone-matched stats update for the owner."""
+    if not total:
+        # Even a zero-subscriber message gets the AI treatment
+        facts = f"{tenant.display_name} currently has 0 active subscribers."
+    else:
+        seg_lines = "\n".join(
+            f"- {s['name']} ({s['description']}): {s['count']} people ({s['pct']}%)"
+            for s in seg_data
+        )
+        facts = (
+            f"{tenant.display_name} has {total} active subscribers.\n"
+            f"Breakdown by segment:\n{seg_lines}"
+        )
+
+    try:
+        from google import genai
+        from app.config import GEMINI_API_KEY, GENERATION_MODEL
+
+        if not GEMINI_API_KEY:
+            raise ValueError("GEMINI_API_KEY not set")
+
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        prompt = (
+            f"You are the SMS assistant for {tenant.display_name}. "
+            f"Tone: {tenant.tone}.\n\n"
+            f"The owner just asked about their audience. "
+            f"Reply to them naturally — like a smart friend who knows the numbers — "
+            f"using the following facts:\n\n{facts}\n\n"
+            f"Keep it short (2–4 sentences max), conversational, no bullet points or headers. "
+            f"SMS only — plain text."
+        )
+
+        response = client.models.generate_content(model=GENERATION_MODEL, contents=prompt)
+        result = (response.text or "").strip()
+        if result:
+            return result
+        raise ValueError("empty AI response")
+
+    except Exception:
+        logger.exception("SMB: AI stats narration failed for tenant=%s, falling back", tenant.slug)
+        # Readable fallback if AI fails
+        if not total:
+            return f"No active subscribers on {tenant.display_name} yet — keep spreading the word!"
+        lines = [f"{tenant.display_name} has {total} active subscribers."]
+        for s in seg_data:
+            lines.append(f"{s['name']}: {s['count']} ({s['pct']}%)")
+        return " | ".join(lines)
 
 
 def handle_owner_blast(
