@@ -1,5 +1,8 @@
 """Insights, Learning, and Impact section rendering for the admin dashboard."""
 
+import os
+
+
 def _esc(s: str) -> str:
     return (
         str(s)
