@@ -446,8 +446,11 @@ def save_draft():
         if ok:
             masked = test_phone[-4:].rjust(len(test_phone), "*")
             flash(f"Test sent to {masked}. Draft saved.", "success")
-            if blast_context_note:
-                _create_blast_context_session(new_id, blast_context_note)
+            if body:
+                combined = f"The blast message that was sent: \"{body}\""
+                if blast_context_note:
+                    combined += f"\n\nAdditional context from the operator: {blast_context_note}"
+                _create_blast_context_session(new_id, combined)
                 logger.info("  TEST: blast_context_session created for draft %s", new_id)
         else:
             flash("Test send failed — check Twilio/SlickText credentials in Railway env vars.", "error")
@@ -616,8 +619,12 @@ def send_test(draft_id: int):
     if ok:
         flash(f"Test message sent to {test_phone[-4:].rjust(len(test_phone), '*')}.", "success")
         draft = get_blast_draft(draft_id)
-        if draft and (draft.get("blast_context_note") or "").strip():
-            _create_blast_context_session(draft_id, draft["blast_context_note"])
+        if draft and body:
+            combined = f"The blast message that was sent: \"{body}\""
+            extra = (draft.get("blast_context_note") or "").strip()
+            if extra:
+                combined += f"\n\nAdditional context from the operator: {extra}"
+            _create_blast_context_session(draft_id, combined)
     else:
         flash("Test send failed — check that your Twilio/SlickText credentials are set on Railway.", "error")
     return redirect(url_for("blast.blast_compose", draft_id=draft_id))

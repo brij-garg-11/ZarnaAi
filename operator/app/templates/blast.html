@@ -295,15 +295,15 @@
             </div>
             <div x-show="hasBlastContext" x-transition>
               <p class="text-xs mb-3" style="color:var(--text-muted);">
-                Give the AI background on this blast so it responds intelligently when fans reply.
+                The AI already sees your message. Add extra background here — e.g. what fans will likely ask, what the CTA is, or anything the message doesn't make obvious.
                 <strong style="color:var(--text);">Never shown to fans.</strong>
               </p>
               <textarea name="blast_context_note" class="zarna-input" rows="3"
-                        placeholder="e.g. This blast is about our June Chicago show — fans who reply are probably asking about tickets or the venue."
+                        placeholder="e.g. Fans will likely ask about parking or whether the show is 21+. The venue is Zanies Chicago, doors at 7pm."
                         {{ 'readonly' if active_draft.status in ('scheduled','sending') else '' }}>{{ active_draft.blast_context_note or '' }}</textarea>
             </div>
             <div x-show="!hasBlastContext">
-              <p class="text-xs" style="color:var(--text-dim);">Add context so the AI knows what this blast is about when fans reply.</p>
+              <p class="text-xs" style="color:var(--text-dim);">The AI will see your message automatically. Add extra notes here if fans will likely have follow-up questions.</p>
             </div>
           </div>
         </div>

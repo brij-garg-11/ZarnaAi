@@ -109,10 +109,16 @@ def execute_blast(draft_id: int):
             correct_answer=draft["quiz_correct_answer"],
         )
 
-    # If this blast has a context note, create a blast_context_sessions row so inbound
-    # replies within 24h get soft AI context about what the blast was about.
-    if (draft.get("blast_context_note") or "").strip():
-        _create_blast_context_session(draft_id, draft["blast_context_note"])
+    # Always create a blast_context_sessions row so inbound replies get AI context.
+    # The context includes the blast body so the AI knows what was sent, plus any
+    # optional operator note for additional background.
+    blast_body = (draft.get("body") or "").strip()
+    extra_note = (draft.get("blast_context_note") or "").strip()
+    if blast_body:
+        combined = f"The blast message that was sent: \"{blast_body}\""
+        if extra_note:
+            combined += f"\n\nAdditional context from the operator: {extra_note}"
+        _create_blast_context_session(draft_id, combined)
 
     # Update tracked_links.sent_to with the number of recipients this blast reached
     if tracked_link_slug and len(phones) > 0:
