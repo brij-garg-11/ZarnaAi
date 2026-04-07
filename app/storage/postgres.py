@@ -155,6 +155,16 @@ _QUIZ_MIGRATIONS = (
     """,
     "CREATE INDEX IF NOT EXISTS idx_quiz_sessions_active ON quiz_sessions (expires_at, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_quiz_responses_lookup ON quiz_responses (quiz_id, phone_number)",
+    """
+    CREATE TABLE IF NOT EXISTS blast_context_sessions (
+        id             BIGSERIAL PRIMARY KEY,
+        blast_draft_id BIGINT,
+        context_note   TEXT NOT NULL,
+        created_at     TIMESTAMPTZ DEFAULT NOW(),
+        expires_at     TIMESTAMPTZ
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_blast_context_sessions_active ON blast_context_sessions (expires_at, created_at)",
 )
 
 # Idempotent alters + audit log (runs after base live_shows DDL).
