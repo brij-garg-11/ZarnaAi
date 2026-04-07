@@ -238,6 +238,8 @@ _SMB_MIGRATIONS = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_smb_blasts_tenant ON smb_blasts(tenant_slug, sent_at DESC)",
+    # Add segment column for targeted blasts (idempotent ALTER)
+    "ALTER TABLE smb_blasts ADD COLUMN IF NOT EXISTS segment TEXT DEFAULT NULL",
 )
 
 

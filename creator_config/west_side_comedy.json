@@ -28,5 +28,33 @@
     "deal",
     "special",
     "show"
+  ],
+  "segments": [
+    {
+      "_note": "question_key '0' = step 0 = 'What kind of comedy do you love most?'",
+      "name": "STANDUP",
+      "description": "Standup comedy fans",
+      "question_key": "0",
+      "answers": ["STANDUP", "BOTH"]
+    },
+    {
+      "name": "IMPROV",
+      "description": "Improv fans",
+      "question_key": "0",
+      "answers": ["IMPROV", "BOTH"]
+    },
+    {
+      "_note": "question_key '1' = step 1 = 'How often do you want to hear from us?'",
+      "name": "DEALS",
+      "description": "Deals-only subscribers (send only when there's an offer)",
+      "question_key": "1",
+      "answers": ["DEALS ONLY"]
+    },
+    {
+      "name": "WEEKLY",
+      "description": "Weekly content subscribers",
+      "question_key": "1",
+      "answers": ["WEEKLY"]
+    }
   ]
 }

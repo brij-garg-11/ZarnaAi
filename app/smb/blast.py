@@ -56,27 +56,40 @@ def handle_owner_blast(
     """
     Called when the registered owner sends a message to the bot.
 
-    If it's a blast command, kicks off an async broadcast and returns
-    an instant confirmation to the owner.
+    Supports optional segment targeting:
+      "STANDUP: Great show tonight 8pm!" → only STANDUP fans
+      "IMPROV: Jam session tonight!"     → only IMPROV fans
+      "Opening tonight 8pm!"             → all active subscribers
 
     If it's not a blast command, returns a short help reply showing
     example trigger words.
     """
     if not is_blast_command(message_text, tenant):
         sample = ", ".join(f'"{t}"' for t in tenant.blast_triggers[:4])
+        seg_hint = ""
+        if tenant.segments:
+            names = ", ".join(s["name"] for s in tenant.segments[:3])
+            seg_hint = f' Prefix with a segment to target a group: "{tenant.segments[0]["name"]}: your message".'
         return (
             f"To blast your subscribers, include a trigger word like {sample}. "
-            f'Example: "Opening tonight 8pm — 20% off tickets"'
+            f'Example: "Opening tonight 8pm — 20% off tickets".{seg_hint}'
         )
+
+    segment = _detect_segment(message_text, tenant)
 
     threading.Thread(
         target=_run_blast_async,
-        args=(message_text, tenant),
+        args=(message_text, tenant, segment),
         daemon=True,
     ).start()
 
+    if segment:
+        return (
+            f"Blast queued for your {segment['name']} subscribers! "
+            "Check your weekly report for results."
+        )
     return (
-        "Blast queued! Sending to your active subscribers now. "
+        "Blast queued for all your active subscribers! "
         "Check your weekly report for results."
     )
 
@@ -85,7 +98,33 @@ def handle_owner_blast(
 # Async broadcast worker
 # ---------------------------------------------------------------------------
 
-def _run_blast_async(message_text: str, tenant: BusinessTenant) -> None:
+def _detect_segment(text: str, tenant: BusinessTenant) -> Optional[dict]:
+    """
+    Check if the owner's message starts with a known segment prefix.
+
+    Format: "SEGMENT_NAME: rest of message"
+    e.g.   "STANDUP: Great show tonight at 8pm!"
+
+    Returns the matching segment dict (with name, question_key, answers)
+    if found, or None for a broadcast to all subscribers.
+    """
+    if not tenant.segments:
+        return None
+    stripped = text.strip()
+    for seg in tenant.segments:
+        prefix = seg["name"].upper() + ":"
+        if stripped.upper().startswith(prefix):
+            body_after = stripped[len(prefix):].strip()
+            if body_after:  # ignore bare "STANDUP:" with no message
+                return seg
+    return None
+
+
+def _run_blast_async(
+    message_text: str,
+    tenant: BusinessTenant,
+    segment: Optional[dict] = None,
+) -> None:
     conn = get_db_connection()
     if not conn:
         logger.error("SMB blast: no DB connection for tenant=%s", tenant.slug)
@@ -93,21 +132,37 @@ def _run_blast_async(message_text: str, tenant: BusinessTenant) -> None:
 
     try:
         with conn:
-            subscribers = smb_storage.get_active_subscribers(conn, tenant.slug)
+            if segment:
+                subscribers = smb_storage.get_subscribers_by_segment(
+                    conn, tenant.slug,
+                    segment["question_key"],
+                    segment["answers"],
+                )
+                logger.info(
+                    "SMB blast: segment=%s matched %d subscribers for tenant=%s",
+                    segment["name"], len(subscribers), tenant.slug,
+                )
+            else:
+                subscribers = smb_storage.get_active_subscribers(conn, tenant.slug)
     finally:
         conn.close()
 
     if not subscribers:
-        logger.info("SMB blast: no active subscribers for tenant=%s", tenant.slug)
+        logger.info(
+            "SMB blast: no matching subscribers for tenant=%s segment=%s",
+            tenant.slug, segment["name"] if segment else "all",
+        )
         return
 
-    phones = [s["phone_number"] for s in subscribers]
-    body = _format_blast(message_text, tenant)
+    # Strip the segment prefix from the outbound message body
+    body = _format_blast(_strip_segment_prefix(message_text, segment), tenant)
     provider = resolve_broadcast_provider()
+    phones = [s["phone_number"] for s in subscribers]
+    seg_name = segment["name"] if segment else None
 
     logger.info(
-        "SMB blast starting: tenant=%s recipients=%d provider=%s",
-        tenant.slug, len(phones), provider,
+        "SMB blast starting: tenant=%s segment=%s recipients=%d provider=%s",
+        tenant.slug, seg_name or "all", len(phones), provider,
     )
 
     result = run_loop_broadcast(
@@ -119,11 +174,12 @@ def _run_blast_async(message_text: str, tenant: BusinessTenant) -> None:
     )
 
     logger.info(
-        "SMB blast complete: tenant=%s attempted=%d succeeded=%d failed=%d",
-        tenant.slug, result.attempted, result.succeeded, result.failed,
+        "SMB blast complete: tenant=%s segment=%s attempted=%d succeeded=%d failed=%d",
+        tenant.slug, seg_name or "all",
+        result.attempted, result.succeeded, result.failed,
     )
 
-    _record_blast(tenant, message_text, body, result.attempted, result.succeeded)
+    _record_blast(tenant, message_text, body, result.attempted, result.succeeded, seg_name)
 
 
 def _slicktext_send_one(to: str, body: str) -> bool:
@@ -139,11 +195,22 @@ def _slicktext_send_one(to: str, body: str) -> bool:
 # Message formatting
 # ---------------------------------------------------------------------------
 
+def _strip_segment_prefix(message_text: str, segment: Optional[dict]) -> str:
+    """Remove the 'SEGMENT_NAME: ' prefix from the owner's message if present."""
+    if not segment:
+        return message_text.strip()
+    prefix = segment["name"].upper() + ":"
+    stripped = message_text.strip()
+    if stripped.upper().startswith(prefix):
+        return stripped[len(prefix):].strip()
+    return stripped
+
+
 def _format_blast(owner_message: str, tenant: BusinessTenant) -> str:
     """
-    Format the owner's raw message as the outbound blast body.
-    Prepends the business name if it's not already in the message so
-    subscribers know who's texting them.
+    Format the (already prefix-stripped) owner message as the outbound body.
+    Prepends the business name if it's not already there so subscribers
+    know who's texting them.
     """
     msg = owner_message.strip()
     if tenant.display_name.lower() not in msg.lower():
@@ -161,6 +228,7 @@ def _record_blast(
     body: str,
     attempted: int,
     succeeded: int,
+    segment: Optional[str] = None,
 ) -> None:
     conn = get_db_connection()
     if not conn:
@@ -171,10 +239,10 @@ def _record_blast(
                 cur.execute(
                     """
                     INSERT INTO smb_blasts
-                        (tenant_slug, owner_message, body, attempted, succeeded)
-                    VALUES (%s, %s, %s, %s, %s)
+                        (tenant_slug, owner_message, body, attempted, succeeded, segment)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     """,
-                    (tenant.slug, owner_message[:500], body[:500], attempted, succeeded),
+                    (tenant.slug, owner_message[:500], body[:500], attempted, succeeded, segment),
                 )
     except Exception:
         logger.exception("SMB blast: failed to record blast for tenant=%s", tenant.slug)

@@ -111,6 +111,37 @@ def get_subscribers_by_preference(
         return [{"id": r[0], "phone_number": r[1]} for r in cur.fetchall()]
 
 
+def get_subscribers_by_segment(
+    conn, tenant_slug: str, question_key: str, answers: list
+) -> list:
+    """
+    Return active subscribers who gave ANY of the provided answers to a question.
+
+    Used for segmented blasts — e.g. a STANDUP blast targets subscribers who
+    answered "STANDUP" OR "BOTH" (since BOTH means they like everything).
+    Deduplicates automatically via DISTINCT.
+    """
+    if not answers:
+        return []
+    lower_answers = [a.strip().lower() for a in answers]
+    placeholders = ",".join(["%s"] * len(lower_answers))
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT DISTINCT s.id, s.phone_number
+            FROM smb_subscribers s
+            JOIN smb_preferences p ON p.subscriber_id = s.id
+            WHERE s.tenant_slug = %s
+              AND s.status = 'active'
+              AND p.question_key = %s
+              AND LOWER(p.answer) IN ({placeholders})
+            ORDER BY s.id
+            """,
+            (tenant_slug, question_key, *lower_answers),
+        )
+        return [{"id": r[0], "phone_number": r[1]} for r in cur.fetchall()]
+
+
 # ---------------------------------------------------------------------------
 # Preferences
 # ---------------------------------------------------------------------------
