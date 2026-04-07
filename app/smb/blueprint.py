@@ -45,11 +45,31 @@ def smb_health():
 # vCard endpoint — used for MMS contact-save on subscriber signup
 # ---------------------------------------------------------------------------
 
+# Simple in-process cache: slug → (mime_type, base64_data) or None
+_logo_cache: dict = {}
+
+
+def _fetch_logo_b64(logo_url: str):
+    """Download logo and return (mime_type, base64_string), or None on failure."""
+    try:
+        import base64
+        import urllib.request
+        with urllib.request.urlopen(logo_url, timeout=5) as resp:
+            data = resp.read()
+            content_type = resp.headers.get_content_type() or "image/jpeg"
+            return content_type, base64.b64encode(data).decode("ascii")
+    except Exception:
+        logger.warning("SMB vcard: failed to fetch logo from %s", logo_url, exc_info=True)
+        return None
+
+
 @smb_bp.route("/vcard/<slug>.vcf", methods=["GET"])
 def smb_vcard(slug: str):
     """
     Serve a vCard for a tenant so subscribers can save the business
     as a contact with one tap. Linked in an MMS sent on first signup.
+    Logo is fetched once, cached in memory, and embedded as base64 for
+    reliable iOS display (external URL references are often ignored).
     """
     from app.smb.tenants import get_registry
     tenant = get_registry().get_by_slug(slug)
@@ -65,6 +85,16 @@ def smb_vcard(slug: str):
     ]
     if tenant.sms_number:
         lines.append(f"TEL;TYPE=CELL:{tenant.sms_number}")
+
+    if tenant.logo_url:
+        if slug not in _logo_cache:
+            _logo_cache[slug] = _fetch_logo_b64(tenant.logo_url)
+        logo = _logo_cache[slug]
+        if logo:
+            mime, b64 = logo
+            img_type = mime.split("/")[-1].upper()  # e.g. "JPEG" or "PNG"
+            lines.append(f"PHOTO;TYPE={img_type};ENCODING=BASE64:{b64}")
+
     lines.append("END:VCARD")
 
     vcf = "\r\n".join(lines) + "\r\n"
