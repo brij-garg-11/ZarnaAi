@@ -259,6 +259,17 @@ _SMB_MIGRATIONS = (
         created_at   TIMESTAMPTZ DEFAULT NOW()
     )
     """,
+    # Link click tracking — every time a subscriber clicks a tracked link
+    """
+    CREATE TABLE IF NOT EXISTS smb_link_clicks (
+        id           BIGSERIAL   PRIMARY KEY,
+        tenant_slug  TEXT        NOT NULL,
+        link_key     TEXT        NOT NULL,
+        phone_number TEXT,
+        clicked_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_smb_link_clicks_tenant ON smb_link_clicks(tenant_slug, link_key)",
 )
 
 

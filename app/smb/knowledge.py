@@ -12,6 +12,7 @@ in-process for 2 hours to avoid hammering the website on every message.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 import time
@@ -154,6 +155,17 @@ _PRIVATE_KEYWORDS = re.compile(
 )
 
 
+def _tracked_url(base_url: str, slug: str, link_key: str) -> str:
+    """
+    Return a tracked redirect URL if RAILWAY_PUBLIC_DOMAIN is set,
+    otherwise fall back to the raw URL.
+    """
+    domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    if domain:
+        return f"https://{domain}/smb/r/{slug}/{link_key}"
+    return base_url
+
+
 def build_context(tenant, message: str) -> str:
     """
     Return a context block injected into the AI prompt.
@@ -183,22 +195,23 @@ def build_context(tenant, message: str) -> str:
             if todays_shows:
                 sections.append(f"Tonight's shows: {todays_shows}")
             else:
-                sections.append(
-                    f"Tonight's shows: Check the calendar at {kb.get('website', 'our website')}/calendar"
-                )
-        sections.append(f"Tickets: {kb.get('ticket_info', 'Available at our website')}")
+                cal_link = _tracked_url(calendar_url, tenant.slug, "calendar")
+                sections.append(f"Tonight's shows: Check the calendar at {cal_link}")
+        ticket_link = _tracked_url(kb.get("website", ""), tenant.slug, "tickets")
+        sections.append(f"Tickets: For official pricing and to grab tickets: {ticket_link}")
 
     # Location / directions
     if _LOCATION_KEYWORDS.search(msg_lower):
         if kb.get("directions"):
             sections.append(f"Directions / parking: {kb['directions']}")
         if kb.get("maps_link"):
-            sections.append(f"Google Maps: {kb['maps_link']}")
+            map_link = _tracked_url(kb["maps_link"], tenant.slug, "map")
+            sections.append(f"Google Maps: {map_link}")
 
     # Tickets
     if _TICKET_KEYWORDS.search(msg_lower):
-        if kb.get("ticket_info"):
-            sections.append(f"Tickets: {kb['ticket_info']}")
+        ticket_link = _tracked_url(kb.get("website", ""), tenant.slug, "tickets")
+        sections.append(f"Tickets: For official pricing and to grab tickets: {ticket_link}")
 
     # Food & drinks
     if _FOOD_KEYWORDS.search(msg_lower):

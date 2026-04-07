@@ -232,6 +232,68 @@ def _process_smb_message(from_number: str, to_number: str, message_text: str) ->
         )
 
 
+# ---------------------------------------------------------------------------
+# Link click tracking  GET /smb/r/<slug>/<link_key>
+# ---------------------------------------------------------------------------
+
+# Registered trackable links per tenant slug
+_TRACKED_LINKS: dict[str, dict[str, str]] = {
+    "west_side_comedy": {
+        "tickets":  "https://www.westsidecomedyclub.com",
+        "calendar": "https://www.westsidecomedyclub.com/calendar",
+        "menu":     "https://www.westsidecomedyclub.com/menu",
+        "map":      "https://maps.google.com/?q=201+West+75th+Street+New+York+NY",
+    },
+}
+
+
+@smb_bp.route("/r/<slug>/<link_key>", methods=["GET"])
+def smb_link_redirect(slug: str, link_key: str):
+    """
+    Tracked redirect for links sent to subscribers.
+    Logs the click then issues a 302 to the real URL.
+    """
+    links = _TRACKED_LINKS.get(slug, {})
+    target = links.get(link_key)
+
+    if not target:
+        from flask import abort
+        abort(404)
+
+    # Log asynchronously so redirect is instant
+    phone = request.args.get("p", "")  # optional subscriber phone hint
+    threading.Thread(
+        target=_log_link_click,
+        args=(slug, link_key, phone or None),
+        daemon=True,
+    ).start()
+
+    from flask import redirect
+    return redirect(target, code=302)
+
+
+def _log_link_click(slug: str, link_key: str, phone: str | None) -> None:
+    try:
+        from app.admin_auth import get_db_connection
+        conn = get_db_connection()
+        if not conn:
+            return
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO smb_link_clicks (tenant_slug, link_key, phone_number)
+                        VALUES (%s, %s, %s)
+                        """,
+                        (slug, link_key, phone),
+                    )
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception("SMB link click log failed slug=%s key=%s", slug, link_key)
+
+
 def register_smb_routes(app):
     """Register the SMB blueprint with the Flask app. Call from main.py."""
     app.register_blueprint(smb_bp)
