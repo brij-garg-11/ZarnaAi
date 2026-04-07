@@ -213,6 +213,39 @@ def _ai_narrate_stats(total: int, seg_data: list, tenant: BusinessTenant) -> str
     return " | ".join(lines)
 
 
+def _ai_suggest_segment(message: str, tenant: BusinessTenant) -> Optional[dict]:
+    """
+    Look at the blast message and suggest the single most relevant segment,
+    or return None if the message seems relevant to everyone.
+    Used to make the clarification question specific: 'Everyone or just standup fans?'
+    """
+    if not tenant.segments:
+        return None
+
+    seg_lines = "\n".join(
+        f"- {s['name']}: {s.get('description', s['name'])}"
+        for s in tenant.segments
+    )
+    seg_names = [s["name"] for s in tenant.segments]
+
+    prompt = (
+        f"A comedy club owner wants to send this blast to their SMS subscribers:\n"
+        f"\"{message}\"\n\n"
+        f"Available audience segments:\n{seg_lines}\n"
+        f"- ALL: relevant to everyone\n\n"
+        f"Which segment is this message MOST relevant to? "
+        f"If it's equally relevant to everyone, reply ALL. "
+        f"Reply with ONLY one word: ALL, {', '.join(seg_names)}"
+    )
+
+    result = smb_ai.generate(prompt).strip().upper()
+    if not result or result == "ALL":
+        return None
+
+    matched = next((s for s in tenant.segments if s["name"].upper() == result), None)
+    return matched
+
+
 def handle_owner_blast(
     phone_number: str, message_text: str, tenant: BusinessTenant
 ) -> str:
@@ -253,15 +286,15 @@ def handle_owner_blast(
             f'Example: "Opening tonight 8pm — 20% off tickets".'
         )
 
-    # ── Blast command — always ask who to send to ──
+    # ── Blast command — ask who to send to (AI suggests the relevant segment) ──
     _set_pending(phone_number, text, tenant, None)
-    seg_examples = ", ".join(
-        f'"{s["name"].lower()} fans"' for s in tenant.segments[:2]
-    ) if tenant.segments else ""
-    clarify = "Who would you like to send this to?"
-    if seg_examples:
-        clarify += f" (e.g. {seg_examples}, or everyone)"
-    return clarify
+    suggested = _ai_suggest_segment(text, tenant)
+    if suggested:
+        return f"Send to everyone or just your {suggested['name'].lower()} fans?"
+    elif tenant.segments:
+        options = " or ".join(f"{s['name'].lower()} fans" for s in tenant.segments[:2])
+        return f"Send to everyone or just your {options}?"
+    return "Send to everyone or a specific group?"
 
 
 # ---------------------------------------------------------------------------
