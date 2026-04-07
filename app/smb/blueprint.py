@@ -50,20 +50,41 @@ _logo_cache: dict = {}
 
 
 def _fetch_logo_b64(logo_url: str):
-    """Download logo and return (mime_type, base64_string), or None on failure."""
+    """
+    Download logo, crop to a square, resize to 300×300, and return
+    (mime_type, base64_string). Returns None on any failure.
+    Squaring the image prevents iOS from zooming in on wide logos.
+    """
     try:
         import base64
+        import io
         import urllib.request
+        from PIL import Image
+
         req = urllib.request.Request(
             logo_url,
             headers={"User-Agent": "Mozilla/5.0 (compatible; SMBVCard/1.0)"},
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = resp.read()
-            content_type = resp.headers.get_content_type() or "image/jpeg"
-            return content_type, base64.b64encode(data).decode("ascii")
+
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+
+        # Centre-crop to square then resize to 300×300
+        w, h = img.size
+        side = min(w, h)
+        left = (w - side) // 2
+        top = (h - side) // 2
+        img = img.crop((left, top, left + side, top + side))
+        img = img.resize((300, 300), Image.LANCZOS)
+
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return "image/jpeg", b64
+
     except Exception:
-        logger.warning("SMB vcard: failed to fetch logo from %s", logo_url, exc_info=True)
+        logger.warning("SMB vcard: failed to fetch/process logo from %s", logo_url, exc_info=True)
         return None
 
 
