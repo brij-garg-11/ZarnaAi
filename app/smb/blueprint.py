@@ -67,15 +67,15 @@ def _load_logo_b64(slug: str, logo_url: str):
     from PIL import Image
 
     def _process(img_bytes: bytes) -> tuple[str, str]:
-        img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-        canvas_size = 300
-        img.thumbnail((canvas_size, canvas_size), Image.LANCZOS)
-        lw, lh = img.size
-        canvas = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
-        canvas.paste(img, ((canvas_size - lw) // 2, (canvas_size - lh) // 2),
-                     mask=img.split()[3])
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        # Centre-crop to square so the circular badge fills the whole contact photo
+        w, h = img.size
+        side = min(w, h)
+        img = img.crop(((w - side) // 2, (h - side) // 2,
+                         (w + side) // 2, (h + side) // 2))
+        img = img.resize((300, 300), Image.LANCZOS)
         buf = io.BytesIO()
-        canvas.save(buf, format="JPEG", quality=85)
+        img.save(buf, format="JPEG", quality=85)
         return "image/jpeg", base64.b64encode(buf.getvalue()).decode("ascii")
 
     # 1. Local file
