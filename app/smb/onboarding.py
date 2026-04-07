@@ -1,19 +1,17 @@
 """
 SMB subscriber onboarding flow.
 
-New flow (single open-ended question):
-  1. Customer texts the signup keyword (e.g. "COMEDY")
-  2. Bot sends welcome message + one natural question at the end
-  3. Customer replies in free text
-  4. AI classifies the answer into the right segment(s) and saves preferences
-  5. Bot sends a warm completion message
-
-If no welcome_message / signup_question is configured, falls back to the
-legacy multi-step forced-choice flow (signup_questions list).
+Simplified model:
+  1. Any first text from a new number → subscriber created (active immediately)
+     + welcome message + preference question sent back.
+  2. All subsequent messages → return None so the conversational brain handles them.
+  3. Preference saving → passive, background only.  If their next message looks like
+     an answer to the preference question (not a question or bot request) we classify
+     and save it silently.  The bot still replies normally via the brain.
 
 Entry point: get_onboarding_reply(phone_number, message_text, tenant)
-Returns a reply string if the message is part of the onboarding flow,
-or None if it should be handled by the main SMB brain instead.
+  Returns a reply string only for brand-new subscribers (the welcome message).
+  Returns None for everyone else so the brain takes over.
 """
 
 import logging
@@ -29,28 +27,33 @@ from app.smb import storage as smb_storage
 
 logger = logging.getLogger(__name__)
 
-# question_key used to store the classified answer from the open-ended question
 _OPEN_QUESTION_KEY = "interest"
 
+_QUESTION_WORDS = re.compile(
+    r"^\s*(who|what|when|where|how|is|are|do|does|can|will|would|should|could|any|got)\b",
+    re.IGNORECASE,
+)
 
-def is_signup_keyword(text: str, tenant: BusinessTenant) -> bool:
-    """Return True if the message exactly matches the tenant's signup keyword."""
-    if not tenant.keyword:
-        return False
-    return text.strip().upper() == tenant.keyword.strip().upper()
+
+def _looks_like_question_or_request(text: str) -> bool:
+    """Return True when the message looks like a question rather than a preference answer."""
+    stripped = text.strip()
+    if stripped.endswith("?"):
+        return True
+    if _QUESTION_WORDS.match(stripped):
+        return True
+    return False
 
 
 def get_onboarding_reply(
     phone_number: str, message_text: str, tenant: BusinessTenant
 ) -> Optional[str]:
     """
-    Main entry point for the onboarding flow.
+    Main entry point.
 
-    Returns a reply string when:
-    - The message is the signup keyword (starts/restarts onboarding)
-    - The subscriber is mid-onboarding and this is their answer
-
-    Returns None when this message is not part of onboarding.
+    - New subscriber  → create, send vCard, return welcome + question.
+    - Existing at step 0 → try to save preference passively in background, return None.
+    - Everyone else   → return None (brain handles everything).
     """
     conn = get_db_connection()
     if not conn:
@@ -61,34 +64,29 @@ def get_onboarding_reply(
         with conn:
             subscriber = smb_storage.get_subscriber(conn, phone_number, tenant.slug)
 
-            if is_signup_keyword(message_text, tenant):
-                if subscriber and subscriber["onboarding_step"] > 0:
-                    # Fully onboarded — already answered the question
-                    return (
-                        f"You're already subscribed to {tenant.display_name}! "
-                        "We'll keep the good stuff coming your way."
-                    )
-                if subscriber is None:
-                    subscriber = smb_storage.create_subscriber(conn, phone_number, tenant.slug)
-                    logger.info(
-                        "SMB new subscriber: tenant=%s phone=...%s",
-                        tenant.slug, phone_number[-4:] if phone_number else "?",
-                    )
-                    # Send vCard as a follow-up MMS so they can save the contact
-                    threading.Thread(
-                        target=_send_vcard_mms,
-                        args=(phone_number, tenant),
-                        daemon=True,
-                    ).start()
+            if subscriber is None:
+                # Brand-new subscriber — subscribe them immediately
+                smb_storage.create_subscriber(conn, phone_number, tenant.slug)
+                logger.info(
+                    "SMB new subscriber: tenant=%s phone=...%s",
+                    tenant.slug, phone_number[-4:] if phone_number else "?",
+                )
+                threading.Thread(
+                    target=_send_vcard_mms,
+                    args=(phone_number, tenant),
+                    daemon=True,
+                ).start()
                 return _welcome_and_question(tenant)
 
-            # step == 0 means signed up but hasn't answered the preference question yet.
-            # Only intercept if the message looks like an actual answer, not a question or
-            # request directed at the bot — those should go to the conversational brain.
-            if subscriber and subscriber["onboarding_step"] == 0:
-                if _looks_like_question_or_request(message_text):
-                    return None  # let the brain answer; preference remains unanswered for now
-                return _handle_answer(conn, subscriber, message_text, tenant)
+            # Existing subscriber who hasn't answered the preference question yet.
+            # Let the brain reply normally, but try to save a preference in the background
+            # if their message looks like an actual answer (not a question to the bot).
+            if subscriber["onboarding_step"] == 0 and not _looks_like_question_or_request(message_text):
+                threading.Thread(
+                    target=_save_preference_async,
+                    args=(phone_number, message_text, tenant),
+                    daemon=True,
+                ).start()
 
     except Exception:
         logger.exception(
@@ -98,124 +96,66 @@ def get_onboarding_reply(
     finally:
         conn.close()
 
-    return None
+    return None  # brain handles all existing subscribers
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers — new open-ended flow
+# Internal helpers
 # ---------------------------------------------------------------------------
-
-_QUESTION_WORDS = re.compile(
-    r"^\s*(who|what|when|where|how|is|are|do|does|can|will|would|should|could|any|got)\b",
-    re.IGNORECASE,
-)
-
-
-def _looks_like_question_or_request(text: str) -> bool:
-    """
-    Return True when the message looks like a question or conversational request
-    rather than an answer to the preference question.
-    Catches "Who's performing tonight?", "What time does it start?", etc.
-    """
-    stripped = text.strip()
-    if stripped.endswith("?"):
-        return True
-    if _QUESTION_WORDS.match(stripped):
-        return True
-    return False
-
 
 def _welcome_and_question(tenant: BusinessTenant) -> str:
-    """
-    Return the welcome message with the open-ended question appended.
-    Falls back to legacy first question if no new config is set.
-    """
+    """Return the welcome message with the preference question appended."""
     if tenant.signup_question:
         welcome = tenant.welcome_message or f"Welcome to {tenant.display_name}!"
         return f"{welcome}\n\n{tenant.signup_question}"
-
-    # Legacy fallback: ask the first forced-choice question directly
-    if tenant.signup_questions:
-        return tenant.signup_questions[0]
-
-    return f"Welcome to {tenant.display_name}! Reply STOP any time to unsubscribe."
+    return tenant.welcome_message or f"Welcome to {tenant.display_name}! Reply STOP any time to unsubscribe."
 
 
-def _handle_answer(
-    conn, subscriber: dict, answer: str, tenant: BusinessTenant
-) -> str:
+def _save_preference_async(phone_number: str, answer: str, tenant: BusinessTenant) -> None:
     """
-    Process the subscriber's answer.
-
-    New flow: AI classifies the free-text answer into segment(s), saves all
-    matching segment preferences, marks subscriber active.
-
-    Legacy flow: saves raw answer for the current step, advances to next question.
+    Background task: classify the subscriber's message as a preference and save it.
+    Called fire-and-forget — never raises, never blocks the reply.
     """
-    if tenant.signup_question:
-        return _handle_open_answer(conn, subscriber, answer, tenant)
-    return _handle_legacy_answer(conn, subscriber, answer, tenant)
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        with conn:
+            subscriber = smb_storage.get_subscriber(conn, phone_number, tenant.slug)
+            if not subscriber or subscriber["onboarding_step"] != 0:
+                return  # already classified, or gone
 
-
-def _handle_open_answer(
-    conn, subscriber: dict, answer: str, tenant: BusinessTenant
-) -> str:
-    """Classify the free-text answer and mark the subscriber active."""
-    classified = _classify_answer(answer, tenant)
-
-    # Save all matched segment preferences
-    for q_key, seg_answer in classified.items():
-        smb_storage.save_preference(conn, subscriber["id"], q_key, seg_answer)
-
-    # Also save the raw interest text for future reference
-    smb_storage.save_preference(conn, subscriber["id"], _OPEN_QUESTION_KEY, answer.strip()[:200])
-
-    smb_storage.advance_onboarding(conn, subscriber["id"], 1, "active")
-    logger.info(
-        "SMB onboarding complete (open): tenant=%s phone=...%s classified=%s",
-        tenant.slug,
-        subscriber.get("phone_number", "?")[-4:],
-        classified,
-    )
-    return _completion_message(tenant, classified)
-
-
-def _handle_legacy_answer(
-    conn, subscriber: dict, answer: str, tenant: BusinessTenant
-) -> str:
-    """Legacy: save raw answer for current step, ask next question."""
-    step = subscriber["onboarding_step"]
-    smb_storage.save_preference(conn, subscriber["id"], str(step), answer.strip())
-
-    next_step = step + 1
-    if next_step >= len(tenant.signup_questions):
-        smb_storage.advance_onboarding(conn, subscriber["id"], next_step, "active")
-        logger.info(
-            "SMB onboarding complete (legacy): tenant=%s phone=...%s",
-            tenant.slug,
-            subscriber.get("phone_number", "?")[-4:],
+            classified = _classify_answer(answer, tenant)
+            for q_key, seg_answer in classified.items():
+                smb_storage.save_preference(conn, subscriber["id"], q_key, seg_answer)
+            smb_storage.save_preference(conn, subscriber["id"], _OPEN_QUESTION_KEY, answer.strip()[:200])
+            smb_storage.advance_onboarding(conn, subscriber["id"], 1, "active")
+            logger.info(
+                "SMB preference saved (passive): tenant=%s phone=...%s classified=%s",
+                tenant.slug, phone_number[-4:] if phone_number else "?", classified,
+            )
+    except Exception:
+        logger.warning(
+            "SMB preference save failed: tenant=%s phone=...%s",
+            tenant.slug, phone_number[-4:] if phone_number else "?",
+            exc_info=True,
         )
-        return _completion_message(tenant, {})
-
-    smb_storage.advance_onboarding(conn, subscriber["id"], next_step, "onboarding")
-    return tenant.signup_questions[next_step]
+    finally:
+        conn.close()
 
 
 def _classify_answer(answer: str, tenant: BusinessTenant) -> dict:
     """
-    Use Gemini to classify the subscriber's free-text answer into segment(s).
-
-    Returns a dict of {question_key: answer} to save as preferences.
-    Falls back to saving the raw answer under question_key "0" if AI fails.
+    Use AI to classify the free-text answer into segment(s).
+    Falls back to saving the raw answer if AI fails or segments aren't configured.
     """
     if not tenant.segments:
         return {"0": answer.strip()}
 
-    # Build segment descriptions for the prompt
     seg_lines = "\n".join(
         f"- {s['name']}: {s.get('description', s['name'])}"
         for s in tenant.segments
-        if s["question_key"] == "0"  # classify against the primary interest segments
+        if s["question_key"] == "0"
     )
     seg_names = [s["name"] for s in tenant.segments if s["question_key"] == "0"]
 
@@ -223,13 +163,12 @@ def _classify_answer(answer: str, tenant: BusinessTenant) -> dict:
         return {"0": answer.strip()}
 
     prompt = (
-        f"A new subscriber to {tenant.display_name} (a {tenant.business_type}) "
+        f"A subscriber to {tenant.display_name} (a {tenant.business_type}) "
         f"was asked: \"{tenant.signup_question}\"\n"
         f"They replied: \"{answer}\"\n\n"
         f"Classify them into ONE of these segments:\n{seg_lines}\n\n"
-        f"If they seem to like more than one, reply with the most specific one that fits. "
         f"If genuinely undecided or unclear, use BOTH if available, otherwise pick the closest.\n"
-        f"Reply with ONLY the segment name, nothing else. Options: {', '.join(seg_names)}"
+        f"Reply with ONLY the segment name. Options: {', '.join(seg_names)}"
     )
 
     classified = smb_ai.generate(prompt).strip().upper()
@@ -241,24 +180,14 @@ def _classify_answer(answer: str, tenant: BusinessTenant) -> dict:
         )
         return {"0": classified}
 
-    if classified:
-        logger.warning(
-            "SMB onboarding: AI returned unknown segment '%s', saving raw answer",
-            classified,
-        )
-    else:
-        logger.warning("SMB onboarding: all AI providers failed, saving raw answer")
-
-    # Fallback: save raw answer
+    logger.warning(
+        "SMB onboarding: AI returned '%s', saving raw answer (tenant=%s)", classified, tenant.slug
+    )
     return {"0": answer.strip()}
 
 
 def _send_vcard_mms(phone_number: str, tenant: BusinessTenant) -> None:
-    """
-    Send the tenant vCard as a follow-up MMS so the subscriber can save
-    the business as a named contact with one tap.
-    Requires RAILWAY_PUBLIC_DOMAIN to build the absolute URL.
-    """
+    """Send the tenant vCard as a follow-up MMS so the subscriber can save the contact."""
     domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
     if not domain:
         logger.warning("SMB vcard: RAILWAY_PUBLIC_DOMAIN not set — skipping vCard MMS")
@@ -289,23 +218,3 @@ def _send_vcard_mms(phone_number: str, tenant: BusinessTenant) -> None:
             "SMB vcard: failed to send to ...%s", phone_number[-4:] if phone_number else "?",
             exc_info=True,
         )
-
-
-def _completion_message(tenant: BusinessTenant, classified: dict) -> str:
-    """Warm, personalised completion message based on what they said."""
-    seg_answer = classified.get("0", "").upper()
-
-    if seg_answer == "STANDUP":
-        flavour = "We'll make sure you never miss a great standup show."
-    elif seg_answer == "IMPROV":
-        flavour = "We'll keep you posted on all our improv nights."
-    elif seg_answer in ("BOTH", ""):
-        flavour = "We'll keep you in the loop on everything happening at the club."
-    else:
-        flavour = "We'll keep you in the loop on what matters most to you."
-
-    return (
-        f"You're in! {flavour} "
-        f"Expect exclusive updates and deals from {tenant.display_name}. "
-        "Reply STOP any time to unsubscribe."
-    )
