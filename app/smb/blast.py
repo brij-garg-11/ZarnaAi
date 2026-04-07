@@ -18,6 +18,7 @@ Owner sends that aren't blast commands get a friendly help reply instead.
 import logging
 import re
 import threading
+import time
 from typing import Optional
 
 from app.admin_auth import get_db_connection
@@ -27,10 +28,73 @@ from app.smb import storage as smb_storage
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Pending clarification state
+# In-memory store: owner_phone → {message_text, tenant_slug, hinted_segment, ts}
+# Expires after 10 minutes of inactivity.
+# ---------------------------------------------------------------------------
+_PENDING: dict = {}
+_PENDING_TTL = 600  # seconds
+
+
+def _set_pending(owner_phone: str, message_text: str, tenant: BusinessTenant, hinted_segment: dict) -> None:
+    _PENDING[owner_phone] = {
+        "message_text": message_text,
+        "tenant_slug": tenant.slug,
+        "hinted_segment": hinted_segment,
+        "ts": time.monotonic(),
+    }
+
+
+def _get_pending(owner_phone: str) -> Optional[dict]:
+    entry = _PENDING.get(owner_phone)
+    if not entry:
+        return None
+    if time.monotonic() - entry["ts"] > _PENDING_TTL:
+        _PENDING.pop(owner_phone, None)
+        return None
+    return entry
+
+
+def _clear_pending(owner_phone: str) -> None:
+    _PENDING.pop(owner_phone, None)
+
 
 # ---------------------------------------------------------------------------
-# Detection
+# Detection helpers
 # ---------------------------------------------------------------------------
+
+_AUDIENCE_QUERY_PATTERNS = re.compile(
+    r"\b(how many|count|total|number of|stats|statistics|breakdown|"
+    r"subscribers?|fans?|audience|segment|who likes?|who signed|how big)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_audience_query(text: str) -> bool:
+    """Return True if the owner is asking about their subscriber counts/stats."""
+    return bool(_AUDIENCE_QUERY_PATTERNS.search(text.strip()))
+
+
+def _hint_segment(text: str, tenant: BusinessTenant) -> Optional[dict]:
+    """
+    Check if the blast message hints at a specific segment without explicitly
+    prefixing it. Looks for the segment name or its hint_keywords in the body.
+
+    e.g. "20% off standup tickets tonight" → hinted STANDUP segment
+    """
+    lower = text.strip().lower()
+    for seg in tenant.segments:
+        # Check the segment name itself
+        name = seg["name"].lower()
+        if re.search(r"\b" + re.escape(name) + r"\b", lower):
+            return seg
+        # Check any hint_keywords defined in config
+        for kw in seg.get("hint_keywords", []):
+            if re.search(r"\b" + re.escape(kw.lower()) + r"\b", lower):
+                return seg
+    return None
+
 
 def is_blast_command(text: str, tenant: BusinessTenant) -> bool:
     """
@@ -50,44 +114,125 @@ def is_blast_command(text: str, tenant: BusinessTenant) -> bool:
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _get_audience_stats(tenant: BusinessTenant) -> str:
+    """Return a formatted audience breakdown for the owner."""
+    conn = get_db_connection()
+    if not conn:
+        return "Sorry, I can't reach the database right now."
+    try:
+        with conn:
+            all_subs = smb_storage.get_active_subscribers(conn, tenant.slug)
+            total = len(all_subs)
+            if not total:
+                return f"You have 0 active subscribers on {tenant.display_name} yet."
+
+            lines = [f"Your {tenant.display_name} audience ({total} active subscribers):"]
+            for seg in tenant.segments:
+                seg_subs = smb_storage.get_subscribers_by_segment(
+                    conn, tenant.slug, seg["question_key"], seg["answers"]
+                )
+                pct = round((len(seg_subs) / total) * 100) if total else 0
+                lines.append(f"  {seg['name']}: {len(seg_subs)} people ({pct}%)")
+
+            return "\n".join(lines)
+    except Exception:
+        logger.exception("SMB: failed to get audience stats for tenant=%s", tenant.slug)
+        return "Error fetching stats — check logs."
+    finally:
+        conn.close()
+
+
 def handle_owner_blast(
     phone_number: str, message_text: str, tenant: BusinessTenant
 ) -> str:
     """
     Called when the registered owner sends a message to the bot.
 
-    Supports optional segment targeting:
-      "STANDUP: Great show tonight 8pm!" → only STANDUP fans
-      "IMPROV: Jam session tonight!"     → only IMPROV fans
-      "Opening tonight 8pm!"             → all active subscribers
-
-    If it's not a blast command, returns a short help reply showing
-    example trigger words.
+    Routing logic (in order):
+    1. Audience stats query   → return subscriber counts
+    2. Pending clarification reply → owner answered SEGMENT or ALL → send blast
+    3. Explicit segment prefix (STANDUP: ...) → send targeted blast immediately
+    4. Blast command with hinted segment → ask for clarification
+    5. Blast command, no hint → send to everyone
+    6. Not a blast command → show help
     """
-    if not is_blast_command(message_text, tenant):
+    text = message_text.strip()
+
+    # ── 1. Audience stats query ──
+    if _is_audience_query(text):
+        return _get_audience_stats(tenant)
+
+    # ── 2. Reply to a pending clarification ──
+    pending = _get_pending(phone_number)
+    if pending and pending["tenant_slug"] == tenant.slug:
+        upper = text.upper()
+        # Owner replied with a segment name (e.g. "STANDUP") or "ALL"/"EVERYONE"
+        if upper in {"ALL", "EVERYONE", "ALL SUBSCRIBERS"}:
+            _clear_pending(phone_number)
+            threading.Thread(
+                target=_run_blast_async,
+                args=(pending["message_text"], tenant, None),
+                daemon=True,
+            ).start()
+            return "Got it! Sending to all your active subscribers now."
+
+        matched_seg = next(
+            (s for s in tenant.segments if s["name"].upper() == upper), None
+        )
+        if matched_seg:
+            _clear_pending(phone_number)
+            threading.Thread(
+                target=_run_blast_async,
+                args=(pending["message_text"], tenant, matched_seg),
+                daemon=True,
+            ).start()
+            return f"Got it! Sending to your {matched_seg['name']} subscribers now."
+
+        # Unrecognised reply — nudge them
+        seg_names = " / ".join(s["name"] for s in tenant.segments)
+        return f"Reply with a segment ({seg_names}) or ALL to send to everyone."
+
+    # ── Not a blast command ──
+    if not is_blast_command(text, tenant):
         sample = ", ".join(f'"{t}"' for t in tenant.blast_triggers[:4])
         seg_hint = ""
         if tenant.segments:
-            names = ", ".join(s["name"] for s in tenant.segments[:3])
-            seg_hint = f' Prefix with a segment to target a group: "{tenant.segments[0]["name"]}: your message".'
+            seg_hint = f' Tip: prefix with a segment to target a group — e.g. "{tenant.segments[0]["name"]}: your message".'
         return (
             f"To blast your subscribers, include a trigger word like {sample}. "
             f'Example: "Opening tonight 8pm — 20% off tickets".{seg_hint}'
         )
 
-    segment = _detect_segment(message_text, tenant)
-
-    threading.Thread(
-        target=_run_blast_async,
-        args=(message_text, tenant, segment),
-        daemon=True,
-    ).start()
-
+    # ── 3. Explicit segment prefix ──
+    segment = _detect_segment(text, tenant)
     if segment:
+        threading.Thread(
+            target=_run_blast_async,
+            args=(text, tenant, segment),
+            daemon=True,
+        ).start()
         return (
             f"Blast queued for your {segment['name']} subscribers! "
             "Check your weekly report for results."
         )
+
+    # ── 4. No prefix — check for a hinted segment ──
+    hinted = _hint_segment(text, tenant)
+    if hinted and tenant.segments:
+        # Store pending and ask for clarification
+        _set_pending(phone_number, text, tenant, hinted)
+        seg_names = " / ".join(s["name"] for s in tenant.segments)
+        return (
+            f'Would you like to send that to your {hinted["name"]} subscribers only, '
+            f"or everyone? Reply: {hinted['name']} or ALL"
+        )
+
+    # ── 5. No hint — blast everyone ──
+    threading.Thread(
+        target=_run_blast_async,
+        args=(text, tenant, None),
+        daemon=True,
+    ).start()
     return (
         "Blast queued for all your active subscribers! "
         "Check your weekly report for results."

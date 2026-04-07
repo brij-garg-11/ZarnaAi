@@ -35,13 +35,15 @@
       "name": "STANDUP",
       "description": "Standup comedy fans",
       "question_key": "0",
-      "answers": ["STANDUP", "BOTH"]
+      "answers": ["STANDUP", "BOTH"],
+      "hint_keywords": ["standup", "stand-up", "stand up", "comedian", "comic", "headliner"]
     },
     {
       "name": "IMPROV",
       "description": "Improv fans",
       "question_key": "0",
-      "answers": ["IMPROV", "BOTH"]
+      "answers": ["IMPROV", "BOTH"],
+      "hint_keywords": ["improv", "improvisation", "improv show", "improv night", "improv jam"]
     },
     {
       "_note": "question_key '1' = step 1 = 'How often do you want to hear from us?'",

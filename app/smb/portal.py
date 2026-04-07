@@ -93,11 +93,21 @@ def _fetch_portal_data(slug: str) -> dict:
                 SELECT p.question_key, p.answer, COUNT(*) AS cnt
                 FROM smb_preferences p
                 JOIN smb_subscribers s ON s.id = p.subscriber_id
-                WHERE s.tenant_slug = %s
+                WHERE s.tenant_slug = %s AND s.status = 'active'
                 GROUP BY p.question_key, p.answer
                 ORDER BY p.question_key, cnt DESC
             """, (slug,))
             pref_rows = [dict(r) for r in cur.fetchall()]
+
+            # Blast segment breakdown — how many sent per segment
+            cur.execute("""
+                SELECT COALESCE(segment, 'all') AS seg, COUNT(*) AS blast_count,
+                       SUM(attempted) AS total_sent
+                FROM smb_blasts
+                WHERE tenant_slug = %s
+                GROUP BY segment
+            """, (slug,))
+            blast_seg_rows = [dict(r) for r in cur.fetchall()]
 
         # Group preferences by question
         pref_by_question = defaultdict(list)
@@ -107,10 +117,19 @@ def _fetch_portal_data(slug: str) -> dict:
                 "cnt": row["cnt"],
             })
 
+        # Build answer → count lookup for segment size calculations
+        answer_counts: dict[tuple, int] = {}
+        for row in pref_rows:
+            answer_counts[(row["question_key"], row["answer"].upper())] = row["cnt"]
+
+        blast_by_seg = {r["seg"]: r for r in blast_seg_rows}
+
         return {
             "subscribers": subs,
             "blasts": blasts,
             "preferences": dict(pref_by_question),
+            "answer_counts": answer_counts,
+            "blast_by_seg": blast_by_seg,
         }
 
     except Exception:
@@ -296,6 +315,59 @@ def _render_blasts(blasts: list) -> str:
               {"".join(rows)}
             </tbody>
           </table>
+        </div>
+      </div>
+    </div>"""
+
+
+def _render_segments(tenant, answer_counts: dict, blast_by_seg: dict, active_total: int) -> str:
+    """Segment audience breakdown — one tile per configured segment."""
+    if not tenant.segments:
+        return ""
+
+    tiles = []
+    for seg in tenant.segments:
+        name = seg["name"]
+        q_key = seg["question_key"]
+        answers = [a.upper() for a in seg["answers"]]
+
+        # Count subscribers in this segment (union of all matching answers)
+        seen_ids: set = set()
+        count = sum(
+            answer_counts.get((q_key, a), 0)
+            for a in answers
+        )
+        # Deduplicate: if subscriber answered BOTH, they appear in STANDUP and IMPROV
+        # The portal shows raw counts (each person counted in every segment they belong to)
+        pct = round((count / active_total) * 100) if active_total else 0
+
+        blasts_info = blast_by_seg.get(name.lower(), blast_by_seg.get(name, {}))
+        blast_cnt = blasts_info.get("blast_count", 0) if blasts_info else 0
+
+        desc = _esc(seg.get("description", name))
+
+        tiles.append(f"""
+          <div class="seg-tile">
+            <div class="seg-name">{_esc(name)}</div>
+            <div class="seg-count">{count:,}</div>
+            <div class="seg-bar-wrap">
+              <div class="seg-bar" style="width:{pct}%"></div>
+            </div>
+            <div class="seg-meta">{pct}% of active &nbsp;·&nbsp; {blast_cnt} blast{"s" if blast_cnt != 1 else ""}</div>
+            <div class="seg-desc">{desc}</div>
+          </div>""")
+
+    return f"""
+    <div class="section">
+      <div class="card">
+        <div class="card-title">Audience segments</div>
+        <div class="seg-grid">
+          {"".join(tiles)}
+        </div>
+        <div class="seg-note">
+          Segments overlap — subscribers who chose "BOTH" appear in both STANDUP and IMPROV.
+          Use a segment prefix when texting your number to target a group:
+          <code>STANDUP: Great show tonight 8pm!</code>
         </div>
       </div>
     </div>"""
@@ -569,6 +641,33 @@ tbody tr:hover td { background: #fafafa; }
 /* ── divider ── */
 .divider { height: 1px; background: #f3f4f6; margin: 20px 0; }
 
+/* ── segment tiles ── */
+.seg-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px; margin-bottom: 16px;
+}
+.seg-tile {
+  background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px;
+  padding: 16px 14px;
+}
+.seg-name {
+  font-size: 11px; font-weight: 700; color: #6366f1;
+  text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;
+}
+.seg-count { font-size: 28px; font-weight: 800; color: #111827; line-height: 1; margin-bottom: 8px; letter-spacing: -0.02em; }
+.seg-bar-wrap { background: #e5e7eb; border-radius: 4px; height: 4px; overflow: hidden; margin-bottom: 8px; }
+.seg-bar { height: 100%; background: linear-gradient(90deg, #6366f1, #8b5cf6); border-radius: 4px; }
+.seg-meta { font-size: 11px; color: #9ca3af; margin-bottom: 4px; }
+.seg-desc { font-size: 11px; color: #6b7280; }
+.seg-note {
+  font-size: 12px; color: #9ca3af; line-height: 1.6;
+  border-top: 1px solid #f3f4f6; padding-top: 14px;
+}
+.seg-note code {
+  background: #f3f4f6; padding: 1px 6px; border-radius: 4px;
+  font-size: 11px; color: #374151;
+}
+
 /* ── footer ── */
 .footer {
   text-align: center; font-size: 12px; color: #d1d5db;
@@ -598,8 +697,11 @@ def _render_page(tenant, data: dict, token: str) -> str:
     subs = data.get("subscribers", {})
     blasts = data.get("blasts", [])
     prefs = data.get("preferences", {})
+    answer_counts = data.get("answer_counts", {})
+    blast_by_seg = data.get("blast_by_seg", {})
 
     hero_html = _render_hero(tenant, subs)
+    seg_html = _render_segments(tenant, answer_counts, blast_by_seg, subs.get("active") or 0)
     blast_html = _render_blasts(blasts)
     pref_html = _render_preferences(prefs, tenant.signup_questions)
 
@@ -624,6 +726,7 @@ def _render_page(tenant, data: dict, token: str) -> str:
 </div>
 
 {hero_html}
+{seg_html}
 {blast_html}
 {pref_html}
 
