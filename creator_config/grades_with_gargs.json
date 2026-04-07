@@ -1,0 +1,22 @@
+{
+  "_note": "Client #2 — Grades with Gargs. Educational/tutoring SMS community. Migrated from Twilio 855 number to 212 number.",
+  "slug": "grades_with_gargs",
+  "display_name": "Grades with Gargs",
+  "business_type": "education",
+  "location": "New York, NY",
+  "tone": "warm, encouraging, knowledgeable — like a trusted tutor who genuinely wants you to succeed",
+  "welcome_message": "Welcome to Grades with Gargs! Glad you're here. You'll hear from us with tips, resources, and updates.",
+  "signup_question": "What subject or grade level are you focused on? (e.g. math, SAT prep, high school, college apps)",
+  "blast_triggers": [
+    "tonight",
+    "session",
+    "workshop",
+    "tip",
+    "reminder",
+    "deadline",
+    "test",
+    "exam",
+    "special"
+  ],
+  "segments": []
+}
