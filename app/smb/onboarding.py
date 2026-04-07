@@ -20,6 +20,7 @@ import logging
 from typing import Optional
 
 from app.admin_auth import get_db_connection
+from app.smb import ai as smb_ai
 from app.smb.tenants import BusinessTenant
 from app.smb import storage as smb_storage
 
@@ -188,42 +189,32 @@ def _classify_answer(answer: str, tenant: BusinessTenant) -> dict:
     if not seg_names:
         return {"0": answer.strip()}
 
-    try:
-        from google import genai
-        from app.config import GEMINI_API_KEY, GENERATION_MODEL
+    prompt = (
+        f"A new subscriber to {tenant.display_name} (a {tenant.business_type}) "
+        f"was asked: \"{tenant.signup_question}\"\n"
+        f"They replied: \"{answer}\"\n\n"
+        f"Classify them into ONE of these segments:\n{seg_lines}\n\n"
+        f"If they seem to like more than one, reply with the most specific one that fits. "
+        f"If genuinely undecided or unclear, use BOTH if available, otherwise pick the closest.\n"
+        f"Reply with ONLY the segment name, nothing else. Options: {', '.join(seg_names)}"
+    )
 
-        if not GEMINI_API_KEY:
-            raise ValueError("GEMINI_API_KEY not set")
+    classified = smb_ai.generate(prompt).strip().upper()
 
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        prompt = (
-            f"A new subscriber to {tenant.display_name} (a {tenant.business_type}) "
-            f"was asked: \"{tenant.signup_question}\"\n"
-            f"They replied: \"{answer}\"\n\n"
-            f"Classify them into ONE of these segments:\n{seg_lines}\n\n"
-            f"If they seem to like more than one, reply with the most specific one that fits. "
-            f"If genuinely undecided or unclear, use BOTH if available, otherwise pick the closest.\n"
-            f"Reply with ONLY the segment name, nothing else. Options: {', '.join(seg_names)}"
+    if classified in {n.upper() for n in seg_names}:
+        logger.info(
+            "SMB onboarding: classified answer '%s' → %s (tenant=%s)",
+            answer[:40], classified, tenant.slug,
         )
+        return {"0": classified}
 
-        response = client.models.generate_content(model=GENERATION_MODEL, contents=prompt)
-        classified = (response.text or "").strip().upper()
-
-        # Validate it's a known segment name
-        if classified in {n.upper() for n in seg_names}:
-            logger.info(
-                "SMB onboarding: classified answer '%s' → %s (tenant=%s)",
-                answer[:40], classified, tenant.slug,
-            )
-            return {"0": classified}
-
+    if classified:
         logger.warning(
             "SMB onboarding: AI returned unknown segment '%s', saving raw answer",
             classified,
         )
-
-    except Exception:
-        logger.exception("SMB onboarding: AI classification failed, saving raw answer")
+    else:
+        logger.warning("SMB onboarding: all AI providers failed, saving raw answer")
 
     # Fallback: save raw answer
     return {"0": answer.strip()}

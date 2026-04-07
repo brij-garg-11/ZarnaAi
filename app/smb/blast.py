@@ -23,6 +23,7 @@ from typing import Optional
 
 from app.admin_auth import get_db_connection
 from app.messaging.broadcast import run_loop_broadcast, resolve_broadcast_provider
+from app.smb import ai as smb_ai
 from app.smb.tenants import BusinessTenant
 from app.smb import storage as smb_storage
 
@@ -106,6 +107,7 @@ def _ai_classify_audience_reply(reply: str, tenant: BusinessTenant) -> Optional[
       "all of them"       → None (all)
 
     Returns the matching segment dict or None for all subscribers.
+    Falls back across Gemini → OpenAI → Anthropic automatically.
     """
     if not tenant.segments:
         return None
@@ -116,42 +118,32 @@ def _ai_classify_audience_reply(reply: str, tenant: BusinessTenant) -> Optional[
     )
     seg_names = [s["name"] for s in tenant.segments]
 
-    try:
-        from google import genai
-        from app.config import GEMINI_API_KEY, GENERATION_MODEL
+    prompt = (
+        f"The owner of {tenant.display_name} was asked who they want to send a blast to. "
+        f"They replied: \"{reply}\"\n\n"
+        f"Available audience segments:\n{seg_lines}\n"
+        f"- ALL: send to everyone\n\n"
+        f"Which option best matches their intent? "
+        f"Reply with ONLY one word: ALL, {', '.join(seg_names)}"
+    )
 
-        if not GEMINI_API_KEY:
-            raise ValueError("GEMINI_API_KEY not set")
+    result = smb_ai.generate(prompt).upper()
+    if not result:
+        logger.warning("SMB blast: AI audience classification returned nothing, defaulting to all")
+        return None
 
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        prompt = (
-            f"The owner of {tenant.display_name} was asked who they want to send a blast to. "
-            f"They replied: \"{reply}\"\n\n"
-            f"Available audience segments:\n{seg_lines}\n"
-            f"- ALL: send to everyone\n\n"
-            f"Which option best matches their intent? "
-            f"Reply with ONLY one word: ALL, {', '.join(seg_names)}"
+    if result == "ALL":
+        return None
+
+    matched = next((s for s in tenant.segments if s["name"].upper() == result), None)
+    if matched:
+        logger.info(
+            "SMB blast: AI classified audience reply '%s' → %s (tenant=%s)",
+            reply[:40], matched["name"], tenant.slug,
         )
+        return matched
 
-        response = client.models.generate_content(model=GENERATION_MODEL, contents=prompt)
-        result = (response.text or "").strip().upper()
-
-        if result == "ALL":
-            return None
-
-        matched = next((s for s in tenant.segments if s["name"].upper() == result), None)
-        if matched:
-            logger.info(
-                "SMB blast: AI classified audience reply '%s' → %s (tenant=%s)",
-                reply[:40], matched["name"], tenant.slug,
-            )
-            return matched
-
-        logger.warning("SMB blast: AI returned unknown audience '%s', defaulting to all", result)
-
-    except Exception:
-        logger.exception("SMB blast: AI audience classification failed, defaulting to all")
-
+    logger.warning("SMB blast: AI returned unknown audience '%s', defaulting to all", result)
     return None
 
 
@@ -198,39 +190,28 @@ def _ai_narrate_stats(total: int, seg_data: list, tenant: BusinessTenant) -> str
             f"Breakdown by segment:\n{seg_lines}"
         )
 
-    try:
-        from google import genai
-        from app.config import GEMINI_API_KEY, GENERATION_MODEL
+    prompt = (
+        f"You are the SMS assistant for {tenant.display_name}. "
+        f"Tone: {tenant.tone}.\n\n"
+        f"The owner just asked about their audience. "
+        f"Reply to them naturally — like a smart friend who knows the numbers — "
+        f"using the following facts:\n\n{facts}\n\n"
+        f"Keep it short (2–4 sentences max), conversational, no bullet points or headers. "
+        f"SMS only — plain text."
+    )
 
-        if not GEMINI_API_KEY:
-            raise ValueError("GEMINI_API_KEY not set")
+    result = smb_ai.generate(prompt)
+    if result:
+        return result
 
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        prompt = (
-            f"You are the SMS assistant for {tenant.display_name}. "
-            f"Tone: {tenant.tone}.\n\n"
-            f"The owner just asked about their audience. "
-            f"Reply to them naturally — like a smart friend who knows the numbers — "
-            f"using the following facts:\n\n{facts}\n\n"
-            f"Keep it short (2–4 sentences max), conversational, no bullet points or headers. "
-            f"SMS only — plain text."
-        )
-
-        response = client.models.generate_content(model=GENERATION_MODEL, contents=prompt)
-        result = (response.text or "").strip()
-        if result:
-            return result
-        raise ValueError("empty AI response")
-
-    except Exception:
-        logger.exception("SMB: AI stats narration failed for tenant=%s, falling back", tenant.slug)
-        # Readable fallback if AI fails
-        if not total:
-            return f"No active subscribers on {tenant.display_name} yet — keep spreading the word!"
-        lines = [f"{tenant.display_name} has {total} active subscribers."]
-        for s in seg_data:
-            lines.append(f"{s['name']}: {s['count']} ({s['pct']}%)")
-        return " | ".join(lines)
+    # Hard fallback if every AI provider is down
+    logger.warning("SMB: all AI providers failed for stats narration (tenant=%s)", tenant.slug)
+    if not total:
+        return f"No active subscribers on {tenant.display_name} yet — keep spreading the word!"
+    lines = [f"{tenant.display_name} has {total} active subscribers."]
+    for s in seg_data:
+        lines.append(f"{s['name']}: {s['count']} ({s['pct']}%)")
+    return " | ".join(lines)
 
 
 def handle_owner_blast(

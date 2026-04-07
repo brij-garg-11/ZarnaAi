@@ -23,10 +23,8 @@ Returns a reply string or None (None = message should be silently dropped).
 import logging
 from typing import Optional
 
-from google import genai
-
 from app.admin_auth import get_db_connection
-from app.config import GEMINI_API_KEY, GENERATION_MODEL
+from app.smb import ai as smb_ai
 from app.smb import blast, onboarding
 from app.smb import storage as smb_storage
 from app.smb.tenants import BusinessTenant, get_registry
@@ -126,32 +124,22 @@ def _signup_nudge(tenant: BusinessTenant) -> str:
 def _conversational_reply(message_text: str, tenant: BusinessTenant) -> Optional[str]:
     """
     Short friendly AI reply in the business's voice.
-    Uses Gemini with a lightweight system prompt built from the tenant config.
     No RAG — keeps costs low and responses fast for subscriber conversation.
+    Falls back across Gemini → OpenAI → Anthropic automatically.
     """
-    try:
-        if not GEMINI_API_KEY:
-            logger.warning("SMB brain: GEMINI_API_KEY not set — cannot generate reply")
-            return None
-
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        topics = ", ".join(tenant.value_content_topics) if tenant.value_content_topics else "general topics"
-        prompt = (
-            f"You are the friendly SMS assistant for {tenant.display_name}, a {tenant.business_type}. "
-            f"Your tone: {tenant.tone}. "
-            f"Keep replies very short (1-3 sentences), warm, and on-brand. "
-            f"Stay on topic: {topics}. "
-            f"Never mention competitors. Do not use emojis unless the subscriber uses them first.\n\n"
-            f"Subscriber: {message_text}"
-        )
-
-        response = client.models.generate_content(model=GENERATION_MODEL, contents=prompt)
-        reply = (response.text or "").strip()
-        return reply if reply else None
-
-    except Exception:
-        logger.exception("SMB brain: conversational reply generation failed")
-        return None
+    topics = ", ".join(tenant.value_content_topics) if tenant.value_content_topics else "general topics"
+    prompt = (
+        f"You are the friendly SMS assistant for {tenant.display_name}, a {tenant.business_type}. "
+        f"Your tone: {tenant.tone}. "
+        f"Keep replies very short (1-3 sentences), warm, and on-brand. "
+        f"Stay on topic: {topics}. "
+        f"Never mention competitors. Do not use emojis unless the subscriber uses them first.\n\n"
+        f"Subscriber: {message_text}"
+    )
+    reply = smb_ai.generate(prompt)
+    if not reply:
+        logger.warning("SMB brain: all AI providers failed for conversational reply")
+    return reply or None
 
 
 def create_smb_brain() -> SMBBrain:
