@@ -76,25 +76,6 @@ def _is_audience_query(text: str) -> bool:
     return bool(_AUDIENCE_QUERY_PATTERNS.search(text.strip()))
 
 
-def _hint_segment(text: str, tenant: BusinessTenant) -> Optional[dict]:
-    """
-    Check if the blast message hints at a specific segment without explicitly
-    prefixing it. Looks for the segment name or its hint_keywords in the body.
-
-    e.g. "20% off standup tickets tonight" → hinted STANDUP segment
-    """
-    lower = text.strip().lower()
-    for seg in tenant.segments:
-        # Check the segment name itself
-        name = seg["name"].lower()
-        if re.search(r"\b" + re.escape(name) + r"\b", lower):
-            return seg
-        # Check any hint_keywords defined in config
-        for kw in seg.get("hint_keywords", []):
-            if re.search(r"\b" + re.escape(kw.lower()) + r"\b", lower):
-                return seg
-    return None
-
 
 def is_blast_command(text: str, tenant: BusinessTenant) -> bool:
     """
@@ -113,6 +94,66 @@ def is_blast_command(text: str, tenant: BusinessTenant) -> bool:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+def _ai_classify_audience_reply(reply: str, tenant: BusinessTenant) -> Optional[dict]:
+    """
+    Use AI to interpret the owner's free-text audience reply.
+
+    Examples:
+      "just standup fans" → STANDUP segment
+      "everyone"          → None (all)
+      "improv people"     → IMPROV segment
+      "all of them"       → None (all)
+
+    Returns the matching segment dict or None for all subscribers.
+    """
+    if not tenant.segments:
+        return None
+
+    seg_lines = "\n".join(
+        f"- {s['name']}: {s.get('description', s['name'])}"
+        for s in tenant.segments
+    )
+    seg_names = [s["name"] for s in tenant.segments]
+
+    try:
+        from google import genai
+        from app.config import GEMINI_API_KEY, GENERATION_MODEL
+
+        if not GEMINI_API_KEY:
+            raise ValueError("GEMINI_API_KEY not set")
+
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        prompt = (
+            f"The owner of {tenant.display_name} was asked who they want to send a blast to. "
+            f"They replied: \"{reply}\"\n\n"
+            f"Available audience segments:\n{seg_lines}\n"
+            f"- ALL: send to everyone\n\n"
+            f"Which option best matches their intent? "
+            f"Reply with ONLY one word: ALL, {', '.join(seg_names)}"
+        )
+
+        response = client.models.generate_content(model=GENERATION_MODEL, contents=prompt)
+        result = (response.text or "").strip().upper()
+
+        if result == "ALL":
+            return None
+
+        matched = next((s for s in tenant.segments if s["name"].upper() == result), None)
+        if matched:
+            logger.info(
+                "SMB blast: AI classified audience reply '%s' → %s (tenant=%s)",
+                reply[:40], matched["name"], tenant.slug,
+            )
+            return matched
+
+        logger.warning("SMB blast: AI returned unknown audience '%s', defaulting to all", result)
+
+    except Exception:
+        logger.exception("SMB blast: AI audience classification failed, defaulting to all")
+
+    return None
+
 
 def _get_audience_stats(tenant: BusinessTenant) -> str:
     """Return a formatted audience breakdown for the owner."""
@@ -149,12 +190,10 @@ def handle_owner_blast(
     Called when the registered owner sends a message to the bot.
 
     Routing logic (in order):
-    1. Audience stats query   → return subscriber counts
-    2. Pending clarification reply → owner answered SEGMENT or ALL → send blast
-    3. Explicit segment prefix (STANDUP: ...) → send targeted blast immediately
-    4. Blast command with hinted segment → ask for clarification
-    5. Blast command, no hint → send to everyone
-    6. Not a blast command → show help
+    1. Audience stats query    → return subscriber counts
+    2. Pending clarification reply → AI interprets free-text → send blast
+    3. Blast command           → always ask who to send to (AI interprets reply)
+    4. Not a blast command     → show help
     """
     text = message_text.strip()
 
@@ -162,107 +201,43 @@ def handle_owner_blast(
     if _is_audience_query(text):
         return _get_audience_stats(tenant)
 
-    # ── 2. Reply to a pending clarification ──
+    # ── 2. Reply to a pending clarification (AI-interpreted free text) ──
     pending = _get_pending(phone_number)
     if pending and pending["tenant_slug"] == tenant.slug:
-        upper = text.upper()
-        # Owner replied with a segment name (e.g. "STANDUP") or "ALL"/"EVERYONE"
-        if upper in {"ALL", "EVERYONE", "ALL SUBSCRIBERS"}:
-            _clear_pending(phone_number)
-            threading.Thread(
-                target=_run_blast_async,
-                args=(pending["message_text"], tenant, None),
-                daemon=True,
-            ).start()
-            return "Got it! Sending to all your active subscribers now."
-
-        matched_seg = next(
-            (s for s in tenant.segments if s["name"].upper() == upper), None
-        )
-        if matched_seg:
-            _clear_pending(phone_number)
-            threading.Thread(
-                target=_run_blast_async,
-                args=(pending["message_text"], tenant, matched_seg),
-                daemon=True,
-            ).start()
-            return f"Got it! Sending to your {matched_seg['name']} subscribers now."
-
-        # Unrecognised reply — nudge them
-        seg_names = " / ".join(s["name"] for s in tenant.segments)
-        return f"Reply with a segment ({seg_names}) or ALL to send to everyone."
+        _clear_pending(phone_number)
+        segment = _ai_classify_audience_reply(text, tenant)
+        threading.Thread(
+            target=_run_blast_async,
+            args=(pending["message_text"], tenant, segment),
+            daemon=True,
+        ).start()
+        if segment:
+            return f"Got it! Sending to your {segment['name']} subscribers now."
+        return "Got it! Sending to all your active subscribers now."
 
     # ── Not a blast command ──
     if not is_blast_command(text, tenant):
         sample = ", ".join(f'"{t}"' for t in tenant.blast_triggers[:4])
-        seg_hint = ""
-        if tenant.segments:
-            seg_hint = f' Tip: prefix with a segment to target a group — e.g. "{tenant.segments[0]["name"]}: your message".'
         return (
             f"To blast your subscribers, include a trigger word like {sample}. "
-            f'Example: "Opening tonight 8pm — 20% off tickets".{seg_hint}'
+            f'Example: "Opening tonight 8pm — 20% off tickets".'
         )
 
-    # ── 3. Explicit segment prefix ──
-    segment = _detect_segment(text, tenant)
-    if segment:
-        threading.Thread(
-            target=_run_blast_async,
-            args=(text, tenant, segment),
-            daemon=True,
-        ).start()
-        return (
-            f"Blast queued for your {segment['name']} subscribers! "
-            "Check your weekly report for results."
-        )
-
-    # ── 4. No prefix — check for a hinted segment ──
-    hinted = _hint_segment(text, tenant)
-    if hinted and tenant.segments:
-        # Store pending and ask for clarification
-        _set_pending(phone_number, text, tenant, hinted)
-        seg_names = " / ".join(s["name"] for s in tenant.segments)
-        return (
-            f'Would you like to send that to your {hinted["name"]} subscribers only, '
-            f"or everyone? Reply: {hinted['name']} or ALL"
-        )
-
-    # ── 5. No hint — blast everyone ──
-    threading.Thread(
-        target=_run_blast_async,
-        args=(text, tenant, None),
-        daemon=True,
-    ).start()
-    return (
-        "Blast queued for all your active subscribers! "
-        "Check your weekly report for results."
-    )
+    # ── Blast command — always ask who to send to ──
+    _set_pending(phone_number, text, tenant, None)
+    seg_examples = ", ".join(
+        f'"{s["name"].lower()} fans"' for s in tenant.segments[:2]
+    ) if tenant.segments else ""
+    clarify = "Who would you like to send this to?"
+    if seg_examples:
+        clarify += f" (e.g. {seg_examples}, or everyone)"
+    return clarify
 
 
 # ---------------------------------------------------------------------------
 # Async broadcast worker
 # ---------------------------------------------------------------------------
 
-def _detect_segment(text: str, tenant: BusinessTenant) -> Optional[dict]:
-    """
-    Check if the owner's message starts with a known segment prefix.
-
-    Format: "SEGMENT_NAME: rest of message"
-    e.g.   "STANDUP: Great show tonight at 8pm!"
-
-    Returns the matching segment dict (with name, question_key, answers)
-    if found, or None for a broadcast to all subscribers.
-    """
-    if not tenant.segments:
-        return None
-    stripped = text.strip()
-    for seg in tenant.segments:
-        prefix = seg["name"].upper() + ":"
-        if stripped.upper().startswith(prefix):
-            body_after = stripped[len(prefix):].strip()
-            if body_after:  # ignore bare "STANDUP:" with no message
-                return seg
-    return None
 
 
 def _run_blast_async(
@@ -299,8 +274,7 @@ def _run_blast_async(
         )
         return
 
-    # Strip the segment prefix from the outbound message body
-    body = _format_blast(_strip_segment_prefix(message_text, segment), tenant)
+    body = _format_blast(message_text.strip(), tenant)
     provider = resolve_broadcast_provider()
     phones = [s["phone_number"] for s in subscribers]
     seg_name = segment["name"] if segment else None
@@ -339,16 +313,6 @@ def _slicktext_send_one(to: str, body: str) -> bool:
 # ---------------------------------------------------------------------------
 # Message formatting
 # ---------------------------------------------------------------------------
-
-def _strip_segment_prefix(message_text: str, segment: Optional[dict]) -> str:
-    """Remove the 'SEGMENT_NAME: ' prefix from the owner's message if present."""
-    if not segment:
-        return message_text.strip()
-    prefix = segment["name"].upper() + ":"
-    stripped = message_text.strip()
-    if stripped.upper().startswith(prefix):
-        return stripped[len(prefix):].strip()
-    return stripped
 
 
 def _format_blast(owner_message: str, tenant: BusinessTenant) -> str:
