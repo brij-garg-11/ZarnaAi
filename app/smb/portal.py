@@ -720,7 +720,7 @@ def _render_page(tenant, data: dict, token: str) -> str:
 <body>
 
 <div class="topbar">
-  <div class="topbar-brand">Client Dashboard</div>
+  <div class="topbar-brand">{_esc(tenant.display_name)}</div>
   <div class="topbar-powered">
     <span class="topbar-dot"></span>
     Powered by Zarna AI
