@@ -163,6 +163,12 @@ def build_context(tenant, message: str) -> str:  # noqa: ARG001  message unused 
         f"Policies: {kb.get('policies', '')}",
         f"Ticket support (lost / missing tickets): {kb.get('ticket_support', '')}",
         f"Cancellation policy: {kb.get('cancellation_policy', '')}",
+        f"Show transfers (changing show time or date): {kb.get('show_transfers', '')}",
+        f"Accidental purchase: {kb.get('accidental_purchase', '')}",
+        f"Billing errors / overcharged: {kb.get('billing_errors', '')}",
+        f"Accessibility / mobility needs: {kb.get('accessibility', '')}",
+        f"Late arrival: {kb.get('late_arrival', '')}",
+        f"Lost and found: {kb.get('lost_and_found', '')}",
         f"Private events: {kb.get('private_events', '')}",
         f"Notable performers: {kb.get('notable_performers', '')}",
     ]

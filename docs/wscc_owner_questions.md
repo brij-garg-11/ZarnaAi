@@ -34,6 +34,7 @@ Open questions to resolve before or shortly after launch. Each one affects how t
 - **Accessible entrance** — Is the venue wheelchair accessible? Any specific entrance to use?
 - **Age policy clarification** — Policy says 16+ with a guardian, 18+ without. Is there a hard cutoff, or is it case-by-case at the door?
 - **Notable performers** — Any updates to the list of past headliners you want highlighted? (Currently: Bill Burr, Ronnie Chieng, Jessica Kirson.)
+- **Pre-show dinner reservations** — Guests have asked about coming 45 min early for dinner. How does this work? Do they email ahead, reserve on the website, or just show up early? Is there a specific time they should arrive?
 
 ---
 

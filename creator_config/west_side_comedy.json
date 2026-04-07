@@ -45,6 +45,12 @@
     "_ticket_support_note": "TODO: ask owner if guests can self-serve lost tickets from the website — if yes, add the link to ticket_support below",
     "ticket_support": "Can't find your tickets or never got a confirmation email? Email bookingswestsidecomedy@gmail.com and they'll look it up for you.",
     "cancellation_policy": "Tickets are non-refundable. If you genuinely can't make it, email bookingswestsidecomedy@gmail.com — they'll do their best to help (credits to a future show are sometimes possible). For sold-out shows, letting them know frees up your seat for someone on the waitlist.",
+    "show_transfers": "Need to switch to a different show time or date? Email bookingswestsidecomedy@gmail.com with your reservation details — transfers are sometimes possible depending on availability.",
+    "accidental_purchase": "Bought tickets by accident? Email bookingswestsidecomedy@gmail.com right away with your order number and they'll do what they can.",
+    "billing_errors": "Think you were charged the wrong amount or ordered more tickets than you intended? Email bookingswestsidecomedy@gmail.com with your order details.",
+    "accessibility": "Guests with mobility needs are welcome and accommodated. Email bookingswestsidecomedy@gmail.com ahead of your visit to arrange early entry or any other assistance you need.",
+    "late_arrival": "Doors open 30 minutes before the show. If you're not in the showroom 15 minutes before showtime, your seat may be given away — so try to arrive early. If you think you'll be late, email bookingswestsidecomedy@gmail.com.",
+    "lost_and_found": "Lost something at the club? Email bookingswestsidecomedy@gmail.com with a description of what you lost and which show you attended."
     "private_events": "Yes! For private events, group bookings, or buyouts contact us through westsidecomedyclub.com. Great for birthdays, corporate events, and private parties.",
     "notable_performers": "Past performers include Bill Burr, Ronnie Chieng, Jessica Kirson, and more top national talent mixed with exciting up-and-comers."
   },
