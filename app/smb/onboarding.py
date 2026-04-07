@@ -58,7 +58,8 @@ def get_onboarding_reply(
             subscriber = smb_storage.get_subscriber(conn, phone_number, tenant.slug)
 
             if is_signup_keyword(message_text, tenant):
-                if subscriber and subscriber["status"] == "active":
+                if subscriber and subscriber["onboarding_step"] > 0:
+                    # Fully onboarded — already answered the question
                     return (
                         f"You're already subscribed to {tenant.display_name}! "
                         "We'll keep the good stuff coming your way."
@@ -71,7 +72,8 @@ def get_onboarding_reply(
                     )
                 return _welcome_and_question(tenant)
 
-            if subscriber and subscriber["status"] == "onboarding":
+            # step == 0 means signed up but hasn't answered the preference question yet
+            if subscriber and subscriber["onboarding_step"] == 0:
                 return _handle_answer(conn, subscriber, message_text, tenant)
 
     except Exception:

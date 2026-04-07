@@ -66,13 +66,15 @@ def _fetch_portal_data(slug: str) -> dict:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
 
             # Subscriber counts
+            # step > 0 = answered the preference question (fully onboarded)
+            # step = 0 = signed up but hasn't answered yet (still blastable)
             cur.execute("""
                 SELECT
-                    COUNT(*) FILTER (WHERE status = 'active')      AS active,
-                    COUNT(*) FILTER (WHERE status = 'onboarding')   AS onboarding,
-                    COUNT(*)                                         AS total,
-                    MIN(created_at)                                  AS first_signup,
-                    MAX(created_at)                                  AS last_signup
+                    COUNT(*) FILTER (WHERE status = 'active' AND onboarding_step > 0) AS active,
+                    COUNT(*) FILTER (WHERE status = 'active' AND onboarding_step = 0) AS onboarding,
+                    COUNT(*)                                                            AS total,
+                    MIN(created_at)                                                     AS first_signup,
+                    MAX(created_at)                                                     AS last_signup
                 FROM smb_subscribers
                 WHERE tenant_slug = %s
             """, (slug,))
@@ -221,7 +223,7 @@ def _render_hero(tenant, subs: dict) -> str:
       <div class="stat-tile c-violet">
         <div class="stat-icon">⏳</div>
         <div class="stat-num c-violet">{onboarding:,}</div>
-        <div class="stat-lbl">Finishing sign-up</div>
+        <div class="stat-lbl">Preference pending</div>
       </div>
       <div class="stat-tile c-teal">
         <div class="stat-icon">📋</div>

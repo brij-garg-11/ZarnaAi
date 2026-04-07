@@ -51,7 +51,7 @@ def create_subscriber(conn, phone_number: str, tenant_slug: str) -> dict:
         cur.execute(
             """
             INSERT INTO smb_subscribers (phone_number, tenant_slug, status, onboarding_step)
-            VALUES (%s, %s, 'onboarding', 0)
+            VALUES (%s, %s, 'active', 0)
             ON CONFLICT (phone_number, tenant_slug) DO NOTHING
             """,
             (phone_number, tenant_slug),

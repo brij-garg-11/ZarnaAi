@@ -37,11 +37,11 @@ def _fetch_smb_stats() -> dict:
             cur.execute("""
                 SELECT
                     tenant_slug,
-                    COUNT(*) FILTER (WHERE status = 'active')      AS active,
-                    COUNT(*) FILTER (WHERE status = 'onboarding')   AS onboarding,
-                    COUNT(*)                                         AS total,
-                    MIN(created_at)                                  AS first_signup,
-                    MAX(created_at)                                  AS last_signup
+                    COUNT(*) FILTER (WHERE status = 'active' AND onboarding_step > 0)  AS active,
+                    COUNT(*) FILTER (WHERE status = 'active' AND onboarding_step = 0)  AS onboarding,
+                    COUNT(*)                                                             AS total,
+                    MIN(created_at)                                                      AS first_signup,
+                    MAX(created_at)                                                      AS last_signup
                 FROM smb_subscribers
                 GROUP BY tenant_slug
                 ORDER BY tenant_slug
