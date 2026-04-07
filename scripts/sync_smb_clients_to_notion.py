@@ -1,52 +1,54 @@
 #!/usr/bin/env python3
 """
 Daily sync of SMB client stats → Notion master "SMB Clients" database.
+On the 1st of each month, also saves a permanent snapshot to "SMB Billing History".
 
 For each tenant this script writes:
   - Subscriber counts (active, total, completion rate)
   - Blast stats (count, delivery rate, last blast date)
   - Cost breakdown (Twilio actual via API + estimate, AI estimate, hosting share)
-  - Gross margin (MRR - total cost)
   - Health score (🟢 / 🟡 / 🔴)
 
+On the 1st of each month (or via --snapshot):
+  - Saves last month's final numbers to SMB_NOTION_BILLING_DB_ID
+  - One row per client per month — permanent, never overwritten
+  - Skips if snapshot for that month already exists (idempotent)
+
 Env (required):
-  NOTION_TOKEN              Internal integration secret
-  SMB_NOTION_DATABASE_ID    UUID of the Notion "SMB Clients" database
-  DATABASE_URL              Production Postgres
+  NOTION_TOKEN                  Internal integration secret
+  SMB_NOTION_DATABASE_ID        UUID of the "SMB Clients" Notion database
+  DATABASE_URL                  Production Postgres
 
 Env (optional):
-  RAILWAY_MONTHLY_COST      Railway bill in USD (default: 5.0)
-  TWILIO_ACCOUNT_SID        For pulling actual Twilio costs
-  TWILIO_AUTH_TOKEN         For pulling actual Twilio costs
-  NOTION_API_VERSION        default: 2022-06-28
+  SMB_NOTION_BILLING_DB_ID      UUID of the "SMB Billing History" database (enables monthly snapshots)
+  RAILWAY_MONTHLY_COST          Railway bill in USD (default: 5.0)
+  TWILIO_ACCOUNT_SID            For pulling actual Twilio costs
+  TWILIO_AUTH_TOKEN             For pulling actual Twilio costs
+  NOTION_API_VERSION            default: 2022-06-28
 
 Run:
-  python scripts/sync_smb_clients_to_notion.py
+  python scripts/sync_smb_clients_to_notion.py               # daily sync
   python scripts/sync_smb_clients_to_notion.py --check-schema
+  python scripts/sync_smb_clients_to_notion.py --snapshot    # force a snapshot now (for testing)
 
-Notion database setup:
-  Create a new full-page database called "SMB Clients" somewhere in your Notion.
-  Add these properties (exact names matter unless you override via env):
-    Client         → Title
-    Status         → Select  (options: Trial, Active, Churned)
-    MRR            → Number  (set format: $ USD)
-    Subscribers    → Number
-    Blasts / mo    → Number
-    Delivery rate  → Number  (set format: %)
-    Cost / mo      → Number  (set format: $ USD)
-    AI cost est    → Number  (set format: $ USD)
-    Twilio cost    → Number  (set format: $ USD)
-    Hosting share  → Number  (set format: $ USD)
-    Gross margin   → Number  (set format: $ USD)
-    Health         → Select  (options: 🟢 Active, 🟡 Stale, 🔴 Inactive)
-    Last blast     → Date
-    Trial end      → Date
-    Owner phone    → Phone
-    SMS number     → Phone
-    Signed up      → Date
-    Synced at      → Date
-  Then share the database with your Notion integration (... → Connections → add integration).
-  Copy the database UUID from the URL and set SMB_NOTION_DATABASE_ID.
+SMB Billing History database properties:
+  Month          → Title   (e.g. "West Side Comedy Club — Mar 2026")
+  Client         → Text
+  Month label    → Text    (e.g. "Mar 2026")
+  MRR            → Number  $ USD
+  Twilio cost    → Number  $ USD
+  AI cost        → Number  $ USD
+  Hosting share  → Number  $ USD
+  Total cost     → Number  $ USD
+  Gross margin   → Number  $ USD
+  Subscribers    → Number
+  New subs       → Number
+  Blasts sent    → Number
+  Delivered      → Number
+  Delivery rate  → Number  %
+  Payment status → Select  (Paid, Pending, Overdue, Waived)
+  Notes          → Text
+  Snapshot date  → Date
 """
 
 from __future__ import annotations
@@ -397,6 +399,146 @@ def build_properties(tenant, stats: Dict[str, Any], num_tenants: int) -> Dict[st
 
 
 # ---------------------------------------------------------------------------
+# Monthly snapshot helpers
+# ---------------------------------------------------------------------------
+
+def fetch_tenant_stats_for_month(conn, slug: str, month_start: datetime, month_end: datetime) -> Dict[str, Any]:
+    """Pull stats scoped to a specific calendar month for snapshot."""
+    import psycopg2.extras
+
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        # Subscribers at end of month
+        cur.execute("""
+            SELECT
+                COUNT(*) FILTER (WHERE status = 'active' AND onboarding_step > 0) AS pref_answered,
+                COUNT(*) FILTER (WHERE status = 'active')                          AS active,
+                COUNT(*)                                                            AS total
+            FROM smb_subscribers
+            WHERE tenant_slug = %s AND created_at < %s
+        """, (slug, month_end))
+        subs = dict(cur.fetchone() or {})
+
+        # New subscribers during the month
+        cur.execute("""
+            SELECT COUNT(*) AS new_this_month
+            FROM smb_subscribers
+            WHERE tenant_slug = %s AND created_at >= %s AND created_at < %s
+        """, (slug, month_start, month_end))
+        subs["new_this_month"] = (cur.fetchone() or {}).get("new_this_month") or 0
+
+        # Blast stats for the month
+        cur.execute("""
+            SELECT
+                COUNT(*)        AS blast_count,
+                SUM(attempted)  AS total_attempted,
+                SUM(succeeded)  AS total_succeeded,
+                MAX(sent_at)    AS last_blast_at
+            FROM smb_blasts
+            WHERE tenant_slug = %s AND sent_at >= %s AND sent_at < %s
+        """, (slug, month_start, month_end))
+        blasts = dict(cur.fetchone() or {})
+
+    return {"subscribers": subs, "blasts": blasts}
+
+
+def notion_query_snapshot_exists(billing_db_id: str, slug: str, month_label: str) -> bool:
+    """Return True if a snapshot row already exists for this client + month."""
+    rid = _normalize_uuid(billing_db_id)
+    body = {
+        "filter": {
+            "and": [
+                {"property": "Client", "rich_text": {"equals": slug}},
+                {"property": "Month label", "rich_text": {"equals": month_label}},
+            ]
+        },
+        "page_size": 1,
+    }
+    r = requests.post(f"{NOTION_API}/databases/{rid}/query",
+                      headers=_headers(), json=body, timeout=60)
+    if r.status_code != 200:
+        return False
+    return len(r.json().get("results") or []) > 0
+
+
+def build_snapshot_properties(tenant, stats: Dict[str, Any], month_label: str, num_tenants: int) -> Dict[str, Any]:
+    subs = stats["subscribers"]
+    blasts = stats["blasts"]
+
+    active         = int(subs.get("active") or 0)
+    new_this_month = int(subs.get("new_this_month") or 0)
+    blast_count    = int(blasts.get("blast_count") or 0)
+    attempted      = int(blasts.get("total_attempted") or 0)
+    succeeded      = int(blasts.get("total_succeeded") or 0)
+    delivery_rate  = round((succeeded / attempted) * 100, 1) if attempted else None
+
+    railway_cost   = float(os.getenv("RAILWAY_MONTHLY_COST") or "5.0")
+    hosting_share  = round(railway_cost / max(num_tenants, 1), 2)
+    twilio_actual  = fetch_twilio_cost(tenant.sms_number)
+    twilio_est     = estimate_twilio_cost(succeeded, new_this_month)
+    twilio_cost    = twilio_actual if twilio_actual is not None else twilio_est
+    ai_cost        = round(blast_count * _AI_COST_PER_BLAST + new_this_month * _AI_COST_PER_NEW_SUB, 4)
+    total_cost     = round(twilio_cost + ai_cost + hosting_share, 2)
+
+    title = f"{tenant.display_name} — {month_label}"
+
+    return {
+        "Month":          _title(title),
+        "Client":         _rich_text(tenant.slug),
+        "Month label":    _rich_text(month_label),
+        "Twilio cost":    _number(twilio_cost),
+        "AI cost":        _number(ai_cost),
+        "Hosting share":  _number(hosting_share),
+        "Total cost":     _number(total_cost),
+        "Subscribers":    _number(active),
+        "New subs":       _number(new_this_month),
+        "Blasts sent":    _number(blast_count),
+        "Delivered":      _number(succeeded),
+        "Delivery rate":  _number(delivery_rate),
+        "Snapshot date":  _date(datetime.now(timezone.utc)),
+    }
+
+
+def run_monthly_snapshots(conn, tenants: list, billing_db_id: str, force_month: Optional[datetime] = None) -> None:
+    """
+    Save last month's stats as a permanent snapshot row per tenant.
+    Skips if snapshot already exists (idempotent — safe to re-run).
+    """
+    now = datetime.now(timezone.utc)
+    # Default: snapshot last month
+    if force_month:
+        month_start = force_month
+    else:
+        month_start = (now.replace(day=1) - timedelta(days=1)).replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+    month_end = (month_start.replace(day=28) + timedelta(days=4)).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    month_label = month_start.strftime("%b %Y")  # e.g. "Mar 2026"
+
+    _log.info("Monthly snapshot: saving %s for %d tenant(s)", month_label, len(tenants))
+
+    ok = skipped = failed = 0
+    for tenant in tenants:
+        try:
+            if notion_query_snapshot_exists(billing_db_id, tenant.slug, month_label):
+                _log.info("Snapshot already exists for %s %s — skipping", tenant.slug, month_label)
+                skipped += 1
+                continue
+
+            stats = fetch_tenant_stats_for_month(conn, tenant.slug, month_start, month_end)
+            props = build_snapshot_properties(tenant, stats, month_label, len(tenants))
+            notion_create_page(billing_db_id, props)
+            _log.info("Snapshot saved: %s %s", tenant.slug, month_label)
+            ok += 1
+        except Exception:
+            _log.exception("Snapshot failed for tenant=%s month=%s", tenant.slug, month_label)
+            failed += 1
+
+    _log.info("Monthly snapshot done: saved=%d skipped=%d failed=%d", ok, skipped, failed)
+
+
+# ---------------------------------------------------------------------------
 # Schema check
 # ---------------------------------------------------------------------------
 
@@ -455,9 +597,10 @@ def run_check_schema() -> None:
 # Main sync
 # ---------------------------------------------------------------------------
 
-def main_sync() -> None:
+def main_sync(force_snapshot: bool = False) -> None:
     token = (os.getenv("NOTION_TOKEN") or "").strip()
     database_id = (os.getenv("SMB_NOTION_DATABASE_ID") or "").strip()
+    billing_db_id = (os.getenv("SMB_NOTION_BILLING_DB_ID") or "").strip()
     if not token or not database_id:
         _log.error("NOTION_TOKEN and SMB_NOTION_DATABASE_ID are required")
         sys.exit(1)
@@ -477,12 +620,12 @@ def main_sync() -> None:
     conn = _get_db_conn()
     ok = failed = 0
     try:
+        # ── Daily sync: update live stats ──
         for tenant in tenants:
             try:
                 stats = fetch_tenant_stats(conn, tenant.slug)
                 props = build_properties(tenant, stats, len(tenants))
 
-                # Upsert: find existing page by slug or create new
                 page_id = notion_query_by_slug(database_id, tenant.slug)
                 if page_id:
                     notion_update_page(page_id, props)
@@ -494,6 +637,17 @@ def main_sync() -> None:
             except Exception:
                 _log.exception("Failed to sync tenant=%s", tenant.slug)
                 failed += 1
+
+        # ── Monthly snapshot: 1st of the month or forced ──
+        now = datetime.now(timezone.utc)
+        is_first_of_month = now.day == 1
+        if billing_db_id and (is_first_of_month or force_snapshot):
+            run_monthly_snapshots(conn, tenants, billing_db_id)
+        elif billing_db_id and not is_first_of_month and not force_snapshot:
+            _log.info("Not the 1st of the month — skipping snapshot (use --snapshot to force)")
+        elif not billing_db_id:
+            _log.info("SMB_NOTION_BILLING_DB_ID not set — skipping monthly snapshots")
+
     finally:
         conn.close()
 
@@ -505,12 +659,14 @@ def main_sync() -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description="Sync SMB client stats to Notion.")
     p.add_argument("--check-schema", action="store_true",
-                   help="List database properties and show what to add.")
+                   help="List Notion DB properties and show what to add.")
+    p.add_argument("--snapshot", action="store_true",
+                   help="Force a monthly snapshot right now (useful for testing or backfill).")
     args = p.parse_args()
     if args.check_schema:
         run_check_schema()
     else:
-        main_sync()
+        main_sync(force_snapshot=args.snapshot)
 
 
 if __name__ == "__main__":
