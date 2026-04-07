@@ -1,5 +1,6 @@
 """Insights, Learning, and Impact section rendering for the admin dashboard."""
 
+import json as _json
 import os
 
 
