@@ -128,7 +128,6 @@ def _conversational_reply(message_text: str, tenant: BusinessTenant) -> Optional
     based on what the subscriber is asking.
     Falls back across Gemini → OpenAI → Anthropic automatically.
     """
-    topics = ", ".join(tenant.value_content_topics) if tenant.value_content_topics else "general topics"
     context = knowledge.build_context(tenant, message_text)
 
     prompt = (
