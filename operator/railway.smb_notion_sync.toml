@@ -1,0 +1,39 @@
+# Daily SMB client stats → Notion sync.
+# Pushes subscriber counts, blast stats, cost breakdown, and health score
+# for every SMB tenant into the "SMB Clients" Notion database.
+#
+# Setup (one-time):
+# 1) In Notion: create a full-page database called "SMB Clients".
+#    Add the properties listed in the script header (run --check-schema to verify).
+#    Share the database with your Notion integration (... → Connections).
+#    Copy the database UUID from the URL.
+#
+# 2) In Railway: + New → GitHub Repo → same repo.
+#    Service → Settings → Config-as-code → set path: operator/railway.smb_notion_sync.toml
+#
+# 3) Variables (reference from the web service — do NOT create a new DB):
+#      DATABASE_URL            → Variable Reference → web service DATABASE_URL
+#      NOTION_TOKEN            → Variable Reference → web service NOTION_TOKEN
+#      SMB_NOTION_DATABASE_ID  → paste the UUID from step 1
+#      RAILWAY_MONTHLY_COST    → 5   (update as your bill grows)
+#      TWILIO_ACCOUNT_SID      → Variable Reference → web service
+#      TWILIO_AUTH_TOKEN       → Variable Reference → web service
+#      GEMINI_API_KEY          → Variable Reference (needed to load tenant registry)
+#      SMB_WEST_SIDE_COMEDY_SMS_NUMBER  → Variable Reference
+#      SMB_WEST_SIDE_COMEDY_OWNER_PHONE → Variable Reference
+#      SMB_WEST_SIDE_COMEDY_KEYWORD     → Variable Reference
+#      (add equivalent vars for each new SMB client)
+#
+# 4) Cron: enable a schedule on THIS service only:
+#      0 8 * * *   =  every day at 8:00 AM UTC (4:00 AM Eastern)
+#
+# 5) First run: trigger a one-off deploy or run locally:
+#      python scripts/sync_smb_clients_to_notion.py --check-schema
+#    then:
+#      python scripts/sync_smb_clients_to_notion.py
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python -u scripts/sync_smb_clients_to_notion.py"
