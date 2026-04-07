@@ -1,10 +1,15 @@
 """
 SMB subscriber onboarding flow.
 
-Handles the full signup conversation for a new subscriber:
+New flow (single open-ended question):
   1. Customer texts the signup keyword (e.g. "COMEDY")
-  2. Bot asks preference questions one at a time
-  3. Answers are saved; subscriber is marked active when all answered
+  2. Bot sends welcome message + one natural question at the end
+  3. Customer replies in free text
+  4. AI classifies the answer into the right segment(s) and saves preferences
+  5. Bot sends a warm completion message
+
+If no welcome_message / signup_question is configured, falls back to the
+legacy multi-step forced-choice flow (signup_questions list).
 
 Entry point: get_onboarding_reply(phone_number, message_text, tenant)
 Returns a reply string if the message is part of the onboarding flow,
@@ -19,6 +24,9 @@ from app.smb.tenants import BusinessTenant
 from app.smb import storage as smb_storage
 
 logger = logging.getLogger(__name__)
+
+# question_key used to store the classified answer from the open-ended question
+_OPEN_QUESTION_KEY = "interest"
 
 
 def is_signup_keyword(text: str, tenant: BusinessTenant) -> bool:
@@ -35,11 +43,10 @@ def get_onboarding_reply(
     Main entry point for the onboarding flow.
 
     Returns a reply string when:
-    - The message is a signup keyword (starts or restarts onboarding)
-    - The subscriber is mid-onboarding and this is their next answer
+    - The message is the signup keyword (starts/restarts onboarding)
+    - The subscriber is mid-onboarding and this is their answer
 
-    Returns None when this message is not part of onboarding (hand off
-    to the main SMB brain for regular conversation).
+    Returns None when this message is not part of onboarding.
     """
     conn = get_db_connection()
     if not conn:
@@ -62,7 +69,7 @@ def get_onboarding_reply(
                         "SMB new subscriber: tenant=%s phone=...%s",
                         tenant.slug, phone_number[-4:] if phone_number else "?",
                     )
-                return _ask_question(tenant, 0)
+                return _welcome_and_question(tenant)
 
             if subscriber and subscriber["status"] == "onboarding":
                 return _handle_answer(conn, subscriber, message_text, tenant)
@@ -79,29 +86,68 @@ def get_onboarding_reply(
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Internal helpers — new open-ended flow
 # ---------------------------------------------------------------------------
 
-def _ask_question(tenant: BusinessTenant, step: int) -> str:
-    """Return the question for the given step, or the completion message if done."""
-    questions = tenant.signup_questions
-    if step < len(questions):
-        return questions[step]
-    return _completion_message(tenant)
+def _welcome_and_question(tenant: BusinessTenant) -> str:
+    """
+    Return the welcome message with the open-ended question appended.
+    Falls back to legacy first question if no new config is set.
+    """
+    if tenant.signup_question:
+        welcome = tenant.welcome_message or f"Welcome to {tenant.display_name}!"
+        return f"{welcome}\n\n{tenant.signup_question}"
 
+    # Legacy fallback: ask the first forced-choice question directly
+    if tenant.signup_questions:
+        return tenant.signup_questions[0]
 
-def _completion_message(tenant: BusinessTenant) -> str:
-    return (
-        f"You're all set! Welcome to {tenant.display_name}. "
-        "You'll hear from us with tips and exclusive offers. "
-        "Reply STOP any time to unsubscribe."
-    )
+    return f"Welcome to {tenant.display_name}! Reply STOP any time to unsubscribe."
 
 
 def _handle_answer(
     conn, subscriber: dict, answer: str, tenant: BusinessTenant
 ) -> str:
-    """Save the subscriber's answer, advance their step, return the next question."""
+    """
+    Process the subscriber's answer.
+
+    New flow: AI classifies the free-text answer into segment(s), saves all
+    matching segment preferences, marks subscriber active.
+
+    Legacy flow: saves raw answer for the current step, advances to next question.
+    """
+    if tenant.signup_question:
+        return _handle_open_answer(conn, subscriber, answer, tenant)
+    return _handle_legacy_answer(conn, subscriber, answer, tenant)
+
+
+def _handle_open_answer(
+    conn, subscriber: dict, answer: str, tenant: BusinessTenant
+) -> str:
+    """Classify the free-text answer and mark the subscriber active."""
+    classified = _classify_answer(answer, tenant)
+
+    # Save all matched segment preferences
+    for q_key, seg_answer in classified.items():
+        smb_storage.save_preference(conn, subscriber["id"], q_key, seg_answer)
+
+    # Also save the raw interest text for future reference
+    smb_storage.save_preference(conn, subscriber["id"], _OPEN_QUESTION_KEY, answer.strip()[:200])
+
+    smb_storage.advance_onboarding(conn, subscriber["id"], 1, "active")
+    logger.info(
+        "SMB onboarding complete (open): tenant=%s phone=...%s classified=%s",
+        tenant.slug,
+        subscriber.get("phone_number", "?")[-4:],
+        classified,
+    )
+    return _completion_message(tenant, classified)
+
+
+def _handle_legacy_answer(
+    conn, subscriber: dict, answer: str, tenant: BusinessTenant
+) -> str:
+    """Legacy: save raw answer for current step, ask next question."""
     step = subscriber["onboarding_step"]
     smb_storage.save_preference(conn, subscriber["id"], str(step), answer.strip())
 
@@ -109,10 +155,93 @@ def _handle_answer(
     if next_step >= len(tenant.signup_questions):
         smb_storage.advance_onboarding(conn, subscriber["id"], next_step, "active")
         logger.info(
-            "SMB onboarding complete: tenant=%s phone=...%s",
-            tenant.slug, subscriber["phone_number"][-4:] if subscriber.get("phone_number") else "?",
+            "SMB onboarding complete (legacy): tenant=%s phone=...%s",
+            tenant.slug,
+            subscriber.get("phone_number", "?")[-4:],
         )
-        return _completion_message(tenant)
+        return _completion_message(tenant, {})
 
     smb_storage.advance_onboarding(conn, subscriber["id"], next_step, "onboarding")
-    return _ask_question(tenant, next_step)
+    return tenant.signup_questions[next_step]
+
+
+def _classify_answer(answer: str, tenant: BusinessTenant) -> dict:
+    """
+    Use Gemini to classify the subscriber's free-text answer into segment(s).
+
+    Returns a dict of {question_key: answer} to save as preferences.
+    Falls back to saving the raw answer under question_key "0" if AI fails.
+    """
+    if not tenant.segments:
+        return {"0": answer.strip()}
+
+    # Build segment descriptions for the prompt
+    seg_lines = "\n".join(
+        f"- {s['name']}: {s.get('description', s['name'])}"
+        for s in tenant.segments
+        if s["question_key"] == "0"  # classify against the primary interest segments
+    )
+    seg_names = [s["name"] for s in tenant.segments if s["question_key"] == "0"]
+
+    if not seg_names:
+        return {"0": answer.strip()}
+
+    try:
+        from google import genai
+        from app.config import GEMINI_API_KEY, GENERATION_MODEL
+
+        if not GEMINI_API_KEY:
+            raise ValueError("GEMINI_API_KEY not set")
+
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        prompt = (
+            f"A new subscriber to {tenant.display_name} (a {tenant.business_type}) "
+            f"was asked: \"{tenant.signup_question}\"\n"
+            f"They replied: \"{answer}\"\n\n"
+            f"Classify them into ONE of these segments:\n{seg_lines}\n\n"
+            f"If they seem to like more than one, reply with the most specific one that fits. "
+            f"If genuinely undecided or unclear, use BOTH if available, otherwise pick the closest.\n"
+            f"Reply with ONLY the segment name, nothing else. Options: {', '.join(seg_names)}"
+        )
+
+        response = client.models.generate_content(model=GENERATION_MODEL, contents=prompt)
+        classified = (response.text or "").strip().upper()
+
+        # Validate it's a known segment name
+        if classified in {n.upper() for n in seg_names}:
+            logger.info(
+                "SMB onboarding: classified answer '%s' → %s (tenant=%s)",
+                answer[:40], classified, tenant.slug,
+            )
+            return {"0": classified}
+
+        logger.warning(
+            "SMB onboarding: AI returned unknown segment '%s', saving raw answer",
+            classified,
+        )
+
+    except Exception:
+        logger.exception("SMB onboarding: AI classification failed, saving raw answer")
+
+    # Fallback: save raw answer
+    return {"0": answer.strip()}
+
+
+def _completion_message(tenant: BusinessTenant, classified: dict) -> str:
+    """Warm, personalised completion message based on what they said."""
+    seg_answer = classified.get("0", "").upper()
+
+    if seg_answer == "STANDUP":
+        flavour = "We'll make sure you never miss a great standup show."
+    elif seg_answer == "IMPROV":
+        flavour = "We'll keep you posted on all our improv nights."
+    elif seg_answer in ("BOTH", ""):
+        flavour = "We'll keep you in the loop on everything happening at the club."
+    else:
+        flavour = "We'll keep you in the loop on what matters most to you."
+
+    return (
+        f"You're in! {flavour} "
+        f"Expect exclusive updates and deals from {tenant.display_name}. "
+        "Reply STOP any time to unsubscribe."
+    )

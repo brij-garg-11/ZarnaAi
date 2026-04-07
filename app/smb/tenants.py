@@ -32,10 +32,11 @@ class BusinessTenant:
     owner_phone: Optional[str]      # Owner's cell — messages from here are blast commands
     keyword: Optional[str]          # Signup keyword (e.g. "LAUGH")
     tone: str = ""
-    value_content_topics: list = field(default_factory=list)
-    signup_questions: list = field(default_factory=list)
+    welcome_message: str = ""
+    signup_question: str = ""          # single open-ended onboarding question
+    signup_questions: list = field(default_factory=list)  # legacy multi-step (fallback)
     blast_triggers: list = field(default_factory=list)
-    segments: list = field(default_factory=list)  # audience segments for targeted blasts
+    segments: list = field(default_factory=list)
     raw: dict = field(default_factory=dict)
 
 
@@ -76,7 +77,8 @@ def _load_tenant(path: Path) -> Optional[BusinessTenant]:
         owner_phone=_resolve(f"{prefix}_OWNER_PHONE", "owner_phone"),
         keyword=_resolve(f"{prefix}_KEYWORD", "sms_keyword"),
         tone=cfg.get("tone", ""),
-        value_content_topics=cfg.get("value_content_topics", []),
+        welcome_message=cfg.get("welcome_message", ""),
+        signup_question=cfg.get("signup_question", ""),
         signup_questions=cfg.get("signup_questions", []),
         blast_triggers=cfg.get("blast_triggers", []),
         segments=cfg.get("segments", []),

@@ -8,6 +8,8 @@
   "owner_phone": "TBD",
   "sms_keyword": "TBD",
   "tone": "fun, casual, hype — like a friend telling you about a great show in NYC",
+  "welcome_message": "Welcome to West Side Comedy Club! You're now on the inside list for exclusive show updates, last-minute deals, and behind-the-scenes moments from NYC's funniest spot.",
+  "signup_question": "Quick question — what are you most excited to see at WSCC?",
   "value_content_topics": [
     "behind the scenes at the club",
     "featured comic spotlight",
