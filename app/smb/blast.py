@@ -22,7 +22,6 @@ import time
 from typing import Optional
 
 from app.admin_auth import get_db_connection
-from app.messaging.broadcast import run_loop_broadcast, resolve_broadcast_provider
 from app.smb import ai as smb_ai
 from app.smb.tenants import BusinessTenant
 from app.smb import storage as smb_storage
@@ -305,39 +304,51 @@ def _run_blast_async(
         )
         return
 
-    body = _format_blast(message_text.strip(), tenant)
-    provider = resolve_broadcast_provider()
+    body = _ai_enhance_blast(message_text.strip(), tenant)
     phones = [s["phone_number"] for s in subscribers]
     seg_name = segment["name"] if segment else None
 
     logger.info(
-        "SMB blast starting: tenant=%s segment=%s recipients=%d provider=%s",
-        tenant.slug, seg_name or "all", len(phones), provider,
+        "SMB blast starting: tenant=%s segment=%s recipients=%d",
+        tenant.slug, seg_name or "all", len(phones),
     )
 
-    result = run_loop_broadcast(
-        phones=phones,
-        body=body,
-        provider=provider,
-        deliver_whatsapp=False,
-        slicktext_send=_slicktext_send_one,
-    )
+    attempted = succeeded = failed = 0
+    for phone in phones:
+        attempted += 1
+        if _twilio_send_smb(phone, body, tenant.sms_number):
+            succeeded += 1
+        else:
+            failed += 1
+        if len(phones) > 1:
+            time.sleep(0.35)
 
     logger.info(
         "SMB blast complete: tenant=%s segment=%s attempted=%d succeeded=%d failed=%d",
-        tenant.slug, seg_name or "all",
-        result.attempted, result.succeeded, result.failed,
+        tenant.slug, seg_name or "all", attempted, succeeded, failed,
     )
 
-    _record_blast(tenant, message_text, body, result.attempted, result.succeeded, seg_name)
+    _record_blast(tenant, message_text, body, attempted, succeeded, seg_name)
 
 
-def _slicktext_send_one(to: str, body: str) -> bool:
+def _twilio_send_smb(to: str, body: str, from_number: str) -> bool:
+    """Send a single SMS via Twilio from the tenant's dedicated number."""
     try:
-        from app.messaging.slicktext_adapter import create_slicktext_adapter
-        return create_slicktext_adapter().send_reply(to, body)
-    except Exception:
-        logger.exception("SMB blast: SlickText send failed to %s", to[-4:] if to else "?")
+        from twilio.rest import Client
+        from app.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
+
+        if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+            logger.error("SMB blast: Twilio credentials not configured")
+            return False
+        if not from_number:
+            logger.error("SMB blast: tenant has no sms_number configured")
+            return False
+
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        client.messages.create(to=to, from_=from_number, body=body)
+        return True
+    except Exception as exc:
+        logger.warning("SMB blast: Twilio send to ...%s failed: %s", to[-4:] if to else "?", exc)
         return False
 
 
@@ -346,12 +357,27 @@ def _slicktext_send_one(to: str, body: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _format_blast(owner_message: str, tenant: BusinessTenant) -> str:
+def _ai_enhance_blast(owner_message: str, tenant: BusinessTenant) -> str:
     """
-    Format the (already prefix-stripped) owner message as the outbound body.
-    Prepends the business name if it's not already there so subscribers
-    know who's texting them.
+    Rewrite the owner's raw message into an engaging subscriber-facing SMS
+    in the tenant's tone. Falls back to a clean plain version if AI fails.
     """
+    prompt = (
+        f"You are writing an SMS blast for {tenant.display_name} subscribers. "
+        f"Tone: {tenant.tone}.\n\n"
+        f"The owner wants to send this message:\n\"{owner_message}\"\n\n"
+        f"Rewrite it as an engaging, natural SMS that subscribers will want to read. "
+        f"Keep all the key facts (time, discount, details) intact. "
+        f"Keep it short — 2 sentences max. Plain text only, no emojis unless the original has them. "
+        f"Do NOT start with the business name — the sender ID handles that."
+    )
+
+    enhanced = smb_ai.generate(prompt)
+    if enhanced:
+        return enhanced
+
+    # Plain fallback if all AI providers are down
+    logger.warning("SMB blast: AI enhancement failed for tenant=%s, using raw message", tenant.slug)
     msg = owner_message.strip()
     if tenant.display_name.lower() not in msg.lower():
         msg = f"{tenant.display_name}: {msg}"
