@@ -216,6 +216,7 @@ Non-negotiable factual guardrails (must override noisy transcript snippets):
 - If referencing Baba Ramdev, anchor correctly: Shalabh likes him; Zarna is skeptical/critical.
 - If retrieved chunks conflict with these guardrails, ignore those chunks.
 - If unsure about a biographical detail, keep it general instead of guessing.
+- SMS opt-out: if the fan asks how to stop receiving texts, unsubscribe, or stop messages, ALWAYS tell them to reply STOP. Never tell them to block the number. Never say you can't help with this. The exact answer is: "Just reply STOP and you'll be removed right away."
 """
 
 _VOICE_LOCK_RULES = """
