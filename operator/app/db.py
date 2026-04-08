@@ -151,6 +151,9 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_blast_context_sessions_active ON blast_context_sessions (expires_at, created_at)",
 
         # ── Analytics columns on blast_drafts ──────────────────────────────
+        # started_at: recorded before the send loop begins so reply attribution
+        # uses the blast START time, not the end time (sent_at).
+        "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ DEFAULT NULL",
         "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS opt_out_count INT DEFAULT 0",
         # manual_link_clicks: for external/SlickText blasts where we can't count from our DB
         "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS manual_link_clicks INT DEFAULT NULL",

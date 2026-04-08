@@ -866,17 +866,17 @@ def _fetch_dashboard(
                           bd.manual_link_clicks,
                           bd.blast_category,
                           -- replies within 24h, only from contacts who existed at blast time.
-                          -- Only counts a fan's reply for the blast they were actually responding to:
-                          -- if a newer blast went out before the fan replied, that reply is attributed
-                          -- to the newer blast instead (prevents cross-blast double counting).
+                          -- Uses started_at (when send loop began) not sent_at (when it finished)
+                          -- so replies that arrive while the blast is still sending are counted.
+                          -- Falls back to sent_at for old blasts that pre-date the started_at column.
                           (SELECT COUNT(DISTINCT m.phone_number)
                            FROM messages m
                            JOIN contacts c ON c.phone_number = m.phone_number
                            WHERE m.role = 'user'
                              AND m.source IS DISTINCT FROM 'blast'
-                             AND m.created_at >= bd.sent_at
-                             AND m.created_at <  bd.sent_at + INTERVAL '24 hours'
-                             AND c.created_at  <= bd.sent_at
+                             AND m.created_at >= COALESCE(bd.started_at, bd.sent_at)
+                             AND m.created_at <  COALESCE(bd.started_at, bd.sent_at) + INTERVAL '24 hours'
+                             AND c.created_at  <= COALESCE(bd.started_at, bd.sent_at)
                              AND NOT EXISTS (
                                  SELECT 1 FROM blast_drafts bd2
                                  WHERE bd2.status  = 'sent'

@@ -18,6 +18,7 @@ def execute_blast(draft_id: int):
     from .queries import (
         get_blast_draft,
         get_audience_phones,
+        mark_blast_started,
         mark_blast_sent,
         mark_blast_cancelled,
     )
@@ -74,6 +75,8 @@ def execute_blast(draft_id: int):
     if tracked_short_url:
         send_body = f"{body}\n{tracked_short_url}"
         logger.info("  appended tracked URL to body — final length=%d", len(send_body))
+
+    mark_blast_started(draft_id)
 
     sent = 0
     failed = 0
