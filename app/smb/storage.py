@@ -218,3 +218,41 @@ def get_preferences(conn, subscriber_id: int) -> dict:
             (subscriber_id,),
         )
         return {row[0]: row[1] for row in cur.fetchall()}
+
+
+# ---------------------------------------------------------------------------
+# Conversation history
+# ---------------------------------------------------------------------------
+
+def save_message(conn, tenant_slug: str, phone_number: str, role: str, body: str) -> None:
+    """Persist one turn of a subscriber conversation (role = 'user' or 'assistant')."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO smb_messages (tenant_slug, phone_number, role, body)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (tenant_slug, phone_number, role, body),
+        )
+
+
+def get_history(conn, tenant_slug: str, phone_number: str, limit: int = 8) -> list:
+    """
+    Return the last `limit` messages for this subscriber, oldest-first,
+    as a list of {"role": ..., "body": ...} dicts.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT role, body FROM (
+                SELECT role, body, created_at
+                FROM smb_messages
+                WHERE tenant_slug = %s AND phone_number = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            ) sub
+            ORDER BY created_at ASC
+            """,
+            (tenant_slug, phone_number, limit),
+        )
+        return [{"role": row[0], "body": row[1]} for row in cur.fetchall()]

@@ -270,6 +270,18 @@ _SMB_MIGRATIONS = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_smb_link_clicks_tenant ON smb_link_clicks(tenant_slug, link_key)",
+    # Conversation history for SMB subscribers
+    """
+    CREATE TABLE IF NOT EXISTS smb_messages (
+        id           BIGSERIAL   PRIMARY KEY,
+        tenant_slug  TEXT        NOT NULL,
+        phone_number TEXT        NOT NULL,
+        role         TEXT        NOT NULL,
+        body         TEXT        NOT NULL,
+        created_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_smb_messages_thread ON smb_messages(tenant_slug, phone_number, created_at DESC)",
 )
 
 

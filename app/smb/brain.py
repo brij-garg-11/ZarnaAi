@@ -89,7 +89,16 @@ class SMBBrain:
             "SMB brain: active subscriber → conversational reply (tenant=%s phone=...%s)",
             tenant.slug, from_number[-4:] if from_number else "?",
         )
-        return _conversational_reply(message_text, tenant)
+
+        # Persist inbound message and fetch recent history before generating reply
+        history = _save_and_get_history(from_number, tenant, message_text, role="user")
+        reply = _conversational_reply(message_text, tenant, history=history)
+
+        # Persist the bot's reply
+        if reply:
+            _persist_message(from_number, tenant, reply, role="assistant")
+
+        return reply
 
 
 # ---------------------------------------------------------------------------
@@ -121,11 +130,14 @@ def _signup_nudge(tenant: BusinessTenant) -> str:
     return f"Hey! Ask {tenant.display_name} how to subscribe for exclusive deals and updates."
 
 
-def _conversational_reply(message_text: str, tenant: BusinessTenant) -> Optional[str]:
+def _conversational_reply(
+    message_text: str,
+    tenant: BusinessTenant,
+    history: Optional[list] = None,
+) -> Optional[str]:
     """
     Short friendly AI reply in the business's voice.
-    Injects relevant club knowledge (location, tonight's shows, tickets, etc.)
-    based on what the subscriber is asking.
+    Injects relevant club knowledge and recent conversation history.
     Falls back across Gemini → OpenAI → Anthropic automatically.
     """
     context = knowledge.build_context(tenant, message_text)
@@ -142,12 +154,56 @@ def _conversational_reply(message_text: str, tenant: BusinessTenant) -> Optional
             f"Only include what's relevant to the question — do not dump all the info.\n"
             f"{context}\n\n"
         )
+    # Add recent conversation so the AI can follow the thread
+    if history:
+        convo_lines = "\n".join(
+            f"{'Subscriber' if m['role'] == 'user' else 'You'}: {m['body']}"
+            for m in history[:-1]  # exclude the message we're about to answer
+        )
+        if convo_lines:
+            prompt += f"Recent conversation:\n{convo_lines}\n\n"
+
     prompt += f"Subscriber: {message_text}"
 
     reply = smb_ai.generate(prompt)
     if not reply:
         logger.warning("SMB brain: all AI providers failed for conversational reply")
     return reply or None
+
+
+def _save_and_get_history(
+    phone_number: str,
+    tenant: BusinessTenant,
+    message_text: str,
+    role: str,
+) -> list:
+    """Save a message and return the updated conversation history (oldest-first)."""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        with conn:
+            smb_storage.save_message(conn, tenant.slug, phone_number, role, message_text)
+            return smb_storage.get_history(conn, tenant.slug, phone_number, limit=8)
+    except Exception:
+        logger.exception("SMB brain: failed to save/fetch history")
+        return []
+    finally:
+        conn.close()
+
+
+def _persist_message(phone_number: str, tenant: BusinessTenant, text: str, role: str) -> None:
+    """Fire-and-forget: persist an assistant message to conversation history."""
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        with conn:
+            smb_storage.save_message(conn, tenant.slug, phone_number, role, text)
+    except Exception:
+        logger.exception("SMB brain: failed to persist assistant message")
+    finally:
+        conn.close()
 
 
 def create_smb_brain() -> SMBBrain:
