@@ -23,6 +23,58 @@ def _get_db():
     return get_db_connection()
 
 
+def _fetch_recent_conversations(limit_threads: int = 20) -> list:
+    """
+    Return the most recent conversations across all SMB tenants.
+    Each entry is a dict with tenant_slug, phone_number, and a list of messages
+    (oldest-first), capped to the last 8 turns per thread.
+    """
+    conn = _get_db()
+    if not conn:
+        return []
+    try:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Get the most recently active threads
+            cur.execute("""
+                SELECT DISTINCT ON (tenant_slug, phone_number)
+                    tenant_slug, phone_number, MAX(created_at) AS last_active
+                FROM smb_messages
+                GROUP BY tenant_slug, phone_number
+                ORDER BY tenant_slug, phone_number, last_active DESC
+                LIMIT %s
+            """, (limit_threads,))
+            threads = [dict(r) for r in cur.fetchall()]
+
+            # Sort all threads by most recent activity
+            threads.sort(key=lambda t: t["last_active"] or "", reverse=True)
+
+            # Fetch the last 8 messages for each thread
+            result = []
+            for thread in threads:
+                cur.execute("""
+                    SELECT role, body, created_at FROM (
+                        SELECT role, body, created_at
+                        FROM smb_messages
+                        WHERE tenant_slug = %s AND phone_number = %s
+                        ORDER BY created_at DESC LIMIT 8
+                    ) sub ORDER BY created_at ASC
+                """, (thread["tenant_slug"], thread["phone_number"]))
+                messages = [dict(m) for m in cur.fetchall()]
+                result.append({
+                    "tenant_slug": thread["tenant_slug"],
+                    "phone_number": thread["phone_number"],
+                    "last_active": thread["last_active"],
+                    "messages": messages,
+                })
+        return result
+    except Exception:
+        logger.exception("SMB admin: failed to fetch conversations")
+        return []
+    finally:
+        conn.close()
+
+
 def _fetch_smb_stats() -> dict:
     """Pull all SMB metrics needed to render the tab."""
     conn = _get_db()
@@ -123,6 +175,14 @@ def _fmt_dt(dt) -> str:
     if hasattr(dt, "strftime"):
         return dt.strftime("%b %d, %Y")
     return str(dt)[:10]
+
+
+def _fmt_time(dt) -> str:
+    if not dt:
+        return ""
+    if hasattr(dt, "strftime"):
+        return dt.astimezone(timezone.utc).strftime("%b %d %H:%M")
+    return str(dt)[:16]
 
 
 def render_smb_tab() -> str:
@@ -287,12 +347,60 @@ def render_smb_tab() -> str:
           </table>
         </div>"""
 
+    # ── Conversation log ──
+    conversations = _fetch_recent_conversations()
+    if not conversations:
+        convo_html = """
+        <div style="color:#6b7280;font-size:13px;padding:24px;text-align:center">
+          No conversations yet — subscribers will appear here once they start texting.
+        </div>"""
+    else:
+        threads = []
+        for thread in conversations:
+            phone = thread["phone_number"]
+            masked = f"({phone[2:5]}) ***-{phone[-4:]}" if len(phone) >= 10 else phone
+            msgs_html = ""
+            for m in thread["messages"]:
+                is_user = m["role"] == "user"
+                align = "flex-start" if is_user else "flex-end"
+                bubble_bg = "#1e293b" if is_user else "#312e81"
+                label = masked if is_user else "Bot"
+                msgs_html += f"""
+                <div style="display:flex;flex-direction:column;align-items:{align};margin-bottom:6px">
+                  <div style="font-size:10px;color:#4b5563;margin-bottom:2px">{label}</div>
+                  <div style="background:{bubble_bg};border-radius:10px;padding:8px 12px;
+                              max-width:80%;font-size:12px;color:#d1d5db;line-height:1.4">
+                    {_esc(m["body"])}
+                  </div>
+                  <div style="font-size:10px;color:#374151;margin-top:2px">{_fmt_time(m.get("created_at"))}</div>
+                </div>"""
+
+            threads.append(f"""
+            <div style="border:1px solid #1f2937;border-radius:10px;padding:14px;margin-bottom:12px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                <div>
+                  <span style="font-size:13px;font-weight:600;color:#f3f4f6">{masked}</span>
+                  <code style="background:#1f2937;padding:1px 6px;border-radius:3px;font-size:11px;
+                               color:#94a3b8;margin-left:8px">{_esc(thread["tenant_slug"])}</code>
+                </div>
+                <span style="font-size:11px;color:#4b5563">{_fmt_time(thread["last_active"])}</span>
+              </div>
+              <div style="display:flex;flex-direction:column">{msgs_html}</div>
+            </div>""")
+
+        convo_html = "".join(threads)
+
     return f"""
     {stats_html}
 
     <div class="card" style="margin-top:20px">
       <div class="card-title">SMB Clients</div>
       {client_html}
+    </div>
+
+    <div class="card">
+      <div class="card-title">Conversations (last 20 threads)</div>
+      {convo_html}
     </div>
 
     <div class="card">
