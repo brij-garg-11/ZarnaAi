@@ -441,7 +441,15 @@ def save_draft():
             flash("Enter a phone number to send the test to.", "error")
             return redirect(url_for("blast.blast_compose", draft_id=new_id))
         from ..blast_sender import _send_one, _create_blast_context_session
-        ok = _send_one(test_phone, f"[TEST] {body}", channel, media_url=media_url)
+        test_body = f"[TEST] {body}"
+        if tracked_link_slug:
+            main_base = os.getenv("MAIN_APP_BASE_URL", "").rstrip("/")
+            if not main_base:
+                railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
+                main_base = f"https://{railway_domain}" if railway_domain else ""
+            if main_base:
+                test_body = f"{test_body}\n{main_base}/t/{tracked_link_slug}"
+        ok = _send_one(test_phone, test_body, channel, media_url=media_url)
         logger.info("  TEST send result: ok=%s", ok)
         if ok:
             masked = test_phone[-4:].rjust(len(test_phone), "*")
@@ -615,10 +623,19 @@ def send_test(draft_id: int):
 
     from ..blast_sender import _send_one, _create_blast_context_session
     from ..queries import get_blast_draft
-    ok = _send_one(test_phone, f"[TEST] {body}", channel)
+    draft = get_blast_draft(draft_id)
+    test_body = f"[TEST] {body}"
+    if draft and draft.get("tracked_link_slug"):
+        main_base = os.getenv("MAIN_APP_BASE_URL", "").rstrip("/")
+        if not main_base:
+            railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
+            main_base = f"https://{railway_domain}" if railway_domain else ""
+        if main_base:
+            test_body = f"{test_body}\n{main_base}/t/{draft['tracked_link_slug']}"
+    media_url = (draft.get("media_url") or "").strip() if draft else ""
+    ok = _send_one(test_phone, test_body, channel, media_url=media_url)
     if ok:
         flash(f"Test message sent to {test_phone[-4:].rjust(len(test_phone), '*')}.", "success")
-        draft = get_blast_draft(draft_id)
         if draft and body:
             combined = f"The blast message that was sent: \"{body}\""
             extra = (draft.get("blast_context_note") or "").strip()
