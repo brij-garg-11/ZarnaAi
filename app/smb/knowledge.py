@@ -20,6 +20,7 @@ import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -67,7 +68,7 @@ def _tracked_url(base_url: str, slug: str, link_key: str) -> str:
 # Calendar scraper
 # ---------------------------------------------------------------------------
 
-def _fetch_shows(calendar_url: str, slug: str) -> dict:
+def _fetch_shows(calendar_url: str, slug: str, tz: str = "America/New_York") -> dict:
     """
     Fetch the club's calendar page and return shows for today + next 7 days.
 
@@ -92,7 +93,7 @@ def _fetch_shows(calendar_url: str, slug: str) -> dict:
         _set_cached(slug, {})
         return {}
 
-    result = _parse_shows(html)
+    result = _parse_shows(html, tz=tz)
     _set_cached(slug, result)
     logger.info(
         "knowledge: scraped %d show-dates for %s",
@@ -101,15 +102,20 @@ def _fetch_shows(calendar_url: str, slug: str) -> dict:
     return result
 
 
-def _parse_shows(html: str) -> dict:
+def _parse_shows(html: str, tz: str = "America/New_York") -> dict:
     """
     Parse shows from WSCC's Next.js page for the next 8 days.
 
     The site double-escapes JSON inside JS push() calls so field names appear as
     \\"field\\" in the raw HTML string.  We extract datetime, title, ticket_link,
     and is_sold_out from every event object in the page.
+    Uses the venue's local timezone so "today" and "tomorrow" are correct for the subscriber.
     """
-    today = datetime.now(timezone.utc).date()
+    try:
+        local_tz = ZoneInfo(tz)
+    except Exception:
+        local_tz = ZoneInfo("America/New_York")
+    today = datetime.now(local_tz).date()
     window = {str(today + timedelta(days=i)) for i in range(8)}  # today + 7 days
 
     # datetime always appears before title; ticket_link and is_sold_out may appear
@@ -170,9 +176,14 @@ def _format_show(show: dict, slug: str) -> str:
     return label
 
 
-def _format_day_label(date_str: str) -> str:
-    """Return a friendly label like 'Tonight', 'Tomorrow', 'Saturday Apr 11'."""
-    today = datetime.now(timezone.utc).date()
+def _format_day_label(date_str: str, tz: str = "America/New_York") -> str:
+    """Return a friendly label like 'Tonight', 'Tomorrow', 'Saturday Apr 11'.
+    Uses the venue's local timezone so labels match the subscriber's experience."""
+    try:
+        local_tz = ZoneInfo(tz)
+    except Exception:
+        local_tz = ZoneInfo("America/New_York")
+    today = datetime.now(local_tz).date()
     try:
         d = date.fromisoformat(date_str)
     except ValueError:
@@ -202,14 +213,15 @@ def build_context(tenant, message: str) -> str:  # noqa: ARG001  message unused 
     cal_link = _tracked_url(kb.get("calendar_url", ""), tenant.slug, "calendar")
     map_link = _tracked_url(kb.get("maps_link", ""), tenant.slug, "map")
 
-    # Fetch upcoming shows live
+    # Fetch upcoming shows live — use venue's timezone for correct day labels
     calendar_url = kb.get("calendar_url", "")
-    shows_by_date = _fetch_shows(calendar_url, tenant.slug) if calendar_url else {}
+    venue_tz = getattr(tenant, "timezone", "America/New_York")
+    shows_by_date = _fetch_shows(calendar_url, tenant.slug, tz=venue_tz) if calendar_url else {}
 
     if shows_by_date:
         schedule_lines = []
         for date_str in sorted(shows_by_date.keys()):
-            label = _format_day_label(date_str)
+            label = _format_day_label(date_str, tz=venue_tz)
             show_labels = [_format_show(s, tenant.slug) for s in shows_by_date[date_str]]
             schedule_lines.append(f"{label}: {', '.join(show_labels)}")
         schedule_block = "\n".join(schedule_lines)

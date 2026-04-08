@@ -38,6 +38,7 @@ class BusinessTenant:
     blast_triggers: list = field(default_factory=list)
     segments: list = field(default_factory=list)
     logo_url: str = ""
+    timezone: str = "America/New_York"   # IANA tz used for date labels (Tonight, Tomorrow, etc.)
     raw: dict = field(default_factory=dict)
 
 
@@ -84,6 +85,7 @@ def _load_tenant(path: Path) -> Optional[BusinessTenant]:
         blast_triggers=cfg.get("blast_triggers", []),
         segments=cfg.get("segments", []),
         logo_url=cfg.get("logo_url", ""),
+        timezone=cfg.get("timezone", "America/New_York"),
         raw=cfg,
     )
 
