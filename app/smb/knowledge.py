@@ -6,8 +6,9 @@ base as a context string injected into the conversational AI prompt.  The AI
 decides what facts are relevant and composes a natural reply — no keyword
 routing on our side.
 
-Calendar data is fetched live from the tenant's calendar_url and cached
-in-process for 2 hours to avoid hammering the website on every message.
+Calendar data is fetched live from the tenant's calendar_url (next 8 days)
+and cached in-process for 2 hours to avoid hammering the website.
+Each show includes its title, time, and a direct tracked ticket link.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import os
 import re
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import requests
@@ -31,10 +32,10 @@ logger = logging.getLogger(__name__)
 _CACHE_TTL_SECONDS = 7200  # 2 hours
 
 _cache_lock = threading.Lock()
-_cache: dict[str, tuple[float, str]] = {}   # slug → (fetched_at, parsed_text)
+_cache: dict[str, tuple[float, object]] = {}   # slug → (fetched_at, data)
 
 
-def _get_cached(slug: str) -> Optional[str]:
+def _get_cached(slug: str) -> Optional[object]:
     with _cache_lock:
         entry = _cache.get(slug)
         if entry and (time.time() - entry[0]) < _CACHE_TTL_SECONDS:
@@ -42,95 +43,14 @@ def _get_cached(slug: str) -> Optional[str]:
     return None
 
 
-def _set_cached(slug: str, text: str) -> None:
+def _set_cached(slug: str, data: object) -> None:
     with _cache_lock:
-        _cache[slug] = (time.time(), text)
+        _cache[slug] = (time.time(), data)
 
 
 # ---------------------------------------------------------------------------
-# Calendar scraper
+# Tracked URL helper
 # ---------------------------------------------------------------------------
-
-def _fetch_todays_shows(calendar_url: str, slug: str) -> str:
-    """
-    Fetch the club's calendar page and extract today's shows.
-    Returns a short plain-text string like:
-      "Not Ripe Bananas 8:00pm, Friday Favs 10:00pm"
-    or "" if nothing found / fetch fails.
-    """
-    cached = _get_cached(slug)
-    if cached is not None:
-        return cached
-
-    try:
-        resp = requests.get(
-            calendar_url,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; ZarnaBot/1.0)"},
-            timeout=8,
-        )
-        resp.raise_for_status()
-        text = resp.text
-    except Exception as exc:
-        logger.warning("knowledge: failed to fetch calendar for %s: %s", slug, exc)
-        _set_cached(slug, "")
-        return ""
-
-    result = _parse_todays_shows(text, "")
-    _set_cached(slug, result)
-    return result
-
-
-def _parse_todays_shows(html: str, _unused: str) -> str:
-    """
-    Extract tonight's shows from WSCC's Next.js page.
-
-    The site double-escapes JSON inside JS push() calls, so event objects look like:
-        \\"datetime\\":\\"2026-04-07T20:00:00\\" ... \\"title\\":\\"Not Ripe Bananas\\"
-
-    We extract every (datetime, title) pair for today's date, parse the time,
-    and return a human-readable string like "Not Ripe Bananas 8pm, Friday Favs 10pm".
-    """
-    today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    # The page embeds double-escaped JSON inside JS push() calls.
-    # In the raw HTML string, field names appear as \"field\" (backslash + quote).
-    # datetime always appears before title in each event object.
-    raw_matches = re.findall(
-        r'\\\"datetime\\\":\\\"(' + re.escape(today_iso) + r'[T0-9:+]+)\\\"[^}]*\\\"title\\\":\\\"([^\\\"]+)',
-        html,
-    )
-
-    shows: list[tuple[str, str]] = []
-    seen: set[str] = set()
-
-    for dt_str, title in raw_matches:
-        title = title.strip()
-        if not title or title in seen:
-            continue
-        seen.add(title)
-
-        try:
-            dt = datetime.fromisoformat(dt_str)
-            hour, minute = dt.hour, dt.minute
-            suffix = "am" if hour < 12 else "pm"
-            hour12 = hour % 12 or 12
-            time_str = f"{hour12}:{minute:02d}{suffix}" if minute else f"{hour12}{suffix}"
-        except Exception:
-            time_str = ""
-
-        shows.append((dt_str, f"{title} {time_str}".strip()))
-
-    if not shows:
-        return ""
-
-    shows.sort(key=lambda x: x[0])
-    return ", ".join(label for _, label in shows)
-
-
-# ---------------------------------------------------------------------------
-# Context builder
-# ---------------------------------------------------------------------------
-
 
 def _tracked_url(base_url: str, slug: str, link_key: str) -> str:
     """
@@ -143,37 +63,166 @@ def _tracked_url(base_url: str, slug: str, link_key: str) -> str:
     return base_url
 
 
+# ---------------------------------------------------------------------------
+# Calendar scraper
+# ---------------------------------------------------------------------------
+
+def _fetch_shows(calendar_url: str, slug: str) -> dict:
+    """
+    Fetch the club's calendar page and return shows for today + next 7 days.
+
+    Returns a dict keyed by ISO date string ("2026-04-07") where each value is
+    a sorted list of dicts: {"title", "time", "ticket_link", "sold_out", "dt_str"}.
+    Returns {} on failure.  Result is cached per-slug for 2 hours.
+    """
+    cached = _get_cached(slug)
+    if cached is not None:
+        return cached  # type: ignore[return-value]
+
+    try:
+        resp = requests.get(
+            calendar_url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; ZarnaBot/1.0)"},
+            timeout=8,
+        )
+        resp.raise_for_status()
+        html = resp.text
+    except Exception as exc:
+        logger.warning("knowledge: failed to fetch calendar for %s: %s", slug, exc)
+        _set_cached(slug, {})
+        return {}
+
+    result = _parse_shows(html)
+    _set_cached(slug, result)
+    logger.info(
+        "knowledge: scraped %d show-dates for %s",
+        len(result), slug,
+    )
+    return result
+
+
+def _parse_shows(html: str) -> dict:
+    """
+    Parse shows from WSCC's Next.js page for the next 8 days.
+
+    The site double-escapes JSON inside JS push() calls so field names appear as
+    \\"field\\" in the raw HTML string.  We extract datetime, title, ticket_link,
+    and is_sold_out from every event object in the page.
+    """
+    today = datetime.now(timezone.utc).date()
+    window = {str(today + timedelta(days=i)) for i in range(8)}  # today + 7 days
+
+    # datetime always appears before title; ticket_link and is_sold_out may appear
+    # anywhere in the same object.  Use a broad multi-field regex per object.
+    raw_events = re.findall(
+        r'\\\"datetime\\\":\\\"(20\d\d-\d\d-\d\dT[^\\\"]+)\\\"'
+        r'(?:[^}]*\\\"is_sold_out\\\":(true|false))?'
+        r'[^}]*\\\"title\\\":\\\"([^\\\"]+)\\\"'
+        r'(?:[^}]*\\\"ticket_link\\\":\\\"([^\\\"]*?)\\\")?',
+        html,
+    )
+
+    result: dict[str, list] = {}
+    seen: set[str] = set()
+
+    for dt_str, sold_out_raw, title, ticket_link in raw_events:
+        date_part = dt_str[:10]
+        if date_part not in window:
+            continue
+        dedup_key = f"{date_part}|{title}"
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+
+        try:
+            dt = datetime.fromisoformat(dt_str)
+            hour, minute = dt.hour, dt.minute
+            suffix = "am" if hour < 12 else "pm"
+            hour12 = hour % 12 or 12
+            time_str = f"{hour12}:{minute:02d}{suffix}" if minute else f"{hour12}{suffix}"
+        except Exception:
+            time_str = ""
+
+        result.setdefault(date_part, []).append({
+            "title": title.strip(),
+            "time": time_str,
+            "ticket_link": ticket_link.strip() if ticket_link else "",
+            "sold_out": sold_out_raw == "true",
+            "dt_str": dt_str,
+        })
+
+    for day_shows in result.values():
+        day_shows.sort(key=lambda s: s["dt_str"])
+
+    return result
+
+
+def _format_show(show: dict, slug: str) -> str:
+    """Format a single show as a short human-readable string with a tracked ticket link."""
+    label = show["title"]
+    if show["time"]:
+        label += f" at {show['time']}"
+    if show["sold_out"]:
+        label += " (sold out)"
+    elif show.get("ticket_link"):
+        tracked = _tracked_url(show["ticket_link"], slug, "tickets")
+        label += f" — tickets: {tracked}"
+    return label
+
+
+def _format_day_label(date_str: str) -> str:
+    """Return a friendly label like 'Tonight', 'Tomorrow', 'Saturday Apr 11'."""
+    today = datetime.now(timezone.utc).date()
+    try:
+        d = date.fromisoformat(date_str)
+    except ValueError:
+        return date_str
+    delta = (d - today).days
+    if delta == 0:
+        return "Tonight"
+    if delta == 1:
+        return "Tomorrow"
+    return d.strftime("%A %b %-d")
+
+
+# ---------------------------------------------------------------------------
+# Context builder
+# ---------------------------------------------------------------------------
+
 def build_context(tenant, message: str) -> str:  # noqa: ARG001  message unused intentionally
     """
     Pass the full knowledge base to the AI every time.
     No keyword matching — let the AI decide what's relevant and how to respond naturally.
-    Tonight's shows are always fetched live so the answer is accurate.
+    Live show schedule (today + next 7 days with direct ticket links) is always fetched.
     """
     kb = tenant.raw.get("knowledge_base", {})
     if not kb:
         return ""
 
-    ticket_link = _tracked_url(kb.get("website", ""), tenant.slug, "tickets")
-    cal_link    = _tracked_url(kb.get("calendar_url", ""), tenant.slug, "calendar")
-    map_link    = _tracked_url(kb.get("maps_link", ""), tenant.slug, "map")
+    cal_link = _tracked_url(kb.get("calendar_url", ""), tenant.slug, "calendar")
+    map_link = _tracked_url(kb.get("maps_link", ""), tenant.slug, "map")
 
-    # Fetch tonight's shows live
+    # Fetch upcoming shows live
     calendar_url = kb.get("calendar_url", "")
-    todays_shows = _fetch_todays_shows(calendar_url, tenant.slug) if calendar_url else ""
-    tonight_line = (
-        f"Tonight's shows: {todays_shows}"
-        if todays_shows
-        else f"Tonight's shows: check the live calendar at {cal_link}"
-    )
+    shows_by_date = _fetch_shows(calendar_url, tenant.slug) if calendar_url else {}
+
+    if shows_by_date:
+        schedule_lines = []
+        for date_str in sorted(shows_by_date.keys()):
+            label = _format_day_label(date_str)
+            show_labels = [_format_show(s, tenant.slug) for s in shows_by_date[date_str]]
+            schedule_lines.append(f"{label}: {', '.join(show_labels)}")
+        schedule_block = "\n".join(schedule_lines)
+    else:
+        schedule_block = f"Check the live calendar at {cal_link}"
 
     lines = [
         f"Address: {kb.get('address', '')}",
         f"Hours: {kb.get('hours', '')}",
         f"Website: {kb.get('website', '')}",
-        f"Tickets: {ticket_link}",
         f"Calendar: {cal_link}",
         f"Map / directions: {map_link} — {kb.get('directions', '')}",
-        tonight_line,
+        f"Upcoming shows:\n{schedule_block}",
         f"Food & drinks: {kb.get('food_and_drinks', '')}",
         f"Policies: {kb.get('policies', '')}",
         f"Ticket support (lost / missing tickets): {kb.get('ticket_support', '')}",
