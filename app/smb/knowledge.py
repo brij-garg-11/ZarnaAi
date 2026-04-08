@@ -102,58 +102,119 @@ def _fetch_shows(calendar_url: str, slug: str, tz: str = "America/New_York") -> 
     return result
 
 
+def _extract_field(window: str, field: str) -> str:
+    """Extract a double-escaped JSON string field from an event window.
+
+    Matches: \\"field\\":\\"value\\" where value may contain escaped chars.
+    Returns "" if not found or if value is JSON null.
+    """
+    m = re.search(
+        r'\\\"' + re.escape(field) + r'\\\":\\\"((?:[^\\\"]|\\\\.)*?)\\\"',
+        window,
+    )
+    return m.group(1) if m else ""
+
+
+def _extract_bool(window: str, field: str) -> Optional[bool]:
+    """Extract a boolean field from a double-escaped event window."""
+    m = re.search(r'\\\"' + re.escape(field) + r'\\\":(true|false)', window)
+    if m:
+        return m.group(1) == "true"
+    return None
+
+
 def _parse_shows(html: str, tz: str = "America/New_York") -> dict:
     """
     Parse shows from WSCC's Next.js page for the next 8 days.
 
     The site double-escapes JSON inside JS push() calls so field names appear as
-    \\"field\\" in the raw HTML string.  We extract datetime, title, ticket_link,
-    and is_sold_out from every event object in the page.
-    Uses the venue's local timezone so "today" and "tomorrow" are correct for the subscriber.
+    \\\"field\\\" in the raw HTML string.
+
+    Real field order per event object:
+      ticket_link → datetime → is_sold_out → metadata_text → title → comedian.about
+
+    We anchor on datetime and extract a ±800 char window per event so each field
+    can be extracted independently of order.
+
+    Uses the venue's local timezone so "today" and "tomorrow" are correct.
     """
     try:
         local_tz = ZoneInfo(tz)
     except Exception:
         local_tz = ZoneInfo("America/New_York")
     today = datetime.now(local_tz).date()
-    window = {str(today + timedelta(days=i)) for i in range(8)}  # today + 7 days
+    window_dates = {str(today + timedelta(days=i)) for i in range(8)}  # today + 7 days
 
-    # datetime always appears before title; ticket_link and is_sold_out may appear
-    # anywhere in the same object.  Use a broad multi-field regex per object.
-    raw_events = re.findall(
-        r'\\\"datetime\\\":\\\"(20\d\d-\d\d-\d\dT[^\\\"]+)\\\"'
-        r'(?:[^}]*\\\"is_sold_out\\\":(true|false))?'
-        r'[^}]*\\\"title\\\":\\\"([^\\\"]+)\\\"'
-        r'(?:[^}]*\\\"ticket_link\\\":\\\"([^\\\"]*?)\\\")?',
-        html,
+    # Find every event datetime position in the HTML
+    dt_pattern = re.compile(
+        r'\\\"datetime\\\":\\\"(20\d\d-\d\d-\d\dT\d\d:\d\d:\d\d)\\\"'
     )
 
     result: dict[str, list] = {}
     seen: set[str] = set()
 
-    for dt_str, sold_out_raw, title, ticket_link in raw_events:
+    # Each event object starts with a UUID "id" field.  We anchor on the last
+    # "id":"<uuid>" that appears within 700 chars before each datetime — that gives
+    # us a clean per-event context window that includes ticket_link (before datetime)
+    # as well as metadata_text and title (after datetime).
+    id_anchor_re = re.compile(r'\\\"id\\\":\\\"[0-9a-f-]{36}\\\"')
+
+    for m in dt_pattern.finditer(html):
+        dt_str = m.group(1)
         date_part = dt_str[:10]
-        if date_part not in window:
+        if date_part not in window_dates:
             continue
+
+        look_back = html[max(0, m.start() - 700):m.start()]
+        id_matches = list(id_anchor_re.finditer(look_back))
+        if not id_matches:
+            continue  # no event object start found — skip stray datetime references
+        last_id = id_matches[-1]
+        abs_obj_start = (m.start() - len(look_back)) + last_id.end()
+
+        end = min(len(html), m.end() + 1600)
+        ctx = html[abs_obj_start:end]
+
+        title = _extract_field(ctx, "title")
+        if not title:
+            continue
+
         dedup_key = f"{date_part}|{title}"
         if dedup_key in seen:
             continue
         seen.add(dedup_key)
 
+        ticket_link = _extract_field(ctx, "ticket_link")
+        sold_out = _extract_bool(ctx, "is_sold_out") or False
+
+        # metadata_text describes the show; comedian.about is the comedian bio.
+        # Prefer metadata_text; fall back to comedian.about.
+        raw_desc = _extract_field(ctx, "metadata_text")
+        if not raw_desc:
+            raw_desc = _extract_field(ctx, "about")
+
+        # Unescape \\n / \\t inserted by JSON double-escaping
+        desc_clean = raw_desc.replace("\\\\n", " ").replace("\\\\t", " ").strip()
+        # Trim to first 220 chars at a word boundary
+        if len(desc_clean) > 220:
+            desc_clean = desc_clean[:220].rsplit(" ", 1)[0] + "…"
+
         try:
             dt = datetime.fromisoformat(dt_str)
             hour, minute = dt.hour, dt.minute
-            suffix = "am" if hour < 12 else "pm"
             hour12 = hour % 12 or 12
-            time_str = f"{hour12}:{minute:02d}{suffix}" if minute else f"{hour12}{suffix}"
+            time_str = f"{hour12}:{minute:02d}pm" if minute else f"{hour12}pm"
+            if hour < 12:
+                time_str = f"{hour12}:{minute:02d}am" if minute else f"{hour12}am"
         except Exception:
             time_str = ""
 
         result.setdefault(date_part, []).append({
             "title": title.strip(),
             "time": time_str,
-            "ticket_link": ticket_link.strip() if ticket_link else "",
-            "sold_out": sold_out_raw == "true",
+            "ticket_link": ticket_link.strip(),
+            "sold_out": sold_out,
+            "description": desc_clean,
             "dt_str": dt_str,
         })
 
@@ -164,12 +225,14 @@ def _parse_shows(html: str, tz: str = "America/New_York") -> dict:
 
 
 def _format_show(show: dict, slug: str) -> str:
-    """Format a single show as a short human-readable string with a tracked ticket link."""
+    """Format a single show as a short human-readable string with description and ticket link."""
     label = show["title"]
     if show["time"]:
         label += f" at {show['time']}"
+    if show.get("description"):
+        label += f" ({show['description']})"
     if show["sold_out"]:
-        label += " (sold out)"
+        label += " — SOLD OUT"
     elif show.get("ticket_link"):
         tracked = _tracked_url(show["ticket_link"], slug, "tickets")
         label += f" — tickets: {tracked}"
