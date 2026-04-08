@@ -922,7 +922,10 @@ def _fetch_dashboard(
                             denom = sc
                         else:
                             row["link_clicks"] = row["tracked_clicks"]
-                            denom = row["link_sent_to"] or sc
+                            # Per-blast CTR: denominator must be recipients of *this* blast.
+                            # tracked_links.sent_to can drift (cumulative / double-updates) and
+                            # inflated sent_to understates CTR — sent_count is authoritative.
+                            denom = sc or (row["link_sent_to"] or 0)
                         has_link = (mlc is not None) or row["tracked_link_slug"]
                         row["ctr_pct"] = round(row["link_clicks"] / denom * 100, 1) if (denom and has_link) else None
                         oc = row["opt_out_count"] or 0
