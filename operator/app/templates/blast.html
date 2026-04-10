@@ -46,7 +46,10 @@
           <span>{{ d.channel }}</span>
           <span>·</span>
           <span>{{ d.audience_type }}</span>
-          {% if d.total_recipients and d.status == "sent" %}
+          {% if d.status == "sending" and d.total_recipients %}
+          <span>·</span>
+          <span style="color:var(--pink);" id="card-progress-{{ d.id }}">{{ d.sent_count or 0 }} / {{ d.total_recipients }}</span>
+          {% elif d.total_recipients and d.status == "sent" %}
           <span>·</span>
           <span style="color:#4ade80;">{{ d.sent_count }} sent</span>
           {% elif d.scheduled_at and d.status == "scheduled" %}
@@ -117,7 +120,11 @@
         {% elif active_draft.status == "sending" %}
           <span class="flex items-center gap-2">
             <span class="inline-block w-2 h-2 rounded-full animate-pulse" style="background:var(--pink);"></span>
-            Sending… <span class="text-xs font-normal ml-1" style="color:var(--text-muted);">auto-updates when done</span>
+            Sending…
+            <span class="text-xs font-normal ml-1" style="color:var(--text-muted);">
+              <span id="progress-sent">{{ active_draft.sent_count or 0 }}</span>
+              / <span id="progress-total">{{ active_draft.total_recipients or '?' }}</span> sent
+            </span>
           </span>
         {% else %}Edit Draft{% endif %}
       </div>
@@ -513,6 +520,11 @@
     fetch('/operator/blast/' + draftId + '/status')
       .then(function(r) { return r.json(); })
       .then(function(d) {
+        // Update live progress counters
+        var sentEl  = document.getElementById('progress-sent');
+        var totalEl = document.getElementById('progress-total');
+        if (sentEl && d.sent_count != null)        sentEl.textContent  = d.sent_count.toLocaleString();
+        if (totalEl && d.total_recipients != null) totalEl.textContent = d.total_recipients.toLocaleString();
         if (d.status && d.status !== 'sending') {
           clearInterval(interval);
           window.location.reload();
@@ -534,6 +546,11 @@
         fetch('/operator/blast/' + id + '/status')
           .then(function(r) { return r.json(); })
           .then(function(d) {
+            // Update card progress badge live
+            var cardEl = document.getElementById('card-progress-' + id);
+            if (cardEl && d.sent_count != null && d.total_recipients) {
+              cardEl.textContent = d.sent_count.toLocaleString() + ' / ' + d.total_recipients.toLocaleString();
+            }
             if (d.status && d.status !== 'sending') {
               done[id] = true;
               if (Object.keys(done).length === sendingIds.length) clearInterval(interval);

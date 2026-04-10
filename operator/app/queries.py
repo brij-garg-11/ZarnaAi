@@ -289,15 +289,29 @@ def schedule_blast(draft_id: int, send_at) -> None:
         conn.close()
 
 
-def mark_blast_started(draft_id: int) -> None:
-    """Record the exact moment the send loop begins — used for reply attribution."""
+def mark_blast_started(draft_id: int, total: int) -> None:
+    """Record the exact moment the send loop begins and set total_recipients."""
     conn = get_conn()
     try:
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE blast_drafts SET started_at=NOW(), updated_at=NOW() WHERE id=%s",
-                    (draft_id,),
+                    "UPDATE blast_drafts SET started_at=NOW(), total_recipients=%s, updated_at=NOW() WHERE id=%s",
+                    (total, draft_id),
+                )
+    finally:
+        conn.close()
+
+
+def mark_blast_progress(draft_id: int, sent: int, failed: int) -> None:
+    """Write incremental sent/failed counts mid-loop so the UI can poll progress."""
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE blast_drafts SET sent_count=%s, failed_count=%s, updated_at=NOW() WHERE id=%s",
+                    (sent, failed, draft_id),
                 )
     finally:
         conn.close()

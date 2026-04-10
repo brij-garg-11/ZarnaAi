@@ -19,6 +19,7 @@ def execute_blast(draft_id: int):
         get_blast_draft,
         get_audience_phones,
         mark_blast_started,
+        mark_blast_progress,
         mark_blast_sent,
         mark_blast_cancelled,
     )
@@ -76,12 +77,13 @@ def execute_blast(draft_id: int):
         send_body = f"{body}\n{tracked_short_url}"
         logger.info("  appended tracked URL to body — final length=%d", len(send_body))
 
-    mark_blast_started(draft_id)
+    total = len(phones)
+    mark_blast_started(draft_id, total)
 
     sent = 0
     failed = 0
 
-    for phone in phones:
+    for i, phone in enumerate(phones):
         try:
             ok = _send_one(phone, send_body, channel, media_url=media_url)
             logger.info("  send to ...%s via %s: %s", phone[-4:], channel, "OK" if ok else "FAIL")
@@ -93,8 +95,11 @@ def execute_blast(draft_id: int):
             logger.warning("  send error for ...%s: %s", phone[-4:], e)
             failed += 1
         time.sleep(0.05)
+        # Write progress every 50 sends so the UI can poll live counts
+        if (i + 1) % 50 == 0:
+            mark_blast_progress(draft_id, sent, failed)
 
-    mark_blast_sent(draft_id, sent, failed, len(phones))
+    mark_blast_sent(draft_id, sent, failed, total)
     logger.info("=== BLAST %s DONE: %s sent, %s failed of %s ===", draft_id, sent, failed, len(phones))
 
     # If this was a quiz blast, create a quiz_sessions row now so inbound replies get context.
