@@ -381,18 +381,14 @@ def handle_owner_blast(
     Called when the registered owner sends a message to the bot.
 
     Routing logic (in order):
-    1. Audience stats query      → return subscriber counts
-    2. Cancel command            → abort any pending blast
+    1. Cancel command            → abort any pending blast
+    2. Audience stats query      → only when no pending blast (avoids "fans" false-triggering)
     3. Expired pending blast     → inform owner the 10-min window lapsed
     4. Active pending reply      → AI interprets free-text audience choice → send blast
     5. Blast intent detected     → save as pending, ask who to send to (bullet list)
     6. Not a blast               → show help text
     """
     text = message_text.strip()
-
-    # ── 1. Audience stats query ──
-    if _is_audience_query(text):
-        return _get_audience_stats(tenant)
 
     # ── 2. Cancel command ──
     if _is_cancel(text):
@@ -402,8 +398,16 @@ def handle_owner_blast(
             return "Got it, blast cancelled. Nothing was sent."
         return "No blast pending right now. Text me a message whenever you're ready to send one."
 
-    # ── 3. Expired pending — inform the owner before doing anything else ──
+    # Fetch pending state once — used by steps 1, 3, and 4.
     active_pending = _get_pending(phone_number)
+
+    # ── 1. Audience stats query — only when NOT mid-blast-flow ──
+    # Must run after cancel check but before pending reply so that words like
+    # "fans" or "audience" in an audience-selection reply don't trigger stats.
+    if active_pending is None and _is_audience_query(text):
+        return _get_audience_stats(tenant)
+
+    # ── 3. Expired pending — inform the owner before doing anything else ──
     if active_pending is None:
         expired = _get_expired_pending(phone_number)
         if expired and expired["tenant_slug"] == tenant.slug:
