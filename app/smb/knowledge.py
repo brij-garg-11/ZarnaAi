@@ -179,7 +179,7 @@ def _parse_shows(html: str, tz: str = "America/New_York") -> dict:
         if not title:
             continue
 
-        dedup_key = f"{date_part}|{title}"
+        dedup_key = f"{date_part}|{title}|{dt_str}"
         if dedup_key in seen:
             continue
         seen.add(dedup_key)
