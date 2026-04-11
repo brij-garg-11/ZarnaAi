@@ -7,12 +7,14 @@ kicks off a broadcast to all active subscribers.
 
 Flow:
   1. Owner texts "opening tonight at 8pm — 20% off tickets"
-  2. is_blast_command() checks message against the tenant's blast_triggers
-  3. handle_owner_blast() fires an async thread and returns instant confirmation
-  4. _run_blast_async() fetches active subscribers, formats body, sends via Twilio
-  5. _record_blast() saves the blast to smb_blasts for reporting
+  2. handle_owner_blast() routes: stats query → pending reply → new blast → help
+  3. For a new blast: saves as pending, asks owner who to send to (with bullet list)
+  4. Owner replies with audience choice (free text, AI-interpreted)
+  5. _run_blast_async() fetches subscribers, AI-enhances body, sends via Twilio
+  6. Owner receives a confirmation SMS with sent/attempted counts
 
-Owner sends that aren't blast commands get a friendly help reply instead.
+Owner can reply "cancel" at any time to abort a pending blast.
+Non-blast messages from the owner show a help text instead of entering the flow.
 """
 
 import logging
@@ -100,6 +102,120 @@ def is_blast_command(text: str, tenant: BusinessTenant) -> bool:
     return any(
         re.search(r"\b" + re.escape(t.strip().lower()) + r"\b", lower)
         for t in tenant.blast_triggers
+    )
+
+
+_CANCEL_RE = re.compile(
+    r"^\s*(cancel|nevermind|never mind|stop|abort|don't send|dont send|forget it)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_cancel(text: str) -> bool:
+    """Return True if the owner wants to abort a pending blast."""
+    return bool(_CANCEL_RE.match(text.strip()))
+
+
+def _looks_like_blast_intent(text: str, tenant: BusinessTenant) -> bool:
+    """
+    Return True if the owner's message looks like something to blast to subscribers.
+    First tries the fast keyword check; falls back to AI for messages that don't
+    match triggers but still look like a promo (e.g. '7pm 25% off').
+    """
+    if is_blast_command(text, tenant):
+        return True
+
+    prompt = (
+        f"A business owner texted: \"{text}\"\n"
+        f"Is this a message they want to send as an SMS blast to their subscribers "
+        f"(a promo, announcement, deal, event info, etc.)?\n"
+        f"Reply YES or NO only."
+    )
+    try:
+        result = smb_ai.generate(prompt).strip().upper()
+        return result.startswith("YES")
+    except Exception:
+        logger.warning("SMB blast: AI intent check failed, defaulting to False")
+        return False
+
+
+def _get_expired_pending(owner_phone: str) -> Optional[dict]:
+    """
+    Return the most recent pending blast for this owner if it expired within
+    the last 10 minutes (i.e. created between 10–20 minutes ago).
+    Used to inform the owner their window lapsed rather than silently restarting.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT tenant_slug, message_text, created_at
+                    FROM smb_pending_blasts
+                    WHERE owner_phone = %s
+                      AND created_at <= NOW() - INTERVAL '%s seconds'
+                      AND created_at >  NOW() - INTERVAL '1200 seconds'
+                    """,
+                    (owner_phone, smb_storage._PENDING_TTL_SECONDS),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {"tenant_slug": row[0], "message_text": row[1], "created_at": row[2]}
+    except Exception:
+        logger.exception("SMB blast: failed to check expired pending for %s", owner_phone[-4:])
+        return None
+    finally:
+        conn.close()
+
+
+def _seg_display_name(seg: dict) -> str:
+    """Short, SMS-friendly label for a segment (trims long descriptions at parens/commas)."""
+    desc = seg.get("description", seg["name"])
+    desc = desc.split("(")[0].split(",")[0].strip()
+    return desc if len(desc) <= 35 else seg["name"].title()
+
+
+def _format_audience_question(message: str, tenant: BusinessTenant) -> str:
+    """
+    Build the audience clarification SMS with a bullet list of segment options.
+    Highlights the AI-suggested best fit segment, if any.
+    """
+    if not tenant.segments:
+        return (
+            "Got it! Send to everyone, or a specific group?\n\n"
+            "Reply with your choice, or 'cancel' to abort."
+        )
+
+    suggested = _ai_suggest_segment(message, tenant)
+    suggested_name = suggested["name"] if suggested else None
+
+    bullets = []
+    for seg in tenant.segments:
+        label = _seg_display_name(seg)
+        marker = " ← suggested" if suggested_name and seg["name"] == suggested_name else ""
+        bullets.append(f"• {label}{marker}")
+
+    bullet_block = "\n".join(bullets)
+
+    return (
+        f"Got it! Who should get this blast?\n\n"
+        f"Everyone, or just:\n"
+        f"{bullet_block}\n\n"
+        f"Reply with your choice, or 'cancel' to abort."
+    )
+
+
+def _owner_help(tenant: BusinessTenant) -> str:
+    """Help text shown when the owner sends something that isn't a blast or stats query."""
+    return (
+        f"Hey! Here's what I can do:\n\n"
+        f"• Send a blast — just text me your message (e.g. '7pm 25% off tonight')\n"
+        f"• Audience stats — text 'stats' or 'how many subscribers'\n\n"
+        f"I'll ask who to send to before anything goes out."
     )
 
 
@@ -265,10 +381,12 @@ def handle_owner_blast(
     Called when the registered owner sends a message to the bot.
 
     Routing logic (in order):
-    1. Audience stats query    → return subscriber counts
-    2. Pending clarification reply → AI interprets free-text → send blast
-    3. Blast command           → always ask who to send to (AI interprets reply)
-    4. Not a blast command     → show help
+    1. Audience stats query      → return subscriber counts
+    2. Cancel command            → abort any pending blast
+    3. Expired pending blast     → inform owner the 10-min window lapsed
+    4. Active pending reply      → AI interprets free-text audience choice → send blast
+    5. Blast intent detected     → save as pending, ask who to send to (bullet list)
+    6. Not a blast               → show help text
     """
     text = message_text.strip()
 
@@ -276,29 +394,47 @@ def handle_owner_blast(
     if _is_audience_query(text):
         return _get_audience_stats(tenant)
 
-    # ── 2. Reply to a pending clarification (AI-interpreted free text) ──
-    pending = _get_pending(phone_number)
-    if pending and pending["tenant_slug"] == tenant.slug:
+    # ── 2. Cancel command ──
+    if _is_cancel(text):
+        had_pending = _get_pending(phone_number)
+        _clear_pending(phone_number)
+        if had_pending:
+            return "Got it, blast cancelled. Nothing was sent."
+        return "No blast pending right now. Text me a message whenever you're ready to send one."
+
+    # ── 3. Expired pending — inform the owner before doing anything else ──
+    active_pending = _get_pending(phone_number)
+    if active_pending is None:
+        expired = _get_expired_pending(phone_number)
+        if expired and expired["tenant_slug"] == tenant.slug:
+            _clear_pending(phone_number)  # clean up the stale record
+            short = expired["message_text"][:60]
+            return (
+                f"That blast window expired — it's been over 10 minutes since you drafted "
+                f"\"{short}{'…' if len(expired['message_text']) > 60 else ''}\".\n\n"
+                f"Send me the message again to start a new one."
+            )
+
+    # ── 4. Reply to an active pending clarification (AI-interpreted free text) ──
+    if active_pending and active_pending["tenant_slug"] == tenant.slug:
         _clear_pending(phone_number)
         segment = _ai_classify_audience_reply(text, tenant)
         threading.Thread(
             target=_run_blast_async,
-            args=(pending["message_text"], tenant, segment, phone_number),
+            args=(active_pending["message_text"], tenant, segment, phone_number),
             daemon=True,
         ).start()
         if segment:
-            return f"Sending to your {segment['name']} subscribers now."
+            return f"Sending to your {_seg_display_name(segment).lower()} subscribers now."
         return "Sending to all your active subscribers now."
 
-    # ── Treat everything else as a blast — ask who to send to ──
-    _set_pending(phone_number, text, tenant)
-    suggested = _ai_suggest_segment(text, tenant)
-    if suggested:
-        return f"Send to everyone or just your {suggested['name'].lower()} fans?"
-    elif tenant.segments:
-        options = " or ".join(f"{s['name'].lower()} fans" for s in tenant.segments[:2])
-        return f"Send to everyone or just your {options}?"
-    return "Send to everyone or a specific group?"
+    # ── 5. New blast intent — set pending and ask who to send to ──
+    if _looks_like_blast_intent(text, tenant):
+        _set_pending(phone_number, text, tenant)
+        return _format_audience_question(text, tenant)
+
+    # ── 6. Not a blast — show help ──
+    return _owner_help(tenant)
 
 
 # ---------------------------------------------------------------------------
