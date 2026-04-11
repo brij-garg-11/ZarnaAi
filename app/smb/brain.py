@@ -62,7 +62,11 @@ class SMBBrain:
         # --- Owner commands ---
         if registry.is_owner(from_number, tenant):
             logger.info("SMB brain: owner message → blast handler (tenant=%s)", tenant.slug)
-            return blast.handle_owner_blast(from_number, message_text, tenant)
+            history = _save_and_get_history(from_number, tenant, message_text, role="user")
+            reply = blast.handle_owner_blast(from_number, message_text, history, tenant)
+            if reply:
+                _persist_message(from_number, tenant, reply, role="assistant")
+            return reply
 
         # --- Onboarding flow (keyword or mid-intake reply) ---
         onboarding_reply = onboarding.get_onboarding_reply(

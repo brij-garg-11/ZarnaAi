@@ -1,26 +1,31 @@
 """
-SMB owner blast: command detection and subscriber broadcast.
+SMB owner blast: AI-driven command understanding and subscriber broadcast.
 
-When the business owner texts the bot's number, this module determines
-whether their message is an availability/offer command and, if so,
-kicks off a broadcast to all active subscribers.
+When the business owner texts the bot's number, this module reads the full
+conversation history and uses a single AI call to determine what to do:
+
+  CLARIFY   → owner wants to blast but we haven't asked who to send it to yet
+  SEND_BLAST → previous bot turn was CLARIFY, owner just replied with audience
+  STATS     → owner asking about subscriber counts
+  CANCEL    → owner wants to abort
+  HELP      → anything else
+
+The 2-step confirmation (CLARIFY → SEND_BLAST) is always enforced — the AI
+prompt makes SEND_BLAST conditional on seeing a prior CLARIFY in the history.
 
 Flow:
-  1. Owner texts "opening tonight at 8pm — 20% off tickets"
-  2. handle_owner_blast() routes: stats query → pending reply → new blast → help
-  3. For a new blast: saves as pending, asks owner who to send to (with bullet list)
-  4. Owner replies with audience choice (free text, AI-interpreted)
-  5. _run_blast_async() fetches subscribers, AI-enhances body, sends via Twilio
-  6. Owner receives a confirmation SMS with sent/attempted counts
-
-Owner can reply "cancel" at any time to abort a pending blast.
-Non-blast messages from the owner show a help text instead of entering the flow.
+  1. brain.py saves the owner's message and fetches conversation history
+  2. handle_owner_blast(phone_number, message_text, history, tenant) is called
+  3. _ai_decide_owner_action() reads the transcript and returns a JSON decision
+  4. We execute the decision: send blast, return stats, clarify, etc.
+  5. brain.py saves the bot's reply to history
 """
 
+import json
 import logging
 import re
 import threading
-import time  # still used in _run_blast_async for rate-limiting sleep
+import time
 from typing import Optional
 
 from app.admin_auth import get_db_connection
@@ -30,252 +35,191 @@ from app.smb import storage as smb_storage
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Pending clarification state — DB-backed so all gunicorn workers share it
-# ---------------------------------------------------------------------------
-
-def _set_pending(owner_phone: str, message_text: str, tenant: BusinessTenant) -> None:
-    conn = get_db_connection()
-    if not conn:
-        return
-    try:
-        with conn:
-            smb_storage.set_pending_blast(conn, owner_phone, tenant.slug, message_text)
-    except Exception:
-        logger.exception("SMB blast: failed to set pending state for %s", owner_phone[-4:])
-    finally:
-        conn.close()
-
-
-def _get_pending(owner_phone: str) -> Optional[dict]:
-    conn = get_db_connection()
-    if not conn:
-        return None
-    try:
-        with conn:
-            return smb_storage.get_pending_blast(conn, owner_phone)
-    except Exception:
-        logger.exception("SMB blast: failed to get pending state for %s", owner_phone[-4:])
-        return None
-    finally:
-        conn.close()
-
-
-def _clear_pending(owner_phone: str) -> None:
-    conn = get_db_connection()
-    if not conn:
-        return
-    try:
-        with conn:
-            smb_storage.clear_pending_blast(conn, owner_phone)
-    except Exception:
-        logger.exception("SMB blast: failed to clear pending state for %s", owner_phone[-4:])
-    finally:
-        conn.close()
-
 
 # ---------------------------------------------------------------------------
-# Detection helpers
+# AI decision engine
 # ---------------------------------------------------------------------------
 
-_AUDIENCE_QUERY_PATTERNS = re.compile(
-    r"\b(how many|count|total|number of|stats|statistics|breakdown|"
-    r"subscribers?|fans?|audience|segment|who likes?|who signed|how big)\b",
-    re.IGNORECASE,
-)
-
-
-def _is_audience_query(text: str) -> bool:
-    """Return True if the owner is asking about their subscriber counts/stats."""
-    return bool(_AUDIENCE_QUERY_PATTERNS.search(text.strip()))
-
-
-
-def is_blast_command(text: str, tenant: BusinessTenant) -> bool:
+def _ai_decide_owner_action(
+    message_text: str,
+    history: list,
+    tenant: BusinessTenant,
+) -> dict:
     """
-    Return True if the owner's message contains any of the tenant's blast triggers
-    as whole words (not substrings), e.g. 'deal' matches 'great deal' but not 'idealized'.
+    Single AI call: reads the full owner conversation history and returns a
+    structured decision dict:
+      {"action": "CLARIFY|SEND_BLAST|STATS|CANCEL|HELP",
+       "blast_message": "<original blast text>",
+       "segment": "ALL|<SEGMENT_NAME>",
+       "reply": "<bot reply to send>"}
+
+    The AI prompt enforces the 2-step rule: SEND_BLAST is only valid if the
+    immediately preceding bot message was a CLARIFY asking about audience.
     """
-    if not tenant.blast_triggers:
-        return False
-    lower = text.strip().lower()
-    return any(
-        re.search(r"\b" + re.escape(t.strip().lower()) + r"\b", lower)
-        for t in tenant.blast_triggers
-    )
+    seg_names = [s["name"] for s in tenant.segments] if tenant.segments else []
+    valid_segments = ", ".join(seg_names) if seg_names else "ALL"
 
-
-_CANCEL_RE = re.compile(
-    r"^\s*(cancel|nevermind|never mind|stop|abort|don't send|dont send|forget it)\s*$",
-    re.IGNORECASE,
-)
-
-
-def _is_cancel(text: str) -> bool:
-    """Return True if the owner wants to abort a pending blast."""
-    return bool(_CANCEL_RE.match(text.strip()))
-
-
-def _looks_like_blast_intent(text: str, tenant: BusinessTenant) -> bool:
-    """
-    Return True if the owner's message looks like something to blast to subscribers.
-    First tries the fast keyword check; falls back to AI for messages that don't
-    match triggers but still look like a promo (e.g. '7pm 25% off').
-    """
-    if is_blast_command(text, tenant):
-        return True
-
-    prompt = (
-        f"A business owner texted: \"{text}\"\n"
-        f"Is this a message they want to send as an SMS blast to their subscribers "
-        f"(a promo, announcement, deal, event info, etc.)?\n"
-        f"Reply YES or NO only."
-    )
-    try:
-        result = smb_ai.generate(prompt).strip().upper()
-        return result.startswith("YES")
-    except Exception:
-        logger.warning("SMB blast: AI intent check failed, defaulting to False")
-        return False
-
-
-def _get_expired_pending(owner_phone: str) -> Optional[dict]:
-    """
-    Return the most recent pending blast for this owner if it expired within
-    the last 10 minutes (i.e. created between 10–20 minutes ago).
-    Used to inform the owner their window lapsed rather than silently restarting.
-    """
-    conn = get_db_connection()
-    if not conn:
-        return None
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT tenant_slug, message_text, created_at
-                    FROM smb_pending_blasts
-                    WHERE owner_phone = %s
-                      AND created_at <= NOW() - INTERVAL '%s seconds'
-                      AND created_at >  NOW() - INTERVAL '1200 seconds'
-                    """,
-                    (owner_phone, smb_storage._PENDING_TTL_SECONDS),
-                )
-                row = cur.fetchone()
-        if not row:
-            return None
-        return {"tenant_slug": row[0], "message_text": row[1], "created_at": row[2]}
-    except Exception:
-        logger.exception("SMB blast: failed to check expired pending for %s", owner_phone[-4:])
-        return None
-    finally:
-        conn.close()
-
-
-def _seg_display_name(seg: dict) -> str:
-    """Short, SMS-friendly label for a segment (trims long descriptions at parens/commas)."""
-    desc = seg.get("description", seg["name"])
-    desc = desc.split("(")[0].split(",")[0].strip()
-    return desc if len(desc) <= 35 else seg["name"].title()
-
-
-def _format_audience_question(message: str, tenant: BusinessTenant) -> str:
-    """
-    Build the audience clarification SMS with a bullet list of segment options.
-    Highlights the AI-suggested best fit segment, if any.
-    """
-    if not tenant.segments:
-        return (
-            "Got it! Send to everyone, or a specific group?\n\n"
-            "Reply with your choice, or 'cancel' to abort."
+    if tenant.segments:
+        seg_lines = "\n".join(
+            f"- {s['name']}: {s.get('description', s['name'])}"
+            for s in tenant.segments
         )
+    else:
+        seg_lines = "No segments defined — send to everyone (ALL)."
 
-    suggested = _ai_suggest_segment(message, tenant)
-    suggested_name = suggested["name"] if suggested else None
-
-    bullets = []
-    for seg in tenant.segments:
-        label = _seg_display_name(seg)
-        marker = " ← suggested" if suggested_name and seg["name"] == suggested_name else ""
-        bullets.append(f"• {label}{marker}")
-
-    bullet_block = "\n".join(bullets)
-
-    return (
-        f"Got it! Who should get this blast?\n\n"
-        f"Everyone, or just:\n"
-        f"{bullet_block}\n\n"
-        f"Reply with your choice, or 'cancel' to abort."
+    # History already includes the current message (saved by brain.py before
+    # calling us). Build a readable transcript oldest-first.
+    history_text = (
+        "\n".join(
+            f"{'Owner' if m['role'] == 'user' else 'Bot'}: {m['body']}"
+            for m in history
+        )
+        if history
+        else "(no prior messages)"
     )
 
+    prompt = f"""You manage the SMS blast tool for {tenant.display_name} (tone: {tenant.tone}).
 
-def _owner_help(tenant: BusinessTenant) -> str:
-    """Help text shown when the owner sends something that isn't a blast or stats query."""
-    return (
-        f"Hey! Here's what I can do:\n\n"
-        f"• Send a blast — just text me your message (e.g. '7pm 25% off tonight')\n"
-        f"• Audience stats — text 'stats' or 'how many subscribers'\n\n"
-        f"I'll ask who to send to before anything goes out."
-    )
+Conversation history (oldest first — the last Owner line is the current message):
+{history_text}
+
+Available audience segments:
+{seg_lines}
+- ALL: send to everyone
+
+Your job: decide the correct action and return a JSON object ONLY (no markdown, no explanation).
+
+ACTIONS and when to use them:
+- CLARIFY: owner's message looks like a blast they want to send, but you have NOT yet asked
+  who to send it to in this conversation. Write a reply listing the segment options as bullet
+  points so the owner can pick. ALWAYS use CLARIFY before SEND_BLAST — never skip this step.
+- SEND_BLAST: use ONLY when the immediately preceding Bot message was a CLARIFY asking about
+  audience, AND the owner just replied with their audience choice. Extract the original blast
+  message from the owner's turn that triggered the CLARIFY (not the audience reply).
+  segment = one of: ALL, {valid_segments}
+- STATS: owner is asking about subscriber counts, audience breakdown, or segment sizes.
+  Leave reply blank — real stats will be fetched from the database separately.
+- CANCEL: owner wants to cancel or abort. Confirm in reply.
+- HELP: anything else. Briefly explain what you can do (send blasts, check stats).
+
+Return this exact JSON (all fields required, use empty string if not applicable):
+{{"action": "CLARIFY|SEND_BLAST|STATS|CANCEL|HELP", "blast_message": "", "segment": "ALL", "reply": ""}}"""
+
+    raw = smb_ai.generate(prompt) or ""
+
+    # Strip markdown code fences if the model wraps the JSON
+    raw = re.sub(r"^```[a-z]*\n?", "", raw.strip(), flags=re.IGNORECASE)
+    raw = raw.rstrip("`").strip()
+
+    try:
+        data = json.loads(raw)
+        action = str(data.get("action", "HELP")).upper().strip()
+        if action not in {"CLARIFY", "SEND_BLAST", "STATS", "CANCEL", "HELP"}:
+            logger.warning("SMB blast: AI returned unknown action '%s', defaulting to HELP", action)
+            action = "HELP"
+        return {
+            "action": action,
+            "blast_message": str(data.get("blast_message", "")).strip(),
+            "segment": str(data.get("segment", "ALL")).upper().strip(),
+            "reply": str(data.get("reply", "")).strip(),
+        }
+    except Exception:
+        logger.warning(
+            "SMB blast: AI decision JSON parse failed, raw=%s",
+            raw[:300],
+        )
+        return {"action": "HELP", "blast_message": "", "segment": "ALL", "reply": ""}
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
-def _ai_classify_audience_reply(reply: str, tenant: BusinessTenant) -> Optional[dict]:
+def handle_owner_blast(
+    phone_number: str,
+    message_text: str,
+    history: list,
+    tenant: BusinessTenant,
+) -> str:
     """
-    Use AI to interpret the owner's free-text audience reply.
+    Called when the registered business owner sends a message to the bot.
 
-    Examples:
-      "just standup fans" → STANDUP segment
-      "everyone"          → None (all)
-      "improv people"     → IMPROV segment
-      "all of them"       → None (all)
+    brain.py saves the owner's message and fetches conversation history before
+    calling this function, so `history` already includes the current message.
 
-    Returns the matching segment dict or None for all subscribers.
-    Falls back across Gemini → OpenAI → Anthropic automatically.
+    Routing is entirely AI-driven — no regex, no DB state machine.
+    The 2-step confirmation (CLARIFY → SEND_BLAST) is enforced in the AI prompt.
     """
-    if not tenant.segments:
-        return None
+    decision = _ai_decide_owner_action(message_text, history, tenant)
+    action = decision["action"]
 
-    seg_lines = "\n".join(
-        f"- {s['name']}: {s.get('description', s['name'])}"
-        for s in tenant.segments
-    )
-    seg_names = [s["name"] for s in tenant.segments]
-
-    prompt = (
-        f"The owner of {tenant.display_name} was asked who they want to send a blast to. "
-        f"They replied: \"{reply}\"\n\n"
-        f"Available audience segments:\n{seg_lines}\n"
-        f"- ALL: send to everyone\n\n"
-        f"Which option best matches their intent? "
-        f"Reply with ONLY one word: ALL, {', '.join(seg_names)}"
+    logger.info(
+        "SMB blast: AI decision action=%s segment=%s (tenant=%s)",
+        action, decision["segment"], tenant.slug,
     )
 
-    result = smb_ai.generate(prompt).upper()
-    if not result:
-        logger.warning("SMB blast: AI audience classification returned nothing, defaulting to all")
-        return None
+    # ── Stats query ──
+    if action == "STATS":
+        return _get_audience_stats(tenant)
 
-    if result == "ALL":
-        return None
+    # ── Cancel ──
+    if action == "CANCEL":
+        return decision["reply"] or "No blast pending right now."
 
-    matched = next((s for s in tenant.segments if s["name"].upper() == result), None)
-    if matched:
-        logger.info(
-            "SMB blast: AI classified audience reply '%s' → %s (tenant=%s)",
-            reply[:40], matched["name"], tenant.slug,
-        )
-        return matched
+    # ── Help ──
+    if action == "HELP":
+        return decision["reply"] or _owner_help(tenant)
 
-    logger.warning("SMB blast: AI returned unknown audience '%s', defaulting to all", result)
-    return None
+    # ── Clarify: ask who to send to ──
+    if action == "CLARIFY":
+        return decision["reply"] or _owner_help(tenant)
 
+    # ── Send blast ──
+    if action == "SEND_BLAST":
+        blast_message = decision["blast_message"]
+        if not blast_message:
+            # Safety: AI couldn't extract the original blast message
+            logger.warning(
+                "SMB blast: SEND_BLAST action but no blast_message extracted (tenant=%s)",
+                tenant.slug,
+            )
+            return (
+                "I lost track of the message to blast — could you send it again?"
+            )
+
+        # Resolve segment
+        seg_name = decision["segment"]
+        segment = None
+        if seg_name and seg_name != "ALL" and tenant.segments:
+            segment = next(
+                (s for s in tenant.segments if s["name"].upper() == seg_name),
+                None,
+            )
+            if segment is None:
+                logger.warning(
+                    "SMB blast: AI returned unknown segment '%s', sending to all (tenant=%s)",
+                    seg_name, tenant.slug,
+                )
+
+        threading.Thread(
+            target=_run_blast_async,
+            args=(blast_message, tenant, segment, phone_number),
+            daemon=True,
+        ).start()
+
+        if segment:
+            return f"Sending to your {_seg_display_name(segment).lower()} subscribers now."
+        return "Sending to all your active subscribers now."
+
+    return _owner_help(tenant)
+
+
+# ---------------------------------------------------------------------------
+# Audience stats
+# ---------------------------------------------------------------------------
 
 def _get_audience_stats(tenant: BusinessTenant) -> str:
-    """Fetch live subscriber data and return an AI-written natural reply in the tenant's tone."""
+    """Fetch live subscriber data and return an AI-written natural reply."""
     conn = get_db_connection()
     if not conn:
         return "Sorry, can't reach the database right now — try again in a sec."
@@ -290,9 +234,12 @@ def _get_audience_stats(tenant: BusinessTenant) -> str:
                     conn, tenant.slug, seg["question_key"], seg["answers"]
                 )
                 pct = round((len(seg_subs) / total) * 100) if total else 0
-                seg_data.append(
-                    {"name": seg["name"], "description": seg.get("description", ""), "count": len(seg_subs), "pct": pct}
-                )
+                seg_data.append({
+                    "name": seg["name"],
+                    "description": seg.get("description", ""),
+                    "count": len(seg_subs),
+                    "pct": pct,
+                })
     except Exception:
         logger.exception("SMB: failed to get audience stats for tenant=%s", tenant.slug)
         return "Couldn't pull stats right now — check the logs."
@@ -305,7 +252,6 @@ def _get_audience_stats(tenant: BusinessTenant) -> str:
 def _ai_narrate_stats(total: int, seg_data: list, tenant: BusinessTenant) -> str:
     """Use AI to write a natural, tone-matched stats update for the owner."""
     if not total:
-        # Even a zero-subscriber message gets the AI treatment
         facts = f"{tenant.display_name} currently has 0 active subscribers."
     else:
         seg_lines = "\n".join(
@@ -331,7 +277,6 @@ def _ai_narrate_stats(total: int, seg_data: list, tenant: BusinessTenant) -> str
     if result:
         return result
 
-    # Hard fallback if every AI provider is down
     logger.warning("SMB: all AI providers failed for stats narration (tenant=%s)", tenant.slug)
     if not total:
         return f"No active subscribers on {tenant.display_name} yet — keep spreading the word!"
@@ -341,111 +286,30 @@ def _ai_narrate_stats(total: int, seg_data: list, tenant: BusinessTenant) -> str
     return " | ".join(lines)
 
 
-def _ai_suggest_segment(message: str, tenant: BusinessTenant) -> Optional[dict]:
-    """
-    Look at the blast message and suggest the single most relevant segment,
-    or return None if the message seems relevant to everyone.
-    Used to make the clarification question specific: 'Everyone or just standup fans?'
-    """
-    if not tenant.segments:
-        return None
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    seg_lines = "\n".join(
-        f"- {s['name']}: {s.get('description', s['name'])}"
-        for s in tenant.segments
+def _seg_display_name(seg: dict) -> str:
+    """Short, SMS-friendly label for a segment."""
+    desc = seg.get("description", seg["name"])
+    desc = desc.split("(")[0].split(",")[0].strip()
+    return desc if len(desc) <= 35 else seg["name"].title()
+
+
+def _owner_help(tenant: BusinessTenant) -> str:
+    """Fallback help text shown when the owner sends something unrecognised."""
+    return (
+        f"Hey! Here's what I can do:\n\n"
+        f"• Send a blast — just text me your message (e.g. '7pm 25% off tonight')\n"
+        f"• Audience stats — text 'stats' or 'how many subscribers'\n\n"
+        f"I'll ask who to send to before anything goes out."
     )
-    seg_names = [s["name"] for s in tenant.segments]
-
-    prompt = (
-        f"A comedy club owner wants to send this blast to their SMS subscribers:\n"
-        f"\"{message}\"\n\n"
-        f"Available audience segments:\n{seg_lines}\n"
-        f"- ALL: relevant to everyone\n\n"
-        f"Which segment is this message MOST relevant to? "
-        f"If it's equally relevant to everyone, reply ALL. "
-        f"Reply with ONLY one word: ALL, {', '.join(seg_names)}"
-    )
-
-    result = smb_ai.generate(prompt).strip().upper()
-    if not result or result == "ALL":
-        return None
-
-    matched = next((s for s in tenant.segments if s["name"].upper() == result), None)
-    return matched
-
-
-def handle_owner_blast(
-    phone_number: str, message_text: str, tenant: BusinessTenant
-) -> str:
-    """
-    Called when the registered owner sends a message to the bot.
-
-    Routing logic (in order):
-    1. Cancel command            → abort any pending blast
-    2. Audience stats query      → only when no pending blast (avoids "fans" false-triggering)
-    3. Expired pending blast     → inform owner the 10-min window lapsed
-    4. Active pending reply      → AI interprets free-text audience choice → send blast
-    5. Blast intent detected     → save as pending, ask who to send to (bullet list)
-    6. Not a blast               → show help text
-    """
-    text = message_text.strip()
-
-    # ── 2. Cancel command ──
-    if _is_cancel(text):
-        had_pending = _get_pending(phone_number)
-        _clear_pending(phone_number)
-        if had_pending:
-            return "Got it, blast cancelled. Nothing was sent."
-        return "No blast pending right now. Text me a message whenever you're ready to send one."
-
-    # Fetch pending state once — used by steps 1, 3, and 4.
-    active_pending = _get_pending(phone_number)
-
-    # ── 1. Audience stats query — only when NOT mid-blast-flow ──
-    # Must run after cancel check but before pending reply so that words like
-    # "fans" or "audience" in an audience-selection reply don't trigger stats.
-    if active_pending is None and _is_audience_query(text):
-        return _get_audience_stats(tenant)
-
-    # ── 3. Expired pending — inform the owner before doing anything else ──
-    if active_pending is None:
-        expired = _get_expired_pending(phone_number)
-        if expired and expired["tenant_slug"] == tenant.slug:
-            _clear_pending(phone_number)  # clean up the stale record
-            short = expired["message_text"][:60]
-            return (
-                f"That blast window expired — it's been over 10 minutes since you drafted "
-                f"\"{short}{'…' if len(expired['message_text']) > 60 else ''}\".\n\n"
-                f"Send me the message again to start a new one."
-            )
-
-    # ── 4. Reply to an active pending clarification (AI-interpreted free text) ──
-    if active_pending and active_pending["tenant_slug"] == tenant.slug:
-        _clear_pending(phone_number)
-        segment = _ai_classify_audience_reply(text, tenant)
-        threading.Thread(
-            target=_run_blast_async,
-            args=(active_pending["message_text"], tenant, segment, phone_number),
-            daemon=True,
-        ).start()
-        if segment:
-            return f"Sending to your {_seg_display_name(segment).lower()} subscribers now."
-        return "Sending to all your active subscribers now."
-
-    # ── 5. New blast intent — set pending and ask who to send to ──
-    if _looks_like_blast_intent(text, tenant):
-        _set_pending(phone_number, text, tenant)
-        return _format_audience_question(text, tenant)
-
-    # ── 6. Not a blast — show help ──
-    return _owner_help(tenant)
 
 
 # ---------------------------------------------------------------------------
 # Async broadcast worker
 # ---------------------------------------------------------------------------
-
-
 
 def _run_blast_async(
     message_text: str,
@@ -525,7 +389,6 @@ def _twilio_send_smb(to: str, body: str, from_number: str) -> bool:
         logger.error("SMB blast: tenant has no sms_number configured — refusing to send")
         return False
 
-    # Firewall: only send from a number that belongs to an SMB tenant.
     from app.smb.tenants import get_registry
     if not get_registry().is_smb_number(from_number):
         logger.error(
@@ -554,7 +417,6 @@ def _twilio_send_smb(to: str, body: str, from_number: str) -> bool:
 # ---------------------------------------------------------------------------
 # Message formatting
 # ---------------------------------------------------------------------------
-
 
 def _ai_enhance_blast(owner_message: str, tenant: BusinessTenant) -> str:
     """
@@ -586,7 +448,6 @@ def _ai_enhance_blast(owner_message: str, tenant: BusinessTenant) -> str:
     if enhanced:
         return enhanced
 
-    # Plain fallback if all AI providers are down
     logger.warning("SMB blast: AI enhancement failed for tenant=%s, using raw message", tenant.slug)
     msg = owner_message.strip()
     if tenant.display_name.lower() not in msg.lower():
