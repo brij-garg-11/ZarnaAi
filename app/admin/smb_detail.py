@@ -456,8 +456,7 @@ def render_client_detail(slug: str) -> str:
 def smb_client_detail_view(slug: str):
     """Flask view for /admin/smb/<slug>."""
     from flask import Response
-    auth = require_admin_auth_response()
-    if auth:
-        return auth
+    if not check_admin_auth():
+        return require_admin_auth_response()
     html = render_client_detail(slug)
     return Response(html, mimetype="text/html")
