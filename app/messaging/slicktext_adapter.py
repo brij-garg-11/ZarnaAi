@@ -253,29 +253,60 @@ class SlickTextAdapter:
             return self._send_v1(to_number, body)
         return self._send_v2(to_number, body)
 
+    def _lookup_contact_id_v1(self, to_number: str) -> Optional[str]:
+        """
+        Look up a SlickText v1 contact ID by phone number.
+        Returns the contact id string if found, else None.
+        Sending by contact ID avoids the 'adding contacts via API' limit.
+        """
+        try:
+            resp = requests.get(
+                f"{_V1_BASE}/contacts",
+                params={"number": to_number, "limit": 1},
+                auth=(self._public_key, self._private_key),
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                contacts = resp.json().get("contacts") or []
+                if contacts:
+                    return str(contacts[0]["id"])
+        except requests.RequestException as e:
+            logger.warning(f"SlickText v1 contact lookup error: {e}")
+        return None
+
     def _send_v1(self, to_number: str, body: str) -> bool:
         if not self._public_key or not self._private_key:
             logger.warning("SlickText v1 API keys not configured — reply not sent.")
             return False
-        if not self._textword_id:
-            logger.warning("SLICKTEXT_TEXTWORD_ID not configured — reply not sent.")
-            return False
 
-        url  = f"{_V1_BASE}/messages/"
-        data = {
-            "action":   "SEND",
-            "textword": self._textword_id,
-            "number":   to_number,
-            "body":     body,
-        }
+        url = f"{_V1_BASE}/messages/"
+        auth = (self._public_key, self._private_key)
+
+        # Prefer sending by contact ID — avoids SlickText's 'adding contacts via API' limit.
+        # Fall back to textword+number if the contact isn't in SlickText yet.
+        contact_id = self._lookup_contact_id_v1(to_number)
+        if contact_id:
+            data = {
+                "action":  "SEND",
+                "contact": contact_id,
+                "body":    body,
+            }
+            logger.info(f"Sending v1 reply to {to_number} via contact_id={contact_id}")
+        else:
+            if not self._textword_id:
+                logger.warning("SLICKTEXT_TEXTWORD_ID not configured and contact not found — reply not sent.")
+                return False
+            data = {
+                "action":   "SEND",
+                "textword": self._textword_id,
+                "number":   to_number,
+                "body":     body,
+            }
+            logger.info(f"Sending v1 reply to {to_number} via textword fallback (contact not found in SlickText)")
+
         for attempt in range(3):
             try:
-                resp = requests.post(
-                    url,
-                    data=data,
-                    auth=(self._public_key, self._private_key),
-                    timeout=10,
-                )
+                resp = requests.post(url, data=data, auth=auth, timeout=10)
                 if resp.status_code == 200:
                     logger.info(f"Reply sent to {to_number} (v1)")
                     return True
