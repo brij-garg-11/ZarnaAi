@@ -299,10 +299,18 @@ def render_smb_tab() -> str:
                 </div>
               </div>
 
-              <div style="display:flex;justify-content:space-between;font-size:11px;color:#4b5563;margin-top:10px">
-                <span>First signup: {_fmt_dt(c["first_signup"])}</span>
-                <span>Last signup: {_fmt_dt(c["last_signup"])}</span>
-                <span>Last blast: {_fmt_dt(c["last_blast"])}</span>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
+                <div style="font-size:11px;color:#4b5563">
+                  First signup: {_fmt_dt(c["first_signup"])} &nbsp;·&nbsp;
+                  Last signup: {_fmt_dt(c["last_signup"])} &nbsp;·&nbsp;
+                  Last blast: {_fmt_dt(c["last_blast"])}
+                </div>
+                <a href="/admin/smb/{_esc(t.slug)}"
+                   style="font-size:12px;color:#a78bfa;font-weight:600;
+                          background:#1e1b4b;padding:6px 14px;border-radius:6px;
+                          text-decoration:none;white-space:nowrap">
+                  View Details →
+                </a>
               </div>
             </div>""")
 
@@ -416,5 +424,8 @@ def render_smb_tab() -> str:
 
 def register_smb_routes(bp):
     """Register SMB-specific admin routes on the admin blueprint."""
-    # No additional routes needed yet — the tab renders via the main /admin route.
-    pass
+    from app.admin.smb_detail import smb_client_detail_view
+
+    @bp.route("/admin/smb/<slug>")
+    def smb_detail(slug):
+        return smb_client_detail_view(slug)
