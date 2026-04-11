@@ -140,6 +140,18 @@ def _conversational_reply(
     Injects relevant club knowledge and recent conversation history.
     Falls back across Gemini → OpenAI → Anthropic automatically.
     """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    venue_tz = getattr(tenant, "timezone", "America/New_York")
+    try:
+        local_tz = ZoneInfo(venue_tz)
+    except Exception:
+        local_tz = ZoneInfo("America/New_York")
+    now_local = datetime.now(local_tz)
+    today_label = now_local.strftime("%A, %B %-d, %Y")   # e.g. "Saturday, April 11, 2026"
+    time_label  = now_local.strftime("%-I:%M %p %Z")     # e.g. "7:13 PM EDT"
+
     context = knowledge.build_context(tenant, message_text)
 
     prompt = (
@@ -147,11 +159,17 @@ def _conversational_reply(
         f"Your tone: {tenant.tone}. "
         f"Keep replies very short (1-3 sentences), warm, and on-brand. "
         f"Never mention competitors. Do not use emojis unless the subscriber uses them first.\n\n"
+        f"TODAY IS {today_label}. Current time: {time_label}.\n\n"
     )
     if context:
         prompt += (
-            f"Use the following facts to answer accurately. "
-            f"Only include what's relevant to the question — do not dump all the info.\n"
+            f"Use ONLY the following facts to answer. "
+            f"Be strictly accurate about show dates and times — never guess, infer, or mix up days. "
+            f"The schedule below uses day labels (Tonight, Tomorrow, Monday Apr 14, etc.) — "
+            f"match those labels exactly to the question. "
+            f"If asked about 'tonight' or 'today', only mention shows listed under 'Tonight'. "
+            f"If asked about 'tomorrow', only mention shows listed under 'Tomorrow'. "
+            f"Only include what is relevant to the question.\n"
             f"{context}\n\n"
         )
     # Add recent conversation so the AI can follow the thread
