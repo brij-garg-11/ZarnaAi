@@ -1,9 +1,12 @@
 """
-Tests for app/smb/onboarding.py and app/smb/storage.py
+Tests for app/smb/onboarding.py
 
-Pure logic tests run without any DB.
-Integration tests mock get_db_connection() with an in-memory SQLite
-database that mirrors the smb_subscribers / smb_preferences schema.
+Covers the simplified passive-preference onboarding model:
+  - Any first message from an unknown number → subscriber created, welcome returned
+  - All subsequent messages → None (brain handles them)
+  - If step 0 and message looks like an answer → preference save attempted in background
+  - _welcome_and_question formatting
+  - _looks_like_question_or_request detection
 """
 
 import sys
@@ -11,16 +14,12 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import sqlite3
-import unittest
 from unittest.mock import patch, MagicMock
-from dataclasses import dataclass, field
-from typing import Optional
 
 from app.smb.onboarding import (
-    is_signup_keyword,
     get_onboarding_reply,
-    _ask_question,
-    _completion_message,
+    _welcome_and_question,
+    _looks_like_question_or_request,
 )
 from app.smb.tenants import BusinessTenant
 
@@ -29,7 +28,7 @@ from app.smb.tenants import BusinessTenant
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_tenant(keyword="COMEDY", questions=None):
+def _make_tenant(keyword="COMEDY"):
     return BusinessTenant(
         slug="west_side_comedy",
         display_name="West Side Comedy Club",
@@ -38,21 +37,20 @@ def _make_tenant(keyword="COMEDY", questions=None):
         owner_phone=None,
         keyword=keyword,
         tone="fun and casual",
+        welcome_message="Thanks for joining West Side Comedy Club! Really glad you're here.",
+        signup_question="Who's a comedian you love, or what kind of comedy are you into?",
         value_content_topics=["comedy tips"],
-        signup_questions=questions or [
-            "What kind of comedy do you love? Reply: STANDUP, IMPROV, or BOTH",
-            "How often do you want to hear from us? Reply: WEEKLY or DEALS ONLY",
-        ],
         blast_triggers=["opening", "deal"],
+        segments=[
+            {"name": "STANDUP", "question_key": "0", "answers": ["STANDUP", "BOTH"],
+             "description": "Standup comedy fans"},
+            {"name": "IMPROV", "question_key": "0", "answers": ["IMPROV", "BOTH"],
+             "description": "Improv fans"},
+        ],
     )
 
 
 def _make_sqlite_conn():
-    """
-    In-memory SQLite connection with the SMB schema.
-    Uses ? placeholders (SQLite) so storage functions need adapting —
-    we use a thin cursor wrapper to translate %s → ? for tests.
-    """
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute("""
@@ -60,7 +58,7 @@ def _make_sqlite_conn():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             phone_number TEXT NOT NULL,
             tenant_slug  TEXT NOT NULL,
-            status       TEXT NOT NULL DEFAULT 'onboarding',
+            status       TEXT NOT NULL DEFAULT 'active',
             onboarding_step INTEGER NOT NULL DEFAULT 0,
             created_at   TEXT DEFAULT (datetime('now')),
             updated_at   TEXT DEFAULT (datetime('now')),
@@ -82,11 +80,6 @@ def _make_sqlite_conn():
 
 
 class _SQLiteConnWrapper:
-    """
-    Wraps a SQLite connection so it works with our storage functions.
-    Translates psycopg2-style %s placeholders → SQLite ? placeholders,
-    and exposes a context manager for transaction blocks.
-    """
     def __init__(self, conn):
         self._conn = conn
 
@@ -113,28 +106,24 @@ class _SQLiteConnWrapper:
 class _SQLiteCursorWrapper:
     def __init__(self, cur):
         self._cur = cur
-        self.lastrowid = None
+        self.rowcount = 0
 
     def execute(self, sql, params=()):
         sql = sql.replace("%s", "?").replace("NOW()", "datetime('now')")
-        # Rewrite Postgres UPSERT for smb_preferences → SQLite INSERT OR REPLACE
         if "ON CONFLICT (subscriber_id, question_key)" in sql:
             sql = (
                 "INSERT OR REPLACE INTO smb_preferences (subscriber_id, question_key, answer) "
                 "VALUES (?, ?, ?)"
             )
-        # Rewrite Postgres ON CONFLICT ... DO NOTHING → SQLite INSERT OR IGNORE INTO
         if "ON CONFLICT (phone_number, tenant_slug) DO NOTHING" in sql:
             sql = sql.replace("ON CONFLICT (phone_number, tenant_slug) DO NOTHING", "")
             sql = sql.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
         self._cur.execute(sql, params)
-        self.lastrowid = self._cur.lastrowid
+        self.rowcount = self._cur.rowcount
 
     def fetchone(self):
         row = self._cur.fetchone()
-        if row is None:
-            return None
-        return tuple(row)
+        return tuple(row) if row is not None else None
 
     def fetchall(self):
         return [tuple(r) for r in self._cur.fetchall()]
@@ -146,201 +135,160 @@ class _SQLiteCursorWrapper:
         pass
 
 
-# ---------------------------------------------------------------------------
-# Pure logic tests (no DB)
-# ---------------------------------------------------------------------------
-
-def test_is_signup_keyword_match():
-    tenant = _make_tenant(keyword="COMEDY")
-    assert is_signup_keyword("COMEDY", tenant) is True
-    assert is_signup_keyword("comedy", tenant) is True
-    assert is_signup_keyword("  Comedy  ", tenant) is True
-    print("✓ is_signup_keyword matches case-insensitively")
-
-
-def test_is_signup_keyword_no_match():
-    tenant = _make_tenant(keyword="COMEDY")
-    assert is_signup_keyword("hello", tenant) is False
-    assert is_signup_keyword("COMEDY CLUB", tenant) is False
-    assert is_signup_keyword("", tenant) is False
-    print("✓ is_signup_keyword rejects non-keyword messages")
-
-
-def test_is_signup_keyword_no_keyword_set():
-    tenant = _make_tenant(keyword=None)
-    assert is_signup_keyword("COMEDY", tenant) is False
-    print("✓ is_signup_keyword returns False when tenant has no keyword")
-
-
-def test_ask_question_returns_first_question():
-    tenant = _make_tenant()
-    reply = _ask_question(tenant, 0)
-    assert "STANDUP" in reply or "comedy" in reply.lower()
-    print("✓ _ask_question returns correct question for step 0")
-
-
-def test_ask_question_returns_second_question():
-    tenant = _make_tenant()
-    reply = _ask_question(tenant, 1)
-    assert "WEEKLY" in reply or "often" in reply.lower()
-    print("✓ _ask_question returns correct question for step 1")
-
-
-def test_ask_question_past_end_returns_completion():
-    tenant = _make_tenant()
-    reply = _ask_question(tenant, 99)
-    assert "all set" in reply.lower() or "welcome" in reply.lower()
-    print("✓ _ask_question returns completion message when past last question")
-
-
-def test_completion_message_contains_business_name():
-    tenant = _make_tenant()
-    msg = _completion_message(tenant)
-    assert "West Side Comedy Club" in msg
-    assert "STOP" in msg
-    print("✓ completion message contains business name and STOP instruction")
-
-
-# ---------------------------------------------------------------------------
-# Integration tests — mock DB with SQLite wrapper
-# ---------------------------------------------------------------------------
-
 def _make_wrapped_conn():
     return _SQLiteConnWrapper(_make_sqlite_conn())
 
 
 def _patch_db(conn_wrapper):
-    """Return a context manager that patches get_db_connection to return our wrapper."""
     return patch("app.smb.onboarding.get_db_connection", return_value=conn_wrapper)
 
 
-def test_signup_creates_subscriber_and_asks_first_question():
+# ---------------------------------------------------------------------------
+# Pure logic: _welcome_and_question
+# ---------------------------------------------------------------------------
+
+def test_welcome_includes_signup_question():
+    tenant = _make_tenant()
+    reply = _welcome_and_question(tenant)
+    assert tenant.welcome_message in reply
+    assert tenant.signup_question in reply
+    print("✓ welcome reply contains both welcome message and signup question")
+
+
+def test_welcome_fallback_when_no_signup_question():
+    tenant = _make_tenant()
+    tenant.signup_question = ""
+    reply = _welcome_and_question(tenant)
+    assert "West Side Comedy Club" in reply or "Welcome" in reply
+    print("✓ welcome fallback works when no signup_question set")
+
+
+# ---------------------------------------------------------------------------
+# Pure logic: _looks_like_question_or_request
+# ---------------------------------------------------------------------------
+
+def test_question_mark_detected():
+    assert _looks_like_question_or_request("What time is the show?") is True
+    print("✓ trailing ? detected as question")
+
+
+def test_question_word_detected():
+    assert _looks_like_question_or_request("what time do you open") is True
+    assert _looks_like_question_or_request("Is there parking nearby") is True
+    assert _looks_like_question_or_request("Do you have a kids menu") is True
+    print("✓ question-starting words detected")
+
+
+def test_preference_answer_not_detected_as_question():
+    assert _looks_like_question_or_request("standup comedy") is False
+    assert _looks_like_question_or_request("I love improv") is False
+    assert _looks_like_question_or_request("Bill Burr") is False
+    print("✓ preference answers not misclassified as questions")
+
+
+# ---------------------------------------------------------------------------
+# Integration: new subscriber flow
+# ---------------------------------------------------------------------------
+
+def test_new_subscriber_gets_welcome():
+    """Any first text from unknown number → subscriber created, welcome returned."""
     tenant = _make_tenant()
     wrapped = _make_wrapped_conn()
     with _patch_db(wrapped):
-        reply = get_onboarding_reply("+15550001111", "COMEDY", tenant)
+        with patch("app.smb.onboarding.threading.Thread"):  # suppress vCard MMS thread
+            reply = get_onboarding_reply("+15550001111", "hey there", tenant)
     assert reply is not None
-    assert "STANDUP" in reply or "comedy" in reply.lower()
-    # Verify subscriber was created in DB
+    assert "West Side Comedy Club" in reply or "comedy" in reply.lower()
+    print("✓ new subscriber gets welcome message")
+
+
+def test_new_subscriber_created_in_db():
+    """First message creates subscriber row with status=active, step=0."""
+    tenant = _make_tenant()
+    wrapped = _make_wrapped_conn()
+    with _patch_db(wrapped):
+        with patch("app.smb.onboarding.threading.Thread"):
+            get_onboarding_reply("+15550001111", "COMEDY", tenant)
     sub = wrapped._conn.execute(
         "SELECT status, onboarding_step FROM smb_subscribers WHERE phone_number=?",
         ("+15550001111",)
     ).fetchone()
     assert sub is not None
-    assert sub[0] == "onboarding"
+    assert sub[0] == "active"
     assert sub[1] == 0
-    print("✓ signup keyword creates subscriber and returns first question")
+    print("✓ new subscriber created with status=active, step=0")
 
 
-def test_already_subscribed_returns_friendly_message():
+def test_existing_subscriber_step_0_returns_none():
+    """Step-0 subscriber (hasn't answered yet) → None so brain takes over."""
     tenant = _make_tenant()
     wrapped = _make_wrapped_conn()
-    # Pre-insert an active subscriber
     wrapped._conn.execute(
         "INSERT INTO smb_subscribers (phone_number, tenant_slug, status, onboarding_step) "
-        "VALUES (?, ?, 'active', 2)",
+        "VALUES (?, ?, 'active', 0)",
         ("+15550001111", "west_side_comedy")
     )
     wrapped._conn.commit()
     with _patch_db(wrapped):
-        reply = get_onboarding_reply("+15550001111", "COMEDY", tenant)
-    assert reply is not None
-    assert "already subscribed" in reply.lower()
-    print("✓ already-active subscriber gets friendly 'already subscribed' message")
-
-
-def test_first_answer_saves_preference_and_asks_second_question():
-    tenant = _make_tenant()
-    wrapped = _make_wrapped_conn()
-    # Pre-insert subscriber at step 0 (onboarding)
-    wrapped._conn.execute(
-        "INSERT INTO smb_subscribers (phone_number, tenant_slug, status, onboarding_step) "
-        "VALUES (?, ?, 'onboarding', 0)",
-        ("+15550001111", "west_side_comedy")
-    )
-    wrapped._conn.commit()
-    with _patch_db(wrapped):
-        reply = get_onboarding_reply("+15550001111", "STANDUP", tenant)
-    assert reply is not None
-    assert "WEEKLY" in reply or "often" in reply.lower()
-    # Preference saved
-    pref = wrapped._conn.execute(
-        "SELECT answer FROM smb_preferences WHERE question_key=?", ("0",)
-    ).fetchone()
-    assert pref is not None
-    assert pref[0] == "STANDUP"
-    # Step advanced
-    sub = wrapped._conn.execute(
-        "SELECT onboarding_step, status FROM smb_subscribers WHERE phone_number=?",
-        ("+15550001111",)
-    ).fetchone()
-    assert sub[0] == 1
-    assert sub[1] == "onboarding"
-    print("✓ first answer saved and second question returned")
-
-
-def test_final_answer_completes_onboarding():
-    tenant = _make_tenant()
-    wrapped = _make_wrapped_conn()
-    # Pre-insert subscriber at step 1 (last question)
-    wrapped._conn.execute(
-        "INSERT INTO smb_subscribers (phone_number, tenant_slug, status, onboarding_step) "
-        "VALUES (?, ?, 'onboarding', 1)",
-        ("+15550001111", "west_side_comedy")
-    )
-    wrapped._conn.commit()
-    with _patch_db(wrapped):
-        reply = get_onboarding_reply("+15550001111", "WEEKLY", tenant)
-    assert reply is not None
-    assert "all set" in reply.lower() or "welcome" in reply.lower()
-    # Status is now active
-    sub = wrapped._conn.execute(
-        "SELECT status FROM smb_subscribers WHERE phone_number=?",
-        ("+15550001111",)
-    ).fetchone()
-    assert sub[0] == "active"
-    print("✓ final answer marks subscriber active and returns completion message")
-
-
-def test_non_subscriber_non_keyword_returns_none():
-    """Regular message from unknown number → not an onboarding message."""
-    tenant = _make_tenant()
-    wrapped = _make_wrapped_conn()
-    with _patch_db(wrapped):
-        reply = get_onboarding_reply("+15550001111", "what time do you open?", tenant)
+        reply = get_onboarding_reply("+15550001111", "I love standup", tenant)
     assert reply is None
-    print("✓ non-subscriber non-keyword returns None (routes to main brain)")
+    print("✓ step-0 subscriber returns None (brain handles reply)")
 
 
-def test_full_onboarding_happy_path():
-    """Walk through the complete onboarding: keyword → q1 → q2 → done."""
+def test_existing_active_subscriber_returns_none():
+    """Active subscriber past onboarding → None so brain takes over."""
     tenant = _make_tenant()
     wrapped = _make_wrapped_conn()
-
+    wrapped._conn.execute(
+        "INSERT INTO smb_subscribers (phone_number, tenant_slug, status, onboarding_step) "
+        "VALUES (?, ?, 'active', 1)",
+        ("+15550001111", "west_side_comedy")
+    )
+    wrapped._conn.commit()
     with _patch_db(wrapped):
-        r1 = get_onboarding_reply("+15550009999", "COMEDY", tenant)
-    assert r1 is not None and ("STANDUP" in r1 or "comedy" in r1.lower())
+        reply = get_onboarding_reply("+15550001111", "what time is the show?", tenant)
+    assert reply is None
+    print("✓ active subscriber (step > 0) returns None")
 
+
+def test_no_db_connection_returns_none():
+    """DB failure on new subscriber → None, no crash."""
+    tenant = _make_tenant()
+    with patch("app.smb.onboarding.get_db_connection", return_value=None):
+        reply = get_onboarding_reply("+15550001111", "COMEDY", tenant)
+    assert reply is None
+    print("✓ DB failure returns None gracefully")
+
+
+def test_step_0_question_does_not_trigger_passive_save():
+    """If step-0 subscriber sends a question, preference save thread is NOT started."""
+    tenant = _make_tenant()
+    wrapped = _make_wrapped_conn()
+    wrapped._conn.execute(
+        "INSERT INTO smb_subscribers (phone_number, tenant_slug, status, onboarding_step) "
+        "VALUES (?, ?, 'active', 0)",
+        ("+15550001111", "west_side_comedy")
+    )
+    wrapped._conn.commit()
     with _patch_db(wrapped):
-        r2 = get_onboarding_reply("+15550009999", "BOTH", tenant)
-    assert r2 is not None and ("WEEKLY" in r2 or "often" in r2.lower())
+        with patch("app.smb.onboarding.threading.Thread") as mock_thread:
+            get_onboarding_reply("+15550001111", "what shows are on this weekend?", tenant)
+    mock_thread.assert_not_called()
+    print("✓ question from step-0 subscriber does not trigger preference save thread")
 
+
+def test_step_0_answer_triggers_passive_save_thread():
+    """If step-0 subscriber sends an answer (not a question), save thread IS started."""
+    tenant = _make_tenant()
+    wrapped = _make_wrapped_conn()
+    wrapped._conn.execute(
+        "INSERT INTO smb_subscribers (phone_number, tenant_slug, status, onboarding_step) "
+        "VALUES (?, ?, 'active', 0)",
+        ("+15550001111", "west_side_comedy")
+    )
+    wrapped._conn.commit()
     with _patch_db(wrapped):
-        r3 = get_onboarding_reply("+15550009999", "WEEKLY", tenant)
-    assert r3 is not None and ("all set" in r3.lower() or "welcome" in r3.lower())
-
-    sub = wrapped._conn.execute(
-        "SELECT status, onboarding_step FROM smb_subscribers WHERE phone_number=?",
-        ("+15550009999",)
-    ).fetchone()
-    assert sub[0] == "active"
-    assert sub[1] == 2
-
-    prefs = wrapped._conn.execute(
-        "SELECT question_key, answer FROM smb_preferences ORDER BY question_key"
-    ).fetchall()
-    assert len(prefs) == 2
-    assert prefs[0][1] == "BOTH"
-    assert prefs[1][1] == "WEEKLY"
-
-    print("✓ full happy path: keyword → q1 → q2 → active, both preferences saved")
+        with patch("app.smb.onboarding.threading.Thread") as mock_thread:
+            get_onboarding_reply("+15550001111", "I love standup comedy", tenant)
+    mock_thread.assert_called_once()
+    print("✓ answer from step-0 subscriber triggers background preference save")

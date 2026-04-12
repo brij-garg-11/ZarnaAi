@@ -56,6 +56,8 @@ LOG_REPLY_METRICS = os.getenv("LOG_REPLY_METRICS", "on").strip().lower() not in 
 #   SLICKTEXT_PUBLIC_KEY   Dashboard → My Account → API → Public Key
 #   SLICKTEXT_PRIVATE_KEY  Dashboard → My Account → API → Private Key
 #   SLICKTEXT_TEXTWORD_ID  Dashboard → Textwords → (your keyword) → ID in the URL
+#   SLICKTEXT_CONTACT_TEXTWORDS  Comma-separated `id[:label]` list for subscriber syncs
+#                               e.g. "3185378:zarna,4633842:hello"
 #
 # New accounts (created after Jan 22, 2025, dashboard URL = app.slicktext.com) → v2
 #   SLICKTEXT_API_KEY      Dashboard → Settings → API & Webhooks → API Keys
@@ -65,6 +67,10 @@ LOG_REPLY_METRICS = os.getenv("LOG_REPLY_METRICS", "on").strip().lower() not in 
 SLICKTEXT_PUBLIC_KEY  = os.getenv("SLICKTEXT_PUBLIC_KEY", "")
 SLICKTEXT_PRIVATE_KEY = os.getenv("SLICKTEXT_PRIVATE_KEY", "")
 SLICKTEXT_TEXTWORD_ID = os.getenv("SLICKTEXT_TEXTWORD_ID", "")
+SLICKTEXT_CONTACT_TEXTWORDS = os.getenv(
+    "SLICKTEXT_CONTACT_TEXTWORDS",
+    "3185378:zarna,4633842:hello",
+)
 
 # v2 (new accounts)
 SLICKTEXT_API_KEY  = os.getenv("SLICKTEXT_API_KEY", "")

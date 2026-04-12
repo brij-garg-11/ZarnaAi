@@ -9,114 +9,74 @@ from app.admin_auth import (
     get_db_connection,
     require_admin_auth_response,
 )
+from app.config import SLICKTEXT_CONTACT_TEXTWORDS
+from app.messaging.slicktext_contacts import (
+    fetch_unique_contacts,
+    parse_textword_config,
+    sync_contacts_to_postgres,
+)
 
 
 def register_action_routes(bp):
     """Attach all /admin/actions/* routes to the given blueprint."""
 
+    @bp.route("/admin/actions/sync-slicktext-contacts", methods=["POST"])
     @bp.route("/admin/actions/sync-slicktext-dates", methods=["POST"])
     def sync_slicktext_dates():
-        """One-off job: backfill contacts.created_at from SlickText subscribedDate."""
+        """Manual SlickText subscriber sync into contacts, with optional dry-run."""
         if not check_admin_auth():
             return require_admin_auth_response()
 
-        import time
-
-        import requests as _req
-
         pub  = os.getenv("SLICKTEXT_PUBLIC_KEY", "")
         priv = os.getenv("SLICKTEXT_PRIVATE_KEY", "")
+        database_url = os.getenv("DATABASE_URL", "")
         if not pub or not priv:
             return Response("SLICKTEXT_PUBLIC_KEY / SLICKTEXT_PRIVATE_KEY not set", status=503, mimetype="text/plain")
+        if not database_url:
+            return Response("DATABASE_URL not configured", status=503, mimetype="text/plain")
 
         conn = get_db_connection()
         if not conn:
             return Response("DB not configured", status=503, mimetype="text/plain")
 
-        _BACKFILL_THRESHOLD = "2026-03-26"
-        _TEXTWORDS = [(3185378, "zarna"), (4633842, "hello")]
-        _PAGE_SIZE = 200
-
-        def _parse_date(raw):
-            if not raw:
-                return None
-            try:
-                datetime.strptime(raw.strip(), "%Y-%m-%d %H:%M:%S")
-                return raw.strip()
-            except ValueError:
-                return None
+        dry_run = (request.args.get("dry_run") or "").strip().lower() in {"1", "true", "yes", "on"}
+        textwords_raw = (request.args.get("textwords") or SLICKTEXT_CONTACT_TEXTWORDS).strip()
+        try:
+            textwords = parse_textword_config(textwords_raw)
+        except ValueError as exc:
+            conn.close()
+            return Response(f"Invalid textword config: {exc}", status=400, mimetype="text/plain")
 
         def _stream():
-            yield "SlickText → Postgres date sync starting…\n\n"
-            seen = {}
-            for tw_id, label in _TEXTWORDS:
-                yield f"Fetching textword '{label}' (id={tw_id})…\n"
-                offset, total = 0, None
-                while True:
-                    resp = _req.get(
-                        "https://api.slicktext.com/v1/contacts/",
-                        params={"textword": tw_id, "limit": _PAGE_SIZE, "offset": offset},
-                        auth=(pub, priv),
-                        timeout=30,
-                    )
-                    if resp.status_code != 200:
-                        yield f"  API error {resp.status_code}: {resp.text[:200]}\n"
-                        break
-                    data = resp.json()
-                    if total is None:
-                        total = data["meta"]["total"]
-                        yield f"  Total subscribers: {total:,}\n"
-                    contacts = data.get("contacts", [])
-                    if not contacts:
-                        break
-                    for c in contacts:
-                        number = (c.get("number") or "").strip()
-                        if number and number not in seen:
-                            seen[number] = _parse_date(c.get("subscribedDate"))
-                    offset += _PAGE_SIZE
-                    yield f"  Fetched {min(offset, total):,} / {total:,}\n"
-                    if offset >= total:
-                        break
-                    time.sleep(0.1)
-
-            yield f"\nTotal unique contacts: {len(seen):,}\n"
-            yield "Upserting into Postgres…\n"
-
-            inserted = skipped = 0
+            yield "SlickText → Postgres contact sync starting...\n\n"
+            yield f"Mode: {'dry-run' if dry_run else 'write'}\n"
+            yield f"Textwords: {', '.join(f'{label}:{textword_id}' for textword_id, label in textwords)}\n"
             try:
-                with conn:
-                    with conn.cursor() as cur:
-                        for number, sub_date in seen.items():
-                            if sub_date:
-                                cur.execute(
-                                    """
-                                    INSERT INTO contacts (phone_number, source, created_at)
-                                    VALUES (%s, 'slicktext', %s::timestamp)
-                                    ON CONFLICT (phone_number) DO UPDATE
-                                      SET created_at = EXCLUDED.created_at
-                                    WHERE contacts.created_at::date >= %s::date
-                                    """,
-                                    (number, sub_date, _BACKFILL_THRESHOLD),
-                                )
-                            else:
-                                cur.execute(
-                                    "INSERT INTO contacts (phone_number, source) VALUES (%s, 'slicktext') ON CONFLICT DO NOTHING",
-                                    (number,),
-                                )
-                            if cur.rowcount > 0:
-                                inserted += 1
-                            else:
-                                skipped += 1
+                contacts, fetch_stats = fetch_unique_contacts(
+                    public_key=pub,
+                    private_key=priv,
+                    textwords=textwords,
+                )
+                yield f"\nFetched rows         : {fetch_stats.fetched:,}\n"
+                yield f"Unique contacts      : {fetch_stats.unique:,}\n"
+                yield f"With subscribedDate  : {fetch_stats.with_dates:,}\n"
+
+                sync_stats = sync_contacts_to_postgres(
+                    database_url=database_url,
+                    contacts=contacts,
+                    dry_run=dry_run,
+                )
             except Exception as exc:
-                conn.rollback()
                 yield f"\nDB error: {exc}\n"
                 conn.close()
                 return
             conn.close()
 
-            yield f"\nInserted / updated : {inserted:,}\n"
-            yield f"Already correct    : {skipped:,}\n"
-            yield "\nDone. Reload the Insights tab to see updated pre-bot metrics.\n"
+            yield f"\nInserted            : {sync_stats.inserted:,}\n"
+            yield f"Updated             : {sync_stats.updated:,}\n"
+            yield f"Skipped             : {sync_stats.skipped:,}\n"
+            yield f"Total contacts      : {sync_stats.total_contacts_after:,}\n"
+            yield "\nDone. Reload the operator blast screen or Insights tab to verify counts.\n"
 
         return Response(_stream(), mimetype="text/plain")
 

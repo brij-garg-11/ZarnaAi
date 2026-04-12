@@ -35,6 +35,7 @@ class BusinessTenant:
     welcome_message: str = ""
     signup_question: str = ""          # single open-ended onboarding question
     signup_questions: list = field(default_factory=list)  # legacy multi-step (fallback)
+    value_content_topics: list = field(default_factory=list)
     blast_triggers: list = field(default_factory=list)
     segments: list = field(default_factory=list)
     logo_url: str = ""
@@ -82,6 +83,7 @@ def _load_tenant(path: Path) -> Optional[BusinessTenant]:
         welcome_message=cfg.get("welcome_message", ""),
         signup_question=cfg.get("signup_question", ""),
         signup_questions=cfg.get("signup_questions", []),
+        value_content_topics=cfg.get("value_content_topics", []),
         blast_triggers=cfg.get("blast_triggers", []),
         segments=cfg.get("segments", []),
         logo_url=cfg.get("logo_url", ""),
