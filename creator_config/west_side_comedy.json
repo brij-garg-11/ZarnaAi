@@ -57,7 +57,28 @@
 
   "segments": [
     {
-      "_note": "question_key '0' = step 0 = 'What kind of comedy do you love most?'",
+      "_note": "Auto-tagged at signup from area code — no user input required",
+      "name": "LOCAL",
+      "description": "NYC/NJ area subscribers — best for same-day and last-minute blasts",
+      "question_key": "geo",
+      "answers": ["LOCAL"]
+    },
+    {
+      "_note": "Auto-tagged at signup from area code — no user input required",
+      "name": "OUT_OF_TOWN",
+      "description": "Out-of-town subscribers — best for plan-ahead weekend content",
+      "question_key": "geo",
+      "answers": ["OUT_OF_TOWN"]
+    },
+    {
+      "_note": "Auto-tagged after 3+ inbound messages — no user input required",
+      "name": "ENGAGED",
+      "description": "High-engagement subscribers — most likely to act on any blast",
+      "question_key": "engagement",
+      "answers": ["HIGH"]
+    },
+    {
+      "_note": "question_key '0' = comedy-type preference (classified from open-ended signup answer)",
       "name": "STANDUP",
       "description": "Standup comedy fans",
       "question_key": "0",
@@ -72,17 +93,18 @@
       "hint_keywords": ["improv", "improvisation", "improv show", "improv night", "improv jam"]
     },
     {
-      "_note": "question_key '1' = step 1 = 'How often do you want to hear from us?'",
-      "name": "DEALS",
-      "description": "Deals-only subscribers (send only when there's an offer)",
-      "question_key": "1",
-      "answers": ["DEALS ONLY"]
+      "_note": "Auto-tagged when subscriber asks about tickets or a specific show",
+      "name": "TICKET_BUYERS",
+      "description": "Has shown ticket purchase intent — great for last-few-seats urgency blasts",
+      "question_key": "intent_tickets",
+      "answers": ["YES"]
     },
     {
-      "name": "WEEKLY",
-      "description": "Weekly content subscribers",
-      "question_key": "1",
-      "answers": ["WEEKLY"]
+      "_note": "Auto-tagged when subscriber asks about deals or discounts",
+      "name": "DEAL_SEEKERS",
+      "description": "Has asked about deals or discounts",
+      "question_key": "intent_deals",
+      "answers": ["YES"]
     }
   ]
 }

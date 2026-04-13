@@ -195,8 +195,9 @@ def test_new_subscriber_gets_welcome():
     tenant = _make_tenant()
     wrapped = _make_wrapped_conn()
     with _patch_db(wrapped):
-        with patch("app.smb.onboarding.threading.Thread"):  # suppress vCard MMS thread
-            reply = get_onboarding_reply("+15550001111", "hey there", tenant)
+        with patch("app.smb.onboarding.threading.Thread"):  # suppress vCard + geo threads
+            with patch("app.smb.onboarding.tagging.tag_geo"):
+                reply = get_onboarding_reply("+15550001111", "hey there", tenant)
     assert reply is not None
     assert "West Side Comedy Club" in reply or "comedy" in reply.lower()
     print("✓ new subscriber gets welcome message")
@@ -208,7 +209,8 @@ def test_new_subscriber_created_in_db():
     wrapped = _make_wrapped_conn()
     with _patch_db(wrapped):
         with patch("app.smb.onboarding.threading.Thread"):
-            get_onboarding_reply("+15550001111", "COMEDY", tenant)
+            with patch("app.smb.onboarding.tagging.tag_geo"):
+                get_onboarding_reply("+15550001111", "COMEDY", tenant)
     sub = wrapped._conn.execute(
         "SELECT status, onboarding_step FROM smb_subscribers WHERE phone_number=?",
         ("+15550001111",)
@@ -258,6 +260,20 @@ def test_no_db_connection_returns_none():
         reply = get_onboarding_reply("+15550001111", "COMEDY", tenant)
     assert reply is None
     print("✓ DB failure returns None gracefully")
+
+
+def test_geo_tagged_at_subscriber_creation():
+    """New subscriber signup triggers tag_geo with their phone number."""
+    tenant = _make_tenant()
+    wrapped = _make_wrapped_conn()
+    with _patch_db(wrapped):
+        with patch("app.smb.onboarding.threading.Thread"):
+            with patch("app.smb.onboarding.tagging.tag_geo") as mock_tag:
+                get_onboarding_reply("+12125550001", "hey", tenant)
+    mock_tag.assert_called_once()
+    call_args = mock_tag.call_args
+    assert call_args[0][2] == "+12125550001"  # phone_number is 3rd positional arg
+    print("✓ tag_geo called with correct phone number at signup")
 
 
 def test_step_0_question_does_not_trigger_passive_save():

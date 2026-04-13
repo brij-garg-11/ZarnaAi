@@ -21,11 +21,12 @@ Returns a reply string or None (None = message should be silently dropped).
 """
 
 import logging
+import threading
 from typing import Optional
 
 from app.admin_auth import get_db_connection
 from app.smb import ai as smb_ai
-from app.smb import blast, onboarding, knowledge
+from app.smb import blast, onboarding, knowledge, tagging
 from app.smb import storage as smb_storage
 from app.smb.tenants import BusinessTenant, get_registry
 
@@ -96,6 +97,15 @@ class SMBBrain:
 
         # Persist inbound message and fetch recent history before generating reply
         history = _save_and_get_history(from_number, tenant, message_text, role="user")
+
+        # Update engagement / intent tags in the background (never blocks the reply)
+        inbound_count = sum(1 for m in history if m["role"] == "user")
+        threading.Thread(
+            target=tagging.tag_engagement_async,
+            args=(from_number, subscriber["id"], tenant.slug, message_text, inbound_count),
+            daemon=True,
+        ).start()
+
         reply = _conversational_reply(message_text, tenant, history=history)
 
         # Persist the bot's reply

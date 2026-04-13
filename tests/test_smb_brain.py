@@ -134,9 +134,10 @@ def test_active_subscriber_routes_to_conversational_reply():
         with patch("app.smb.brain.onboarding.get_onboarding_reply", return_value=None):
             with patch("app.smb.brain._get_subscriber", return_value=fake_subscriber):
                 with patch("app.smb.brain._save_and_get_history", return_value=[]):
-                    with patch("app.smb.brain._persist_message"):
-                        with patch("app.smb.brain._conversational_reply", return_value="Great question!") as mock_conv:
-                            result = brain.handle_message(SUBSCRIBER, SMB_NUMBER, "what time do you open?")
+                    with patch("app.smb.brain.threading.Thread"):  # suppress tagging thread
+                        with patch("app.smb.brain._persist_message"):
+                            with patch("app.smb.brain._conversational_reply", return_value="Great question!") as mock_conv:
+                                result = brain.handle_message(SUBSCRIBER, SMB_NUMBER, "what time do you open?")
 
     mock_conv.assert_called_once_with("what time do you open?", tenant, history=[])
     assert result == "Great question!"
@@ -151,7 +152,8 @@ def test_unknown_sender_gets_signup_nudge():
         mock_reg.return_value = _mock_registry(tenant=tenant, is_owner=False)
         with patch("app.smb.brain.onboarding.get_onboarding_reply", return_value=None):
             with patch("app.smb.brain._get_subscriber", return_value=None):
-                result = brain.handle_message(UNKNOWN, SMB_NUMBER, "hey")
+                with patch("app.smb.brain.threading.Thread"):
+                    result = brain.handle_message(UNKNOWN, SMB_NUMBER, "hey")
 
     assert result is not None
     assert "COMEDY" in result or "subscribe" in result.lower()

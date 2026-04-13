@@ -24,6 +24,7 @@ from app.admin_auth import get_db_connection
 from app.smb import ai as smb_ai
 from app.smb.tenants import BusinessTenant
 from app.smb import storage as smb_storage
+from app.smb import tagging
 
 logger = logging.getLogger(__name__)
 
@@ -66,11 +67,13 @@ def get_onboarding_reply(
 
             if subscriber is None:
                 # Brand-new subscriber — subscribe them immediately
-                smb_storage.create_subscriber(conn, phone_number, tenant.slug)
+                new_sub = smb_storage.create_subscriber(conn, phone_number, tenant.slug)
                 logger.info(
                     "SMB new subscriber: tenant=%s phone=...%s",
                     tenant.slug, phone_number[-4:] if phone_number else "?",
                 )
+                if new_sub:
+                    tagging.tag_geo(conn, new_sub["id"], phone_number)
                 threading.Thread(
                     target=_send_vcard_mms,
                     args=(phone_number, tenant),
