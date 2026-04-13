@@ -27,6 +27,7 @@ from app.analytics.blueprint import analytics_bp
 from app.live_shows.blueprint import live_shows_bp
 from app.smb.blueprint import smb_bp
 from app.smb.portal import portal_bp
+from app.smb.portal_interactive import portal_interactive_bp
 from app.live_shows.signup import LiveShowSignupResult, try_live_show_signup
 from app.live_shows.quiz import get_active_quiz_for_fan, record_quiz_response, build_quiz_context
 from app.live_shows.blast_context import get_active_blast_context, build_blast_context_prompt
@@ -126,6 +127,7 @@ app.register_blueprint(analytics_bp)
 app.register_blueprint(live_shows_bp)
 app.register_blueprint(smb_bp)
 app.register_blueprint(portal_bp)
+app.register_blueprint(portal_interactive_bp)
 
 brain     = create_brain()
 slicktext = create_slicktext_adapter()

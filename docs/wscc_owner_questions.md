@@ -1,45 +1,41 @@
 # Questions for WSCC Owner
 
-Open questions to resolve before or shortly after launch. Each one affects how the bot responds or how the platform is configured.
+A short list of open questions before we go fully live. Most only need a one-sentence answer.
 
 ---
 
-## Platform Setup
+## Must-Haves Before Launch
 
-- **Owner phone number** — What phone number should receive blast confirmations and be able to send blasts? (Currently set to a placeholder.)
-- **SMS keyword** — What word should people text to join? (e.g., COMEDY, WSCC, CLUB). Currently TBD in config.
+1. **SMS keyword** — What word should fans text to join? (e.g., COMEDY, WSCC, CLUB)
 
----
+2. **Owner phone number** — What number should receive blast confirmations and be able to trigger blasts from the operator tool?
 
-## Ticket & Refund Policy
+3. **Refund policy** — The ticket confirmation email says "no refunds or exchanges." In practice, you've offered show credits in genuine hardship cases (e.g., medical emergency). Should the bot say:
+   - (A) Strictly no refunds, full stop
+   - (B) No refunds, but email us and we'll do our best
+   - We've defaulted to option B — just confirm that's right.
 
-- **Exact refund policy** — The purchase confirmation email says "no refunds or exchanges." But in practice, Felicia has offered credits to a future show when a guest genuinely couldn't attend (e.g., medical emergency). Should the bot say:
-  - (A) Strictly no refunds, full stop
-  - (B) No refunds, but email us and we'll do our best
-  - Currently set to option B — confirm this is right.
-
-- **Lost/missing tickets — self-serve?** — Can guests look up their own tickets on the website? If there's a self-serve ticket lookup page, we can link directly to it instead of always routing to email.
+4. **Lost/missing tickets** — Is there a self-serve ticket lookup page on the website? If so, we can link fans directly to it instead of routing them to email every time.
 
 ---
 
-## Private Events
+## Bot Knowledge Gaps
 
-- **Private events contact** — The bot currently says "contact us through westsidecomedyclub.com" for private events and group bookings. Is there a direct email, phone number, or form we should send people to instead?
+5. **Parking** — Any nearby garage or paid lot you'd recommend? Currently the bot only mentions street parking.
 
----
+6. **Accessible entrance** — Is the venue wheelchair accessible? Any specific entrance or instructions for guests?
 
-## Bot Knowledge
+7. **Age policy** — Policy says 16+ with a guardian, 18+ alone. Is that a hard rule, or handled case-by-case at the door?
 
-- **Parking** — Is there a parking garage nearby or any paid lot you'd recommend? (Currently only mentions street parking.)
-- **Accessible entrance** — Is the venue wheelchair accessible? Any specific entrance to use?
-- **Age policy clarification** — Policy says 16+ with a guardian, 18+ without. Is there a hard cutoff, or is it case-by-case at the door?
-- **Notable performers** — Any updates to the list of past headliners you want highlighted? (Currently: Bill Burr, Ronnie Chieng, Jessica Kirson.)
-- **Pre-show dinner reservations** — Guests have asked about coming 45 min early for dinner. How does this work? Do they email ahead, reserve on the website, or just show up early? Is there a specific time they should arrive?
+8. **Pre-show dinner** — Guests often ask about arriving early for dinner. Do they email ahead, book on the website, or just show up? What's the recommended arrival time?
+
+9. **Private events** — The bot currently points people to westsidecomedyclub.com for group bookings. Is there a direct email, form, or phone number we should send them to instead?
 
 ---
 
-## Future / Nice to Have
+## Nice to Have (No Rush)
 
-- **Ticket price range** — Currently the bot just sends people to the website. Once you're comfortable sharing a price range publicly, we can add it.
-- **Happy hour or food specials** — Any recurring food/drink deals worth the bot knowing about?
-- **Show cancellation process** — When a show is cancelled or changed (like the merged Saturday show), is there a standard process for notifying guests? Could be a good blast use case.
+- **Ticket price range** — Once you're comfortable sharing a ballpark publicly, the bot can answer this directly instead of sending everyone to the site.
+- **Food/drink specials** — Any recurring happy hour or deal worth the bot knowing about?
+- **Show cancellation process** — When a show is cancelled or rescheduled, is there a standard way you notify guests? Could be a good automated blast use case.
+- **Headliner highlights** — Any updates to the past headliners list? (Currently: Bill Burr, Ronnie Chieng, Jessica Kirson.)
