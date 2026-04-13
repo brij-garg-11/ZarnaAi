@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 portal_interactive_bp = Blueprint("client_portal", __name__)
 
 
+@portal_interactive_bp.route("/portal-ping")
+def portal_ping():
+    return "portal_interactive_bp is registered and working", 200
+
+
 # ---------------------------------------------------------------------------
 # Auth helpers
 # ---------------------------------------------------------------------------
