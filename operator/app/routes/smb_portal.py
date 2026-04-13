@@ -321,115 +321,239 @@ def _blast_async(phones: list, message_text: str, audience_type: str):
 
 
 # ---------------------------------------------------------------------------
-# Shared CSS
+# Shared CSS — WSCC brand: black, cream, red
 # ---------------------------------------------------------------------------
 
 _STYLE = """
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=Inter:wght@400;500;600&display=swap');
+
+  :root {
+    --black:   #0a0a0a;
+    --panel:   #111111;
+    --border:  #222222;
+    --border2: #2e2e2e;
+    --cream:   #f5efe0;
+    --cream2:  #c8b99a;
+    --red:     #c0392b;
+    --red-dim: #7f2218;
+    --muted:   #666666;
+    --gold:    #d4a853;
+  }
+
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         background: #0f172a; color: #e2e8f0; min-height: 100vh; }
-  a { color: #818cf8; text-decoration: none; }
-  a:hover { text-decoration: underline; }
+  body { font-family: 'Inter', -apple-system, sans-serif;
+         background: var(--black); color: var(--cream); min-height: 100vh; }
+  a { color: var(--gold); text-decoration: none; }
+  a:hover { color: var(--cream); }
 
-  /* Nav */
-  .nav { background: #1e293b; border-bottom: 1px solid #334155;
-         display: flex; align-items: center; gap: 8px; padding: 0 24px; height: 56px; }
-  .nav-logo { width: 32px; height: 32px; border-radius: 6px; object-fit: cover; }
-  .nav-title { font-weight: 700; font-size: 15px; color: #f1f5f9; flex: 1; }
-  .nav-links { display: flex; gap: 4px; }
-  .nav-links a { padding: 6px 12px; border-radius: 6px; font-size: 13px;
-                 color: #94a3b8; transition: background .15s; }
-  .nav-links a:hover, .nav-links a.active { background: #334155; color: #e2e8f0;
-                                             text-decoration: none; }
-  .nav-logout { padding: 6px 12px; border-radius: 6px; font-size: 13px;
-                color: #64748b; transition: color .15s; }
-  .nav-logout:hover { color: #e2e8f0; text-decoration: none; }
+  /* ── Nav ─────────────────────────────────────────────── */
+  .nav {
+    background: #000;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 28px; height: 60px;
+  }
+  .nav-logo { width: 36px; height: 36px; border-radius: 6px; object-fit: cover; }
+  .nav-title {
+    font-family: 'Playfair Display', serif;
+    font-size: 16px; font-weight: 700;
+    color: var(--cream); flex: 1;
+    letter-spacing: .02em;
+  }
+  .nav-links { display: flex; gap: 2px; }
+  .nav-links a {
+    padding: 7px 14px; border-radius: 4px; font-size: 13px; font-weight: 500;
+    color: var(--muted); transition: color .15s, background .15s;
+    letter-spacing: .02em;
+  }
+  .nav-links a:hover { color: var(--cream); background: var(--panel); }
+  .nav-links a.active {
+    color: var(--cream); background: var(--panel);
+    border-bottom: 2px solid var(--red);
+  }
+  .nav-logout {
+    padding: 7px 14px; font-size: 13px; color: var(--muted);
+    transition: color .15s;
+  }
+  .nav-logout:hover { color: var(--cream); }
 
-  /* Page wrapper */
-  .page { max-width: 960px; margin: 0 auto; padding: 32px 24px; }
-  h1 { font-size: 22px; font-weight: 700; color: #f1f5f9; margin-bottom: 4px; }
-  .page-sub { color: #64748b; font-size: 14px; margin-bottom: 28px; }
+  /* ── Page ─────────────────────────────────────────────── */
+  .page { max-width: 980px; margin: 0 auto; padding: 36px 28px; }
+  h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: 28px; font-weight: 900;
+    color: var(--cream); margin-bottom: 4px;
+    letter-spacing: -.01em;
+  }
+  h2 {
+    font-family: 'Playfair Display', serif;
+    font-size: 18px; font-weight: 700; color: var(--cream);
+  }
+  .page-sub { color: var(--muted); font-size: 14px; margin-bottom: 32px; }
 
-  /* Stats row */
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 32px; }
-  .stat-card { background: #1e293b; border: 1px solid #334155; border-radius: 12px;
-               padding: 20px; }
-  .stat-label { font-size: 12px; color: #64748b; text-transform: uppercase;
-                letter-spacing: .5px; margin-bottom: 6px; }
-  .stat-value { font-size: 28px; font-weight: 700; color: #f1f5f9; }
+  /* ── Stats row ────────────────────────────────────────── */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1px; background: var(--border);
+    border: 1px solid var(--border); border-radius: 10px;
+    overflow: hidden; margin-bottom: 32px;
+  }
+  .stat-card {
+    background: var(--panel); padding: 22px 20px;
+  }
+  .stat-label {
+    font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;
+  }
+  .stat-value { font-size: 30px; font-weight: 700; color: var(--cream); }
 
-  /* Cards / panels */
-  .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px;
-          padding: 24px; margin-bottom: 24px; }
-  .card-title { font-size: 15px; font-weight: 600; color: #f1f5f9; margin-bottom: 16px; }
+  /* ── Cards ────────────────────────────────────────────── */
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 24px; margin-bottom: 24px;
+  }
+  .card-title {
+    font-size: 13px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 1px;
+    margin-bottom: 18px;
+  }
 
-  /* Table */
+  /* ── Table ────────────────────────────────────────────── */
   .tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
-  .tbl th { text-align: left; color: #64748b; font-weight: 500; font-size: 12px;
-             text-transform: uppercase; letter-spacing: .4px;
-             padding: 0 12px 10px; border-bottom: 1px solid #334155; }
-  .tbl td { padding: 12px; border-bottom: 1px solid #1e293b; color: #cbd5e1; }
+  .tbl th {
+    text-align: left; color: var(--muted); font-weight: 500; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .8px;
+    padding: 0 14px 12px; border-bottom: 1px solid var(--border);
+  }
+  .tbl td {
+    padding: 13px 14px; border-bottom: 1px solid var(--border);
+    color: var(--cream2);
+  }
   .tbl tr:last-child td { border-bottom: none; }
-  .tbl tr:hover td { background: #0f172a; }
-  .tbl-empty { padding: 32px; text-align: center; color: #475569; font-size: 14px; }
+  .tbl tr:hover td { background: rgba(255,255,255,.03); color: var(--cream); }
+  .tbl td a { color: var(--cream); font-weight: 500; }
+  .tbl td a:hover { color: var(--gold); }
+  .tbl-empty {
+    padding: 40px; text-align: center; color: var(--muted);
+    font-size: 14px; font-style: italic;
+  }
 
-  /* Badge */
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11px;
-           font-weight: 600; }
-  .badge-green { background: #14532d; color: #4ade80; }
-  .badge-gray  { background: #1e293b; color: #64748b; border: 1px solid #334155; }
+  /* ── Badge ────────────────────────────────────────────── */
+  .badge {
+    display: inline-block; padding: 3px 9px; border-radius: 3px;
+    font-size: 10px; font-weight: 700; letter-spacing: .8px;
+    text-transform: uppercase;
+  }
+  .badge-green { background: rgba(74,222,128,.12); color: #4ade80; border: 1px solid rgba(74,222,128,.25); }
+  .badge-gray  { background: var(--panel); color: var(--muted); border: 1px solid var(--border); }
 
-  /* Forms */
-  .form-group { margin-bottom: 16px; }
-  label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 6px; }
+  /* ── Forms ────────────────────────────────────────────── */
+  .form-group { margin-bottom: 18px; }
+  label { display: block; font-size: 12px; font-weight: 600; color: var(--muted);
+          text-transform: uppercase; letter-spacing: .8px; margin-bottom: 8px; }
   input[type=text], input[type=date], input[type=password], textarea, select {
-    width: 100%; background: #0f172a; border: 1px solid #334155; border-radius: 8px;
-    color: #e2e8f0; font-size: 14px; padding: 10px 12px;
-    transition: border-color .15s; outline: none; }
-  input:focus, textarea:focus, select:focus { border-color: #818cf8; }
-  textarea { resize: vertical; min-height: 100px; }
+    width: 100%; background: #000; border: 1px solid var(--border2);
+    border-radius: 6px; color: var(--cream); font-size: 14px;
+    font-family: 'Inter', sans-serif;
+    padding: 11px 14px; transition: border-color .15s; outline: none; }
+  input:focus, textarea:focus, select:focus { border-color: var(--red); }
+  textarea { resize: vertical; min-height: 110px; }
+  ::placeholder { color: #444; }
 
-  /* Buttons */
-  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 18px;
-         border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
-         border: none; transition: opacity .15s; }
-  .btn:hover { opacity: .85; text-decoration: none; }
-  .btn-primary { background: #6366f1; color: #fff; }
-  .btn-sm { padding: 6px 12px; font-size: 12px; }
-  .btn-outline { background: transparent; border: 1px solid #334155; color: #94a3b8; }
-  .btn-danger { background: #7f1d1d; color: #fca5a5; }
+  /* ── Buttons ──────────────────────────────────────────── */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 11px 20px; border-radius: 6px; font-size: 13px;
+    font-weight: 600; font-family: 'Inter', sans-serif;
+    cursor: pointer; border: none; transition: opacity .15s, transform .1s;
+    letter-spacing: .02em;
+  }
+  .btn:hover { opacity: .88; transform: translateY(-1px); text-decoration: none; }
+  .btn:active { transform: translateY(0); }
+  .btn-primary { background: var(--red); color: #fff; }
+  .btn-sm { padding: 7px 13px; font-size: 12px; }
+  .btn-outline {
+    background: transparent;
+    border: 1px solid var(--border2); color: var(--muted);
+  }
+  .btn-outline:hover { border-color: var(--cream2); color: var(--cream); }
 
-  /* Audience cards */
-  .audience-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
-  .audience-card { background: #0f172a; border: 2px solid #334155; border-radius: 10px;
-                   padding: 14px; cursor: pointer; transition: border-color .15s; display: block; }
+  /* ── Audience cards ───────────────────────────────────── */
+  .audience-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 10px;
+  }
+  .audience-card {
+    background: #000; border: 1px solid var(--border2);
+    border-radius: 8px; padding: 16px; cursor: pointer;
+    transition: border-color .15s, background .15s; display: block;
+  }
   .audience-card input[type=radio] { display: none; }
-  .audience-card.selected, .audience-card:has(input:checked) { border-color: #6366f1; background: #1e1b4b; }
-  .aud-icon { font-size: 20px; margin-bottom: 6px; }
-  .aud-name { font-size: 13px; font-weight: 600; color: #e2e8f0; margin-bottom: 2px; }
-  .aud-count { font-size: 12px; color: #64748b; }
-  .aud-desc { font-size: 11px; color: #475569; margin-top: 3px; }
+  .audience-card.selected,
+  .audience-card:has(input:checked) {
+    border-color: var(--red); background: rgba(192,57,43,.08);
+  }
+  .aud-icon { font-size: 22px; margin-bottom: 8px; }
+  .aud-name { font-size: 13px; font-weight: 600; color: var(--cream); margin-bottom: 3px; }
+  .aud-count { font-size: 12px; color: var(--muted); }
+  .aud-desc { font-size: 11px; color: #444; margin-top: 4px; }
 
-  /* Alert */
-  .alert { padding: 12px 16px; border-radius: 8px; font-size: 14px; margin-bottom: 16px; }
-  .alert-success { background: #14532d; color: #4ade80; border: 1px solid #166534; }
-  .alert-error   { background: #7f1d1d; color: #fca5a5; border: 1px solid #991b1b; }
-  .alert-info    { background: #1e3a5f; color: #93c5fd; border: 1px solid #1e40af; }
+  /* ── Alert ────────────────────────────────────────────── */
+  .alert {
+    padding: 13px 16px; border-radius: 6px;
+    font-size: 14px; margin-bottom: 20px;
+  }
+  .alert-success { background: rgba(74,222,128,.08); color: #4ade80;
+                   border: 1px solid rgba(74,222,128,.2); }
+  .alert-error   { background: rgba(192,57,43,.12); color: #f87171;
+                   border: 1px solid rgba(192,57,43,.3); }
 
-  /* Login */
-  .login-wrap { display: flex; align-items: center; justify-content: center;
-                min-height: 100vh; padding: 24px; }
-  .login-box { background: #1e293b; border: 1px solid #334155; border-radius: 16px;
-               padding: 40px; width: 100%; max-width: 380px; text-align: center; }
-  .login-logo { width: 64px; height: 64px; border-radius: 12px; object-fit: cover;
-                margin: 0 auto 16px; display: block; }
-  .login-box h1 { font-size: 20px; margin-bottom: 6px; }
-  .login-box p  { color: #64748b; font-size: 14px; margin-bottom: 24px; }
+  /* ── Login ────────────────────────────────────────────── */
+  .login-wrap {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; padding: 24px;
+    background: #000;
+  }
+  .login-box {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 44px 40px;
+    width: 100%; max-width: 380px; text-align: center;
+  }
+  .login-logo {
+    width: 80px; height: 80px; border-radius: 10px; object-fit: cover;
+    margin: 0 auto 20px; display: block;
+    border: 1px solid var(--border);
+  }
+  .login-box h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: 22px; margin-bottom: 6px;
+  }
+  .login-box p { color: var(--muted); font-size: 14px; margin-bottom: 28px; }
+  .login-divider {
+    height: 1px; background: var(--border); margin: 20px 0;
+  }
 
-  /* Two-col layout */
-  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-  @media (max-width: 640px) { .two-col { grid-template-columns: 1fr; } }
+  /* ── Two-col ──────────────────────────────────────────── */
+  .two-col { display: grid; grid-template-columns: 1.4fr 1fr; gap: 24px; }
+  @media (max-width: 680px) {
+    .two-col { grid-template-columns: 1fr; }
+    .nav-title { display: none; }
+  }
+
+  /* ── Red accent line on cards ─────────────────────────── */
+  .card-accent { border-top: 3px solid var(--red); }
+
+  /* ── Code keyword pill ────────────────────────────────── */
+  .keyword {
+    font-size: 13px; font-family: 'Inter', monospace;
+    background: rgba(192,57,43,.15); color: var(--red);
+    border: 1px solid rgba(192,57,43,.3);
+    padding: 2px 8px; border-radius: 4px; font-weight: 700;
+    letter-spacing: .05em;
+  }
 </style>
 """
 
@@ -447,8 +571,8 @@ def _nav(active: str) -> str:
     logout_url = url_for("wscc_portal.portal_logout")
     return f"""
     <nav class="nav">
-      <img src="{_LOGO_URL}" class="nav-logo" alt="">
-      <span class="nav-title">{_DISPLAY_NAME}</span>
+      <img src="{_LOGO_URL}" class="nav-logo" alt="WSCC">
+      <span class="nav-title">West Side Comedy Club</span>
       <div class="nav-links">{items}</div>
       <a href="{logout_url}" class="nav-logout">Sign out</a>
     </nav>"""
@@ -479,20 +603,23 @@ def portal_login():
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in — {_DISPLAY_NAME}</title>{_STYLE}</head>
+<title>Sign in — West Side Comedy Club</title>{_STYLE}</head>
 <body>
 <div class="login-wrap">
   <div class="login-box">
-    <img src="{_LOGO_URL}" class="login-logo" alt="">
-    <h1>{_DISPLAY_NAME}</h1>
-    <p>Sign in to your dashboard</p>
+    <img src="{_LOGO_URL}" class="login-logo" alt="WSCC">
+    <h1>West Side Comedy Club</h1>
+    <p>Owner dashboard — sign in to continue</p>
+    <div class="login-divider"></div>
     {error_html}
     <form method="post">
-      <div class="form-group" style="margin-bottom:16px;text-align:left">
+      <div class="form-group" style="text-align:left;margin-bottom:20px">
         <label>Password</label>
-        <input type="password" name="password" autofocus>
+        <input type="password" name="password" autofocus placeholder="Enter your password">
       </div>
-      <button type="submit" class="btn btn-primary" style="width:100%">Sign in</button>
+      <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;font-size:14px;padding:13px">
+        Sign in →
+      </button>
     </form>
   </div>
 </div>
@@ -516,20 +643,19 @@ def portal_dashboard():
 
     latest_str = latest_at.strftime("%-m/%-d/%Y") if latest_at else "—"
 
-    shows_html = ""
     if active_shows:
         rows = ""
         for s in active_shows[:5]:
             rows += f"""
             <tr>
               <td><a href="{url_for('wscc_portal.portal_show_detail', show_id=s['id'])}">{s['name']}</a></td>
-              <td>{s['show_date']}</td>
-              <td><code style="font-size:13px;background:#0f172a;padding:2px 6px;border-radius:4px">{s['checkin_keyword']}</code></td>
-              <td><strong>{s['checkin_count']}</strong></td>
+              <td style="color:var(--muted)">{s['show_date']}</td>
+              <td><span class="keyword">{s['checkin_keyword']}</span></td>
+              <td style="font-weight:600;color:var(--cream)">{s['checkin_count']}</td>
             </tr>"""
         shows_html = f"""
-        <div class="card">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div class="card card-accent">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
             <span class="card-title" style="margin:0">Active Shows</span>
             <a href="{url_for('wscc_portal.portal_shows')}" class="btn btn-sm btn-outline">All shows →</a>
           </div>
@@ -540,65 +666,76 @@ def portal_dashboard():
         </div>"""
     else:
         shows_html = f"""
-        <div class="card" style="text-align:center;padding:32px">
-          <div style="font-size:32px;margin-bottom:12px">🎭</div>
-          <div style="color:#94a3b8;margin-bottom:16px">No active shows yet. Create one so fans can check in!</div>
-          <a href="{url_for('wscc_portal.portal_shows')}" class="btn btn-primary">Create first show</a>
+        <div class="card" style="text-align:center;padding:40px 32px;border-style:dashed">
+          <div style="font-size:40px;margin-bottom:14px">🎭</div>
+          <div style="color:var(--muted);margin-bottom:20px;font-size:15px">
+            No active shows yet.<br>Create one and fans text a keyword to check in at the door.
+          </div>
+          <a href="{url_for('wscc_portal.portal_shows')}" class="btn btn-primary">Create your first show</a>
         </div>"""
 
-    blasts_html = ""
     if recent_blasts:
         rows = ""
         for b in recent_blasts:
-            sent_str = b["sent_at"].strftime("%-m/%-d %I:%M %p") if b.get("sent_at") else "—"
-            preview = (b.get("message_text") or "")[:60]
-            if len(b.get("message_text") or "") > 60:
+            sent_str = b["sent_at"].strftime("%-m/%-d  %-I:%M %p") if b.get("sent_at") else "—"
+            preview = (b.get("message_text") or "")[:65]
+            if len(b.get("message_text") or "") > 65:
                 preview += "…"
-            rows += f"<tr><td>{sent_str}</td><td>{preview}</td><td>{b.get('audience_type','')}</td><td>{b.get('recipient_count') or 0}</td></tr>"
+            rows += f"""
+            <tr>
+              <td style="color:var(--muted);white-space:nowrap">{sent_str}</td>
+              <td>{preview}</td>
+              <td style="color:var(--muted)">{b.get('audience_type','')}</td>
+              <td style="font-weight:600;color:var(--cream)">{b.get('recipient_count') or 0}</td>
+            </tr>"""
         blasts_html = f"""
-        <div class="card">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div class="card card-accent">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
             <span class="card-title" style="margin:0">Recent Blasts</span>
             <a href="{url_for('wscc_portal.portal_blast')}" class="btn btn-sm btn-primary">Send blast →</a>
           </div>
           <table class="tbl">
-            <thead><tr><th>Sent</th><th>Message</th><th>Audience</th><th>Recipients</th></tr></thead>
+            <thead><tr><th>Sent</th><th>Message</th><th>Audience</th><th>Sent to</th></tr></thead>
             <tbody>{rows}</tbody>
           </table>
         </div>"""
     else:
         blasts_html = f"""
-        <div class="card" style="text-align:center;padding:32px">
-          <div style="font-size:32px;margin-bottom:12px">📱</div>
-          <div style="color:#94a3b8;margin-bottom:16px">No blasts sent yet.</div>
+        <div class="card" style="text-align:center;padding:40px 32px;border-style:dashed">
+          <div style="font-size:40px;margin-bottom:14px">📱</div>
+          <div style="color:var(--muted);margin-bottom:20px;font-size:15px">
+            No blasts sent yet. Text your audience directly from here.
+          </div>
           <a href="{url_for('wscc_portal.portal_blast')}" class="btn btn-primary">Send your first blast</a>
         </div>"""
+
+    total_checkins = sum(s["checkin_count"] for s in shows)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Dashboard — {_DISPLAY_NAME}</title>{_STYLE}</head>
+<title>Dashboard — West Side Comedy Club</title>{_STYLE}</head>
 <body>
 {_nav("dashboard")}
 <div class="page">
   <h1>Dashboard</h1>
-  <p class="page-sub">Welcome back, Felicia 👋</p>
+  <p class="page-sub">Welcome back, Felicia</p>
   <div class="stats">
     <div class="stat-card">
-      <div class="stat-label">Total Subscribers</div>
+      <div class="stat-label">Subscribers</div>
       <div class="stat-value">{total_subs:,}</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Latest Subscriber</div>
-      <div class="stat-value" style="font-size:18px">{latest_str}</div>
+      <div class="stat-label">Latest Join</div>
+      <div class="stat-value" style="font-size:20px;margin-top:4px">{latest_str}</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Total Shows</div>
       <div class="stat-value">{len(shows)}</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Blasts Sent</div>
-      <div class="stat-value">{len(recent_blasts)}</div>
+      <div class="stat-label">Total Check-ins</div>
+      <div class="stat-value">{total_checkins:,}</div>
     </div>
   </div>
   {shows_html}
@@ -654,41 +791,41 @@ def portal_shows():
         rows += f"""
         <tr>
           <td><a href="{url_for('wscc_portal.portal_show_detail', show_id=s['id'])}">{s['name']}</a></td>
-          <td>{s['show_date']}</td>
-          <td><code style="font-size:13px;background:#0f172a;padding:2px 6px;border-radius:4px">{s['checkin_keyword']}</code></td>
+          <td style="color:var(--muted)">{s['show_date']}</td>
+          <td><span class="keyword">{s['checkin_keyword']}</span></td>
           <td>{status_badge}</td>
-          <td><strong>{s['checkin_count']}</strong></td>
-          <td><a href="{url_for('wscc_portal.portal_show_detail', show_id=s['id'])}" class="btn btn-sm btn-outline">View</a></td>
+          <td style="font-weight:600;color:var(--cream)">{s['checkin_count']}</td>
+          <td><a href="{url_for('wscc_portal.portal_show_detail', show_id=s['id'])}" class="btn btn-sm btn-outline">View →</a></td>
         </tr>"""
 
     table_html = f"""
     <table class="tbl">
-      <thead><tr><th>Show Name</th><th>Date</th><th>Check-in Word</th><th>Status</th><th>Check-ins</th><th></th></tr></thead>
+      <thead><tr><th>Show</th><th>Date</th><th>Check-in Word</th><th>Status</th><th>Check-ins</th><th></th></tr></thead>
       <tbody>
-        {rows if rows else '<tr><td colspan="6" class="tbl-empty">No shows yet. Create one below!</td></tr>'}
+        {rows if rows else '<tr><td colspan="6" class="tbl-empty">No shows yet — create your first one →</td></tr>'}
       </tbody>
     </table>"""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Shows — {_DISPLAY_NAME}</title>{_STYLE}</head>
+<title>Shows — West Side Comedy Club</title>{_STYLE}</head>
 <body>
 {_nav("shows")}
 <div class="page">
   <h1>Shows</h1>
-  <p class="page-sub">Create a show and give it a check-in keyword. Fans text that word to check in at the door.</p>
+  <p class="page-sub">Create a show and give it a check-in keyword. Fans text that word at the door to check in.</p>
   {alert_html}
   <div class="two-col" style="align-items:start">
     <div>
-      <div class="card">
+      <div class="card card-accent">
         <div class="card-title">All Shows</div>
         {table_html}
       </div>
     </div>
     <div>
-      <div class="card">
-        <div class="card-title">Create a New Show</div>
+      <div class="card" style="border-color:var(--border2)">
+        <div class="card-title">New Show</div>
         <form method="post">
           <div class="form-group">
             <label>Show Name</label>
@@ -700,13 +837,13 @@ def portal_shows():
           </div>
           <div class="form-group">
             <label>Check-in Keyword</label>
-            <input type="text" name="checkin_keyword" placeholder="e.g. STANDUP or COMEDY24"
-                   pattern="[A-Za-z0-9]+" title="Letters only, no spaces" required>
-            <div style="font-size:12px;color:#475569;margin-top:4px">
-              Fans text this word to check in. Keep it short and memorable.
+            <input type="text" name="checkin_keyword" placeholder="e.g. FRIDAY or APR18"
+                   pattern="[A-Za-z0-9]+" title="Letters/numbers only, no spaces" required>
+            <div style="font-size:12px;color:var(--muted);margin-top:6px;line-height:1.5">
+              Fans text this word to check in. Short and simple is best — like <strong style="color:var(--cream2)">FRIDAY</strong> or <strong style="color:var(--cream2)">APR18</strong>.
             </div>
           </div>
-          <button type="submit" class="btn btn-primary" style="width:100%">Create Show</button>
+          <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center">Create Show</button>
         </form>
       </div>
     </div>
@@ -734,18 +871,20 @@ def portal_show_detail(show_id: int):
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{show['name']} — {_DISPLAY_NAME}</title>{_STYLE}</head>
+<title>{show['name']} — West Side Comedy Club</title>{_STYLE}</head>
 <body>
 {_nav("shows")}
 <div class="page">
-  <div style="margin-bottom:8px"><a href="{url_for('wscc_portal.portal_shows')}" style="font-size:13px;color:#64748b">← Back to shows</a></div>
+  <div style="margin-bottom:12px">
+    <a href="{url_for('wscc_portal.portal_shows')}" style="font-size:13px;color:var(--muted)">← Back to shows</a>
+  </div>
   <h1>{show['name']}</h1>
-  <p class="page-sub">{show['show_date']} · {status_badge}</p>
+  <p class="page-sub">{show['show_date']} &nbsp;·&nbsp; {status_badge}</p>
 
   <div class="stats">
     <div class="stat-card">
       <div class="stat-label">Check-in Keyword</div>
-      <div class="stat-value" style="font-size:22px;font-family:monospace">{show['checkin_keyword']}</div>
+      <div class="stat-value" style="font-size:24px;letter-spacing:.05em;color:var(--gold)">{show['checkin_keyword']}</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Total Check-ins</div>
@@ -753,14 +892,14 @@ def portal_show_detail(show_id: int):
     </div>
   </div>
 
-  <div class="card">
+  <div class="card card-accent">
     <div class="card-title">How Check-ins Work</div>
-    <p style="color:#94a3b8;font-size:14px;line-height:1.6">
-      Fans text <strong style="color:#e2e8f0">{show['checkin_keyword']}</strong> to your WSCC number when they arrive.
-      The system automatically records their check-in.<br><br>
-      After the show, you can send a thank-you blast to everyone who attended.
+    <p style="color:var(--cream2);font-size:14px;line-height:1.7">
+      Fans text <span class="keyword">{show['checkin_keyword']}</span> to your WSCC number when they arrive at the door.
+      The system automatically records who came.<br><br>
+      After the show, send a personal thank-you blast to everyone who checked in — it builds real loyalty.
     </p>
-    <div style="margin-top:16px">
+    <div style="margin-top:20px">
       <a href="{blast_url}" class="btn btn-primary">Send blast to attendees →</a>
     </div>
   </div>
@@ -856,19 +995,20 @@ def portal_blast():
     elif error:
         alert_html = f'<div class="alert alert-error">{error}</div>'
 
-    char_note = "Characters: <span id='cc'>0</span> / 1600"
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Send Blast — {_DISPLAY_NAME}</title>{_STYLE}
+<title>Send Blast — West Side Comedy Club</title>{_STYLE}
 <script>
   document.addEventListener('DOMContentLoaded', function() {{
     var ta = document.getElementById('msg');
     var cc = document.getElementById('cc');
-    function update() {{ cc.textContent = ta.value.length; }}
+    function update() {{
+      cc.textContent = ta.value.length;
+      cc.style.color = ta.value.length > 1400 ? '#f87171' : 'var(--muted)';
+    }}
     ta.addEventListener('input', update);
     update();
-    // Audience card click → check radio
     document.querySelectorAll('.audience-card').forEach(function(card) {{
       card.addEventListener('click', function() {{
         document.querySelectorAll('.audience-card').forEach(function(c) {{ c.classList.remove('selected'); }});
@@ -883,21 +1023,29 @@ def portal_blast():
 {_nav("blast")}
 <div class="page">
   <h1>Send Blast</h1>
-  <p class="page-sub">Send a text message to your audience. It goes out via your WSCC number.</p>
+  <p class="page-sub">Text your audience directly from your WSCC number.</p>
   {alert_html}
   <form method="post">
-    <div class="card">
-      <div class="card-title">1. Choose your audience</div>
+    <div class="card card-accent">
+      <div class="card-title">1 — Choose audience</div>
       <div class="audience-grid">{cards}</div>
     </div>
     <div class="card">
-      <div class="card-title">2. Write your message</div>
+      <div class="card-title">2 — Write your message</div>
       <div class="form-group">
-        <textarea id="msg" name="message" rows="5"
-          placeholder="e.g. Hey! Thanks so much for coming out last night — it meant the world to us. Hope to see you again soon! 🎭"></textarea>
-        <div style="font-size:12px;color:#475569;margin-top:4px;text-align:right">{char_note}</div>
+        <textarea id="msg" name="message" rows="6"
+          placeholder="e.g. Hey! Thanks so much for coming out last night — it meant everything to us. We hope to see you again soon 🎭"></textarea>
+        <div style="font-size:12px;margin-top:6px;text-align:right">
+          <span id="cc" style="color:var(--muted)">0</span>
+          <span style="color:var(--muted)"> / 1600 characters</span>
+        </div>
       </div>
-      <button type="submit" class="btn btn-primary">Send blast →</button>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <button type="submit" class="btn btn-primary" style="font-size:14px;padding:12px 24px">
+          Send blast →
+        </button>
+        <span style="font-size:12px;color:var(--muted)">Messages send within a few minutes</span>
+      </div>
     </div>
   </form>
 </div>
