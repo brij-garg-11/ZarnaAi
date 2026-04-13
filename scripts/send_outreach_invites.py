@@ -2,7 +2,7 @@
 Send the opt-in invite to a list of phone numbers from a CSV.
 
 Usage:
-    python scripts/send_outreach_invites.py path/to/numbers.csv [--tenant west_side_comedy] [--dry-run]
+    python scripts/send_outreach_invites.py path/to/numbers.csv [options]
 
 The CSV must have a column containing phone numbers. The script auto-detects
 columns named: phone, phone_number, mobile, cell, number, contact, or the
@@ -17,6 +17,8 @@ them and sends the welcome + STOP + vCard.
 
 Options:
     --tenant SLUG       Tenant slug (default: west_side_comedy)
+    --message TEXT      Custom invite message to send (default: auto-generated)
+    --polish            Use AI to lightly clean up the message before sending
     --dry-run           Print numbers and message without sending anything
     --delay SECONDS     Pause between sends in seconds (default: 1.0)
     --column NAME       Force a specific column name for phone numbers
@@ -37,6 +39,7 @@ load_dotenv()
 
 from app.smb.tenants import get_registry
 from app.smb.brain import _signup_nudge
+from app.smb import ai as smb_ai
 from app.messaging.twilio_adapter import TwilioAdapter
 from app.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
 
@@ -107,10 +110,27 @@ def _load_numbers(csv_path: str, column: str | None = None) -> list[str]:
 # Main
 # ---------------------------------------------------------------------------
 
+def _polish_message(raw: str, tenant) -> str:
+    """Use AI to lightly clean up the message — fix typos, tighten phrasing, preserve all facts."""
+    prompt = (
+        f"You are editing an outbound SMS invite for {tenant.display_name}. "
+        f"The tone is: {tenant.tone}.\n\n"
+        f"Lightly clean up this message: fix any typos, tighten the phrasing, "
+        f"keep it under 160 characters if possible, and preserve the meaning exactly. "
+        f"Do NOT add a STOP opt-out line — this is a pre-opt-in invite. "
+        f"Reply with ONLY the cleaned message, no quotes or explanation.\n\n"
+        f"Message: {raw}"
+    )
+    polished = smb_ai.generate(prompt)
+    return polished.strip() if polished else raw
+
+
 def main():
     parser = argparse.ArgumentParser(description="Send opt-in invite to a CSV of phone numbers")
     parser.add_argument("csv_path", help="Path to the CSV file")
     parser.add_argument("--tenant", default="west_side_comedy", help="Tenant slug (default: west_side_comedy)")
+    parser.add_argument("--message", default=None, help="Custom invite message (default: auto-generated)")
+    parser.add_argument("--polish", action="store_true", help="Use AI to lightly clean up the message")
     parser.add_argument("--dry-run", action="store_true", help="Preview without sending")
     parser.add_argument("--delay", type=float, default=1.0, help="Seconds between sends (default: 1.0)")
     parser.add_argument("--column", default=None, help="Force a specific column name for phone numbers")
@@ -128,7 +148,20 @@ def main():
         sys.exit(1)
 
     # Build invite message
-    invite = _signup_nudge(tenant)
+    if args.message:
+        invite = args.message.strip()
+    else:
+        invite = _signup_nudge(tenant)
+
+    if args.polish:
+        print("Polishing message with AI...")
+        original = invite
+        invite = _polish_message(invite, tenant)
+        if invite != original:
+            print(f"  Original: {original}")
+            print(f"  Polished: {invite}")
+        else:
+            print("  (no changes made)")
 
     print(f"\nTenant:  {tenant.display_name} ({tenant.slug})")
     print(f"From:    {tenant.sms_number}")
