@@ -545,6 +545,11 @@ def send_now(draft_id: int):
         audience_type = "all"
     audience_filter = (request.form.get("audience_filter") or draft.get("audience_filter") or "").strip()[:200]
     sample_pct = _safe_int(request.form.get("audience_sample_pct"), int(draft.get("audience_sample_pct") or 100), 1, 100)
+    # Preserve fields not present in the send-now form so the auto-save doesn't wipe them
+    media_url          = (request.form.get("media_url")          or draft.get("media_url")          or "").strip()
+    link_url           = (request.form.get("link_url")           or draft.get("link_url")           or "").strip()
+    tracked_link_slug  = (request.form.get("tracked_link_slug")  or draft.get("tracked_link_slug")  or "").strip()
+    blast_context_note = (request.form.get("blast_context_note") or draft.get("blast_context_note") or "").strip()
     user = current_user()
 
     save_blast_draft(
@@ -554,8 +559,12 @@ def send_now(draft_id: int):
         audience_type=audience_type,
         audience_filter=audience_filter,
         sample_pct=sample_pct,
+        media_url=media_url,
+        link_url=link_url,
+        tracked_link_slug=tracked_link_slug,
         is_quiz=bool(draft.get("is_quiz")),
         quiz_correct_answer=draft.get("quiz_correct_answer") or "",
+        blast_context_note=blast_context_note,
         created_by=user["email"],
         draft_id=draft_id,
     )
