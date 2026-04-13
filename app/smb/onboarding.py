@@ -44,12 +44,52 @@ _OPT_IN_PATTERN = re.compile(
 )
 
 
+def _ai_thinks_opt_in(text: str) -> bool:
+    """
+    Ask AI whether a short ambiguous reply signals intent to subscribe.
+    Returns True only on a confident YES — defaults to False on any error.
+    """
+    try:
+        from app.smb import ai as smb_ai
+        prompt = (
+            "A person received an SMS invite to join a text list and replied with the following message.\n"
+            f'Their reply: "{text}"\n\n'
+            "Does this reply signal they want to subscribe / opt in?\n"
+            "Reply with exactly YES or NO."
+        )
+        answer = smb_ai.generate(prompt)
+        result = (answer or "").strip().upper().startswith("YES")
+        logger.info("SMB opt-in AI check: '%s' → %s", text[:40], result)
+        return result
+    except Exception:
+        logger.warning("SMB opt-in AI check failed for '%s' — defaulting to False", text[:40])
+        return False
+
+
 def _looks_like_opt_in(text: str, keyword: Optional[str] = None) -> bool:
-    """Return True if the message looks like the person wants to subscribe."""
+    """
+    Return True if the message looks like the person wants to subscribe.
+
+    Fast path: keyword match or known opt-in word.
+    Fallback: AI judgment for anything ambiguous (e.g. "sounds good", "let's do it", "add me").
+    """
     stripped = text.strip()
+
+    # Exact keyword match
     if keyword and stripped.upper() == keyword.strip().upper():
         return True
-    return bool(_OPT_IN_PATTERN.match(stripped))
+
+    # Known opt-in words — instant, no AI needed
+    if _OPT_IN_PATTERN.match(stripped):
+        return True
+
+    # Skip AI for obvious non-opt-ins to avoid latency/cost:
+    # questions, very long messages, or empty strings
+    if not stripped or len(stripped) > 80 or stripped.endswith("?"):
+        return False
+
+    # AI fallback for short ambiguous replies
+    return _ai_thinks_opt_in(stripped)
 
 
 def _looks_like_question_or_request(text: str) -> bool:

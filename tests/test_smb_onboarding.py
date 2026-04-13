@@ -21,6 +21,7 @@ from app.smb.onboarding import (
     _welcome_and_question,
     _looks_like_question_or_request,
     _looks_like_opt_in,
+    _ai_thinks_opt_in,
 )
 from app.smb.tenants import BusinessTenant
 
@@ -192,6 +193,29 @@ def test_non_opt_in_messages():
     for msg in ["hey", "what time is the show?", "hi there", "hello", "bill burr"]:
         assert _looks_like_opt_in(msg) is False, f"'{msg}' should NOT be opt-in"
     print("✓ random messages not misclassified as opt-in")
+
+
+def test_ai_fallback_opt_in():
+    """Ambiguous short reply that AI says YES to → opt-in."""
+    with patch("app.smb.onboarding._ai_thinks_opt_in", return_value=True):
+        assert _looks_like_opt_in("sounds good!") is True
+    print("✓ ambiguous reply delegates to AI and accepts YES")
+
+
+def test_ai_fallback_not_opt_in():
+    """Ambiguous short reply that AI says NO to → not opt-in."""
+    with patch("app.smb.onboarding._ai_thinks_opt_in", return_value=False):
+        assert _looks_like_opt_in("maybe later") is False
+    print("✓ ambiguous reply delegates to AI and rejects NO")
+
+
+def test_long_message_skips_ai():
+    """Messages over 80 chars skip the AI check entirely."""
+    long_msg = "I would really love to join your comedy club text list please add me thanks so much!"
+    with patch("app.smb.onboarding._ai_thinks_opt_in") as mock_ai:
+        result = _looks_like_opt_in(long_msg)
+    mock_ai.assert_not_called()
+    print("✓ long messages skip AI check")
 
 
 # ---------------------------------------------------------------------------
