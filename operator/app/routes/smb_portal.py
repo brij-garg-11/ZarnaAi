@@ -33,7 +33,7 @@ _LOGO_URL = "https://imagedelivery.net/7Ze32-hXUdrEDVtqvlbDMQ/2fa2cff3-e63c-4d6d
 
 
 def _sms_number() -> str:
-    return os.getenv("WEST_SIDE_COMEDY_SMS_NUMBER", "")
+    return os.getenv("SMB_WEST_SIDE_COMEDY_SMS_NUMBER", "")
 
 
 def _portal_password() -> str:
@@ -956,7 +956,7 @@ def portal_blast():
                 if not phones:
                     error = "No recipients in that audience — nobody has subscribed or checked in yet."
                 elif not _sms_number():
-                    error = "SMS number not configured. Ask your Zarna team to set WEST_SIDE_COMEDY_SMS_NUMBER."
+                    error = "SMS number not configured. Ask your Zarna team to set SMB_WEST_SIDE_COMEDY_SMS_NUMBER."
                 else:
                     _blast_async(phones, message_text, audience_label)
                     success = f"Blast is sending to {len(phones):,} people! They'll receive it within a few minutes."
