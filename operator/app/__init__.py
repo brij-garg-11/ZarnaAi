@@ -21,12 +21,14 @@ def create_app() -> Flask:
     from .routes.shows import shows_bp
     from .routes.blast import blast_bp
     from .routes.team import team_bp
+    from .routes.smb_portal import smb_portal_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(shows_bp)
     app.register_blueprint(blast_bp)
     app.register_blueprint(team_bp)
+    app.register_blueprint(smb_portal_bp)
 
     # Health check
     @app.route("/health")

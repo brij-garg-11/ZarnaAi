@@ -37,7 +37,9 @@ def _register_submodule_routes():
     from app.admin.quality import register_quality_routes
     from app.admin.actions import register_action_routes
     from app.admin.smb import register_smb_routes
+    from app.admin.shows import register_shows_routes
     register_quality_routes(admin_bp)
+    register_shows_routes(admin_bp)
     register_action_routes(admin_bp)
     register_smb_routes(admin_bp)
 
@@ -1639,6 +1641,7 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
   <a href="/admin?tab=learning" class="nav-tab {'active' if tab == 'learning' else ''}">✨ Learning</a>
   <a href="/admin?tab=quality" class="nav-tab {'active' if tab == 'quality' else ''}">🔍 Quality</a>
   <a href="/admin?tab=smb" class="nav-tab {'active' if tab == 'smb' else ''}">🏪 SMB Clients</a>
+  <a href="/admin/smb-shows" class="nav-tab">🎭 Show Attendance</a>
   <a href="/admin/live-shows" class="nav-tab">🎤 Live shows</a>
 </nav>
 

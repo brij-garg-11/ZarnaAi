@@ -221,6 +221,165 @@ def get_preferences(conn, subscriber_id: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Shows and check-ins
+# ---------------------------------------------------------------------------
+
+def create_show(
+    conn,
+    tenant_slug: str,
+    name: str,
+    show_date: str,
+    checkin_keyword: str,
+) -> Optional[dict]:
+    """
+    Create a new show with a check-in keyword fans text at the door.
+    Returns the created show, or None if the keyword is already taken.
+    """
+    with conn.cursor() as cur:
+        try:
+            cur.execute(
+                """
+                INSERT INTO smb_shows (tenant_slug, name, show_date, checkin_keyword)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id, tenant_slug, name, show_date, checkin_keyword, status, created_at
+                """,
+                (tenant_slug, name, show_date, checkin_keyword.upper().strip()),
+            )
+            row = cur.fetchone()
+        except Exception:
+            return None
+    if not row:
+        return None
+    return {
+        "id": row[0], "tenant_slug": row[1], "name": row[2],
+        "show_date": row[3], "checkin_keyword": row[4],
+        "status": row[5], "created_at": row[6],
+    }
+
+
+def list_shows(conn, tenant_slug: str, limit: int = 30) -> list:
+    """Return the most recent shows for a tenant, newest first."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT s.id, s.name, s.show_date, s.checkin_keyword, s.status, s.created_at,
+                   COUNT(c.id) AS checkin_count
+            FROM smb_shows s
+            LEFT JOIN smb_show_checkins c ON c.show_id = s.id
+            WHERE s.tenant_slug = %s
+            GROUP BY s.id
+            ORDER BY s.show_date DESC, s.created_at DESC
+            LIMIT %s
+            """,
+            (tenant_slug, limit),
+        )
+        return [
+            {
+                "id": r[0], "name": r[1], "show_date": r[2],
+                "checkin_keyword": r[3], "status": r[4],
+                "created_at": r[5], "checkin_count": r[6],
+            }
+            for r in cur.fetchall()
+        ]
+
+
+def get_show_by_keyword(conn, tenant_slug: str, keyword: str) -> Optional[dict]:
+    """Return a show row matching the given keyword (case-insensitive), or None."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, name, show_date, checkin_keyword, status, created_at
+            FROM smb_shows
+            WHERE tenant_slug = %s AND UPPER(checkin_keyword) = UPPER(%s) AND status = 'active'
+            """,
+            (tenant_slug, keyword.strip()),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0], "name": row[1], "show_date": row[2],
+        "checkin_keyword": row[3], "status": row[4], "created_at": row[5],
+    }
+
+
+def get_show_by_id(conn, show_id: int) -> Optional[dict]:
+    """Return a show row by primary key."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, tenant_slug, name, show_date, checkin_keyword, status, created_at
+            FROM smb_shows WHERE id = %s
+            """,
+            (show_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0], "tenant_slug": row[1], "name": row[2],
+        "show_date": row[3], "checkin_keyword": row[4],
+        "status": row[5], "created_at": row[6],
+    }
+
+
+def record_checkin(conn, show_id: int, phone_number: str, tenant_slug: str) -> bool:
+    """
+    Record a fan checking in to a show. Returns True if this is a new check-in,
+    False if they already checked in (idempotent — no error, no duplicate row).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO smb_show_checkins (show_id, phone_number, tenant_slug)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (show_id, phone_number) DO NOTHING
+            """,
+            (show_id, phone_number, tenant_slug),
+        )
+        return cur.rowcount > 0
+
+
+def get_show_attendees(conn, show_id: int) -> list:
+    """Return all phone numbers that checked in to a show."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT phone_number, checked_in_at
+            FROM smb_show_checkins
+            WHERE show_id = %s
+            ORDER BY checked_in_at
+            """,
+            (show_id,),
+        )
+        return [{"phone_number": r[0], "checked_in_at": r[1]} for r in cur.fetchall()]
+
+
+def get_recent_shows_for_blast(conn, tenant_slug: str, limit: int = 10) -> list:
+    """Return recent active shows with attendee counts — used to populate blast AI prompt."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT s.id, s.name, s.show_date, s.checkin_keyword, COUNT(c.id) AS checkin_count
+            FROM smb_shows s
+            LEFT JOIN smb_show_checkins c ON c.show_id = s.id
+            WHERE s.tenant_slug = %s AND s.status = 'active'
+            GROUP BY s.id
+            ORDER BY s.show_date DESC
+            LIMIT %s
+            """,
+            (tenant_slug, limit),
+        )
+        return [
+            {
+                "id": r[0], "name": r[1], "show_date": r[2],
+                "checkin_keyword": r[3], "checkin_count": r[4],
+            }
+            for r in cur.fetchall()
+        ]
+
+
+# ---------------------------------------------------------------------------
 # Conversation history
 # ---------------------------------------------------------------------------
 

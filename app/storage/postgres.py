@@ -284,6 +284,36 @@ _SMB_MIGRATIONS = (
     "CREATE INDEX IF NOT EXISTS idx_smb_messages_thread ON smb_messages(tenant_slug, phone_number, created_at DESC)",
 )
 
+_SMB_SHOW_MIGRATIONS = (
+    # Shows the owner creates — each has a short check-in keyword fans text at the door
+    """
+    CREATE TABLE IF NOT EXISTS smb_shows (
+        id               BIGSERIAL   PRIMARY KEY,
+        tenant_slug      TEXT        NOT NULL,
+        name             TEXT        NOT NULL,
+        show_date        DATE        NOT NULL,
+        checkin_keyword  TEXT        NOT NULL,
+        status           TEXT        NOT NULL DEFAULT 'active',
+        created_at       TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (tenant_slug, checkin_keyword)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_smb_shows_tenant ON smb_shows(tenant_slug, show_date DESC)",
+    # One row per fan who texted the check-in keyword at a show
+    """
+    CREATE TABLE IF NOT EXISTS smb_show_checkins (
+        id           BIGSERIAL   PRIMARY KEY,
+        show_id      BIGINT      NOT NULL REFERENCES smb_shows(id) ON DELETE CASCADE,
+        tenant_slug  TEXT        NOT NULL,
+        phone_number TEXT        NOT NULL,
+        checked_in_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (show_id, phone_number)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_smb_show_checkins_show ON smb_show_checkins(show_id)",
+    "CREATE INDEX IF NOT EXISTS idx_smb_show_checkins_tenant ON smb_show_checkins(tenant_slug, checked_in_at DESC)",
+)
+
 
 class PostgresStorage(BaseStorage):
     """Thread-safe Postgres storage using a connection pool."""
@@ -326,6 +356,8 @@ class PostgresStorage(BaseStorage):
                     for sql in _QUALITY_DIGEST_MIGRATIONS:
                         cur.execute(sql)
                     for sql in _SMB_MIGRATIONS:
+                        cur.execute(sql)
+                    for sql in _SMB_SHOW_MIGRATIONS:
                         cur.execute(sql)
                 # conversation_sessions lives in session_manager — ensure it exists here too
                 try:

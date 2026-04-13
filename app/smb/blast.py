@@ -40,6 +40,21 @@ logger = logging.getLogger(__name__)
 # AI decision engine
 # ---------------------------------------------------------------------------
 
+def _load_recent_shows(tenant: BusinessTenant) -> list:
+    """Fetch the most recent active shows for this tenant (used in AI prompt)."""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        with conn:
+            return smb_storage.get_recent_shows_for_blast(conn, tenant.slug)
+    except Exception:
+        logger.warning("SMB blast: failed to load shows for tenant=%s", tenant.slug)
+        return []
+    finally:
+        conn.close()
+
+
 def _ai_decide_owner_action(
     message_text: str,
     history: list,
@@ -50,14 +65,19 @@ def _ai_decide_owner_action(
     structured decision dict:
       {"action": "CLARIFY|SEND_BLAST|STATS|CANCEL|HELP",
        "blast_message": "<original blast text>",
-       "segment": "ALL|<SEGMENT_NAME>",
+       "segment": "ALL|<SEGMENT_NAME>|SHOW:<keyword>",
        "reply": "<bot reply to send>"}
 
     The AI prompt enforces the 2-step rule: SEND_BLAST is only valid if the
     immediately preceding bot message was a CLARIFY asking about audience.
     """
     seg_names = [s["name"] for s in tenant.segments] if tenant.segments else []
-    valid_segments = ", ".join(seg_names) if seg_names else "ALL"
+    recent_shows = _load_recent_shows(tenant)
+
+    all_segment_options = list(seg_names)
+    for show in recent_shows:
+        all_segment_options.append(f"SHOW:{show['checkin_keyword']}")
+    valid_segments = ", ".join(all_segment_options) if all_segment_options else "ALL"
 
     if tenant.segments:
         seg_lines = "\n".join(
@@ -66,6 +86,14 @@ def _ai_decide_owner_action(
         )
     else:
         seg_lines = "No segments defined — send to everyone (ALL)."
+
+    if recent_shows:
+        show_lines = "\n".join(
+            f"- SHOW:{s['checkin_keyword']}: people who attended {s['name']} "
+            f"on {s['show_date']} ({s['checkin_count']} checked in)"
+            for s in recent_shows
+        )
+        seg_lines += f"\n\nRecent shows (fans who checked in at the door):\n{show_lines}"
 
     # History already includes the current message (saved by brain.py before
     # calling us). Build a readable transcript oldest-first.
@@ -93,14 +121,16 @@ ACTIONS and when to use them:
 - CLARIFY: owner's message looks like a blast they want to send, but you have NOT yet asked
   who to send it to in this conversation. Write a reply listing the segment options as bullet
   points so the owner can pick. ALWAYS use CLARIFY before SEND_BLAST — never skip this step.
+  When listing show options, describe them by name and date (e.g. "People who attended Friday Apr 12 show").
 - SEND_BLAST: use ONLY when the immediately preceding Bot message was a CLARIFY asking about
   audience, AND the owner just replied with their audience choice. Extract the original blast
   message from the owner's turn that triggered the CLARIFY (not the audience reply).
   segment = one of: ALL, {valid_segments}
+  For show attendees, use SHOW:<keyword> (e.g. SHOW:APR13).
 - STATS: owner is asking about subscriber counts, audience breakdown, or segment sizes.
   Leave reply blank — real stats will be fetched from the database separately.
 - CANCEL: owner wants to cancel or abort. Confirm in reply.
-- HELP: anything else. Briefly explain what you can do (send blasts, check stats).
+- HELP: anything else. Briefly explain what you can do (send blasts, check stats, thank show attendees).
 
 Return this exact JSON (all fields required, use empty string if not applicable):
 {{"action": "CLARIFY|SEND_BLAST|STATS|CANCEL|HELP", "blast_message": "", "segment": "ALL", "reply": ""}}"""
@@ -187,10 +217,14 @@ def handle_owner_blast(
                 "I lost track of the message to blast — could you send it again?"
             )
 
-        # Resolve segment
+        # Resolve segment — could be a named segment or SHOW:<keyword>
         seg_name = decision["segment"]
         segment = None
-        if seg_name and seg_name != "ALL" and tenant.segments:
+        show_keyword = None
+
+        if seg_name and seg_name.upper().startswith("SHOW:"):
+            show_keyword = seg_name[5:].strip()
+        elif seg_name and seg_name != "ALL" and tenant.segments:
             segment = next(
                 (s for s in tenant.segments if s["name"].upper() == seg_name),
                 None,
@@ -203,10 +237,12 @@ def handle_owner_blast(
 
         threading.Thread(
             target=_run_blast_async,
-            args=(blast_message, tenant, segment, phone_number),
+            args=(blast_message, tenant, segment, phone_number, show_keyword),
             daemon=True,
         ).start()
 
+        if show_keyword:
+            return f"Sending to everyone who checked in at the {show_keyword} show now."
         if segment:
             return f"Sending to your {_seg_display_name(segment).lower()} subscribers now."
         return "Sending to all your active subscribers now."
@@ -316,6 +352,7 @@ def _run_blast_async(
     tenant: BusinessTenant,
     segment: Optional[dict] = None,
     owner_phone: Optional[str] = None,
+    show_keyword: Optional[str] = None,
 ) -> None:
     conn = get_db_connection()
     if not conn:
@@ -324,7 +361,22 @@ def _run_blast_async(
 
     try:
         with conn:
-            if segment:
+            if show_keyword:
+                show = smb_storage.get_show_by_keyword(conn, tenant.slug, show_keyword)
+                if show is None:
+                    logger.warning(
+                        "SMB blast: show keyword '%s' not found for tenant=%s",
+                        show_keyword, tenant.slug,
+                    )
+                    subscribers = []
+                else:
+                    attendees = smb_storage.get_show_attendees(conn, show["id"])
+                    subscribers = [{"phone_number": a["phone_number"]} for a in attendees]
+                    logger.info(
+                        "SMB blast: show=%s matched %d attendees for tenant=%s",
+                        show_keyword, len(subscribers), tenant.slug,
+                    )
+            elif segment:
                 subscribers = smb_storage.get_subscribers_by_segment(
                     conn, tenant.slug,
                     segment["question_key"],
@@ -341,14 +393,14 @@ def _run_blast_async(
 
     if not subscribers:
         logger.info(
-            "SMB blast: no matching subscribers for tenant=%s segment=%s",
-            tenant.slug, segment["name"] if segment else "all",
+            "SMB blast: no matching subscribers for tenant=%s segment=%s show=%s",
+            tenant.slug, segment["name"] if segment else "all", show_keyword or "n/a",
         )
         return
 
     body = _ai_enhance_blast(message_text.strip(), tenant)
     phones = [s["phone_number"] for s in subscribers]
-    seg_name = segment["name"] if segment else None
+    seg_name = f"SHOW:{show_keyword}" if show_keyword else (segment["name"] if segment else None)
 
     logger.info(
         "SMB blast starting: tenant=%s segment=%s recipients=%d",
@@ -373,7 +425,12 @@ def _run_blast_async(
     _record_blast(tenant, message_text, body, attempted, succeeded, seg_name)
 
     if owner_phone and tenant.sms_number:
-        audience = f"your {seg_name.lower()} subscribers" if seg_name else "all your subscribers"
+        if show_keyword:
+            audience = f"people who attended the {show_keyword} show"
+        elif seg_name:
+            audience = f"your {seg_name.lower()} subscribers"
+        else:
+            audience = "all your subscribers"
         confirmation = f"Done! Blast sent to {succeeded}/{attempted} {audience}."
         _twilio_send_smb(owner_phone, confirmation, tenant.sms_number)
 
@@ -453,6 +510,50 @@ def _ai_enhance_blast(owner_message: str, tenant: BusinessTenant) -> str:
     if tenant.display_name.lower() not in msg.lower():
         msg = f"{tenant.display_name}: {msg}"
     return msg
+
+
+# ---------------------------------------------------------------------------
+# Portal-initiated blasts (web UI — no SMS CLARIFY/CONFIRM flow needed)
+# ---------------------------------------------------------------------------
+
+def send_blast_from_portal(
+    message_text: str,
+    tenant: BusinessTenant,
+    audience_type: str,        # "all" | "segment:<name>" | "show:<keyword>"
+    owner_phone: Optional[str] = None,
+) -> str:
+    """
+    Fire a blast from the web portal. Returns an immediate status string.
+
+    audience_type examples:
+      "all"                   → all active subscribers
+      "segment:LOCAL"         → named segment
+      "show:APR13"            → show check-in attendees
+    """
+    segment = None
+    show_keyword = None
+
+    if audience_type.lower().startswith("show:"):
+        show_keyword = audience_type[5:].strip()
+    elif audience_type.lower().startswith("segment:"):
+        seg_name = audience_type[8:].strip().upper()
+        if tenant.segments:
+            segment = next(
+                (s for s in tenant.segments if s["name"].upper() == seg_name),
+                None,
+            )
+
+    threading.Thread(
+        target=_run_blast_async,
+        args=(message_text, tenant, segment, owner_phone, show_keyword),
+        daemon=True,
+    ).start()
+
+    if show_keyword:
+        return f"Blast queued for attendees of the {show_keyword} show."
+    if segment:
+        return f"Blast queued for your {_seg_display_name(segment).lower()} subscribers."
+    return "Blast queued for all your active subscribers."
 
 
 # ---------------------------------------------------------------------------

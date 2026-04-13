@@ -69,6 +69,17 @@ class SMBBrain:
                 _persist_message(from_number, tenant, reply, role="assistant")
             return reply
 
+        # --- Show check-in keyword ---
+        # Check before onboarding so a fan who texts a show keyword mid-conversation
+        # gets the check-in confirmation rather than a generic onboarding nudge.
+        checkin_reply = _try_show_checkin(from_number, message_text, tenant)
+        if checkin_reply is not None:
+            logger.info(
+                "SMB brain: show check-in keyword matched (tenant=%s phone=...%s)",
+                tenant.slug, from_number[-4:] if from_number else "?",
+            )
+            return checkin_reply
+
         # --- Onboarding flow (keyword or mid-intake reply) ---
         onboarding_reply = onboarding.get_onboarding_reply(
             from_number, message_text, tenant
@@ -236,6 +247,48 @@ def _persist_message(phone_number: str, tenant: BusinessTenant, text: str, role:
         logger.exception("SMB brain: failed to persist assistant message")
     finally:
         conn.close()
+
+
+def _try_show_checkin(
+    phone_number: str,
+    message_text: str,
+    tenant: BusinessTenant,
+) -> Optional[str]:
+    """
+    If the message exactly matches an active show's check-in keyword, record the
+    attendance and return a warm confirmation reply. Returns None if no match.
+
+    Keywords are short (e.g. "APR13", "FRIDAY", "SAT8PM") and matched case-insensitively.
+    We only match single-word messages to avoid false positives with conversational text.
+    """
+    word = message_text.strip()
+    # Only match single-word messages to avoid false positives
+    if not word or len(word.split()) > 2:
+        return None
+
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        with conn:
+            show = smb_storage.get_show_by_keyword(conn, tenant.slug, word)
+            if show is None:
+                return None
+            is_new = smb_storage.record_checkin(conn, show["id"], phone_number, tenant.slug)
+    except Exception:
+        logger.exception("SMB brain: error during show check-in (tenant=%s)", tenant.slug)
+        return None
+    finally:
+        conn.close()
+
+    if is_new:
+        return (
+            f"You're checked in for {show['name']}! "
+            f"Thanks so much for coming out — enjoy the show 🎉"
+        )
+    return (
+        f"You're already checked in for {show['name']} — see you there! 🎉"
+    )
 
 
 def create_smb_brain() -> SMBBrain:
