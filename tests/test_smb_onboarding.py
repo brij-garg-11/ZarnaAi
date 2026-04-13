@@ -132,11 +132,15 @@ class _SQLiteCursorWrapper:
             sql = sql.replace("ON CONFLICT (phone_number, tenant_slug) DO NOTHING", "")
             sql = sql.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
         if "ON CONFLICT (tenant_slug, phone_number)" in sql and "DO UPDATE SET" in sql:
-            # Upsert for outreach invites — SQLite uses INSERT OR REPLACE
+            # Upsert for outreach invites — only update if not yet claimed
+            # SQLite doesn't support WHERE on DO UPDATE, so we do it manually
             sql = (
-                "INSERT OR REPLACE INTO smb_outreach_invites "
+                "INSERT INTO smb_outreach_invites "
                 "(tenant_slug, phone_number, offer, sent_at, claimed_at) "
-                "VALUES (?, ?, ?, datetime('now'), NULL)"
+                "VALUES (?, ?, ?, datetime('now'), NULL) "
+                "ON CONFLICT (tenant_slug, phone_number) DO UPDATE SET "
+                "offer=excluded.offer, sent_at=datetime('now') "
+                "WHERE smb_outreach_invites.claimed_at IS NULL"
             )
             params = params[:3]  # tenant_slug, phone_number, offer
         self._cur.execute(sql, params)

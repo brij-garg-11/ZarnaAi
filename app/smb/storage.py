@@ -424,7 +424,10 @@ def get_history(conn, tenant_slug: str, phone_number: str, limit: int = 8) -> li
 def record_outreach_invite(conn, tenant_slug: str, phone_number: str, offer: str = "free_ticket") -> None:
     """
     Record that an outbound invite was sent to this number.
-    Uses UPSERT so re-sending resets the clock (updates sent_at, clears claimed_at).
+
+    - If no prior record exists: insert fresh.
+    - If a record exists but was never claimed: reset sent_at so the 24h clock restarts.
+    - If already claimed: leave it untouched — one free ticket per number ever.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -432,7 +435,10 @@ def record_outreach_invite(conn, tenant_slug: str, phone_number: str, offer: str
             INSERT INTO smb_outreach_invites (tenant_slug, phone_number, offer, sent_at, claimed_at)
             VALUES (%s, %s, %s, NOW(), NULL)
             ON CONFLICT (tenant_slug, phone_number)
-            DO UPDATE SET offer = EXCLUDED.offer, sent_at = NOW(), claimed_at = NULL
+            DO UPDATE SET
+                offer    = EXCLUDED.offer,
+                sent_at  = NOW()
+            WHERE smb_outreach_invites.claimed_at IS NULL
             """,
             (tenant_slug, phone_number, offer),
         )
