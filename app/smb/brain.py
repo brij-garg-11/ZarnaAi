@@ -13,8 +13,8 @@ Decision tree:
      → onboarding.get_onboarding_reply() — run the intake flow.
   4. Is the sender an active subscriber?
      → _conversational_reply() — short friendly AI response in business voice.
-  5. Unknown sender who hasn't signed up yet?
-     → _signup_nudge() — "Text COMEDY to subscribe".
+  5. Unknown sender who didn't opt in with this message?
+     → _signup_nudge() — invite to join, reply YES (no STOP required).
 
 Entry point: SMBBrain.handle_message(from_number, to_number, message_text)
 Returns a reply string or None (None = message should be silently dropped).
@@ -146,13 +146,14 @@ def _get_subscriber(phone_number: str, tenant: BusinessTenant) -> Optional[dict]
 
 
 def _signup_nudge(tenant: BusinessTenant) -> str:
-    """Short prompt for someone who texted but hasn't signed up yet."""
-    if tenant.keyword:
-        return (
-            f"Hey! Text {tenant.keyword} to subscribe to {tenant.display_name} "
-            "for exclusive deals and updates."
-        )
-    return f"Hey! Ask {tenant.display_name} how to subscribe for exclusive deals and updates."
+    """
+    Invite an unknown sender to join — sent before they've opted in so no
+    STOP line is required or appropriate here.
+    """
+    return (
+        f"Hey! {tenant.display_name} here. Want show updates and deals? "
+        "Reply YES to join — it's free!"
+    )
 
 
 def _conversational_reply(

@@ -156,28 +156,29 @@ def test_unknown_sender_gets_signup_nudge():
                     result = brain.handle_message(UNKNOWN, SMB_NUMBER, "hey")
 
     assert result is not None
-    assert "COMEDY" in result or "subscribe" in result.lower()
-    print("✓ unknown sender gets signup nudge")
+    assert "YES" in result.upper() or "join" in result.lower()
+    print("✓ unknown sender gets invite nudge (reply YES to join)")
 
 
 # ---------------------------------------------------------------------------
 # _signup_nudge — pure logic
 # ---------------------------------------------------------------------------
 
-def test_signup_nudge_includes_keyword():
+def test_signup_nudge_is_invite():
     tenant = _make_tenant(keyword="LAUGH")
     nudge = _signup_nudge(tenant)
-    assert "LAUGH" in nudge
     assert "West Side Comedy Club" in nudge
-    print("✓ signup nudge includes keyword and business name")
+    assert "YES" in nudge.upper() or "yes" in nudge.lower()
+    assert "STOP" not in nudge
+    print("✓ signup nudge is the invite message (no STOP, includes business name and reply YES)")
 
 
-def test_signup_nudge_no_keyword_fallback():
+def test_signup_nudge_no_keyword_still_works():
     tenant = _make_tenant(keyword=None)
     nudge = _signup_nudge(tenant)
     assert "West Side Comedy Club" in nudge
     assert nudge  # not empty
-    print("✓ signup nudge has fallback when no keyword set")
+    print("✓ signup nudge works without a keyword set")
 
 
 # ---------------------------------------------------------------------------

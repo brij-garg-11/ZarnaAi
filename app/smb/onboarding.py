@@ -2,15 +2,18 @@
 SMB subscriber onboarding flow.
 
 Simplified model:
-  1. Any first text from a new number → subscriber created (active immediately)
-     + welcome message + preference question sent back.
-  2. All subsequent messages → return None so the conversational brain handles them.
-  3. Preference saving → passive, background only.  If their next message looks like
+  1. First text from a new number that looks like an opt-in (keyword, YES, sure, etc.)
+     → subscriber created (active immediately) + welcome message + preference question
+     + STOP opt-out line sent back.
+  2. First text that does NOT look like an opt-in → return None so the brain sends
+     the invite nudge ("Want updates? Reply YES").
+  3. All subsequent messages → return None so the conversational brain handles them.
+  4. Preference saving → passive, background only.  If their next message looks like
      an answer to the preference question (not a question or bot request) we classify
      and save it silently.  The bot still replies normally via the brain.
 
 Entry point: get_onboarding_reply(phone_number, message_text, tenant)
-  Returns a reply string only for brand-new subscribers (the welcome message).
+  Returns a reply string only for brand-new opt-in subscribers (the welcome message).
   Returns None for everyone else so the brain takes over.
 """
 
@@ -35,6 +38,19 @@ _QUESTION_WORDS = re.compile(
     re.IGNORECASE,
 )
 
+_OPT_IN_PATTERN = re.compile(
+    r"^\s*(yes|yeah|yep|yup|sure|ok|okay|in|join|sign me up|subscribe|i'?m in|count me in)\s*[!.]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_opt_in(text: str, keyword: Optional[str] = None) -> bool:
+    """Return True if the message looks like the person wants to subscribe."""
+    stripped = text.strip()
+    if keyword and stripped.upper() == keyword.strip().upper():
+        return True
+    return bool(_OPT_IN_PATTERN.match(stripped))
+
 
 def _looks_like_question_or_request(text: str) -> bool:
     """Return True when the message looks like a question rather than a preference answer."""
@@ -52,7 +68,10 @@ def get_onboarding_reply(
     """
     Main entry point.
 
-    - New subscriber  → create, send vCard, return welcome + question.
+    - Unknown number + opt-in message (keyword, YES, sure, etc.)
+      → create subscriber, send vCard, return welcome + question + STOP line.
+    - Unknown number + non-opt-in message
+      → return None (brain sends the invite nudge).
     - Existing at step 0 → try to save preference passively in background, return None.
     - Everyone else   → return None (brain handles everything).
     """
@@ -66,7 +85,9 @@ def get_onboarding_reply(
             subscriber = smb_storage.get_subscriber(conn, phone_number, tenant.slug)
 
             if subscriber is None:
-                # Brand-new subscriber — subscribe them immediately
+                # Unknown number — only subscribe if they explicitly opted in
+                if not _looks_like_opt_in(message_text, tenant.keyword):
+                    return None  # brain will send the invite nudge
                 new_sub = smb_storage.create_subscriber(conn, phone_number, tenant.slug)
                 logger.info(
                     "SMB new subscriber: tenant=%s phone=...%s",
@@ -107,11 +128,12 @@ def get_onboarding_reply(
 # ---------------------------------------------------------------------------
 
 def _welcome_and_question(tenant: BusinessTenant) -> str:
-    """Return the welcome message with the preference question appended."""
+    """Return the welcome message with the preference question and STOP opt-out line."""
+    stop_line = "Reply STOP any time to opt out."
     if tenant.signup_question:
         welcome = tenant.welcome_message or f"Welcome to {tenant.display_name}!"
-        return f"{welcome}\n\n{tenant.signup_question}"
-    return tenant.welcome_message or f"Welcome to {tenant.display_name}! Reply STOP any time to unsubscribe."
+        return f"{welcome}\n\n{tenant.signup_question}\n\n{stop_line}"
+    return (tenant.welcome_message or f"Welcome to {tenant.display_name}!") + f" {stop_line}"
 
 
 def _save_preference_async(phone_number: str, answer: str, tenant: BusinessTenant) -> None:

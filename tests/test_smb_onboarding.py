@@ -20,6 +20,7 @@ from app.smb.onboarding import (
     get_onboarding_reply,
     _welcome_and_question,
     _looks_like_question_or_request,
+    _looks_like_opt_in,
 )
 from app.smb.tenants import BusinessTenant
 
@@ -155,12 +156,42 @@ def test_welcome_includes_signup_question():
     print("✓ welcome reply contains both welcome message and signup question")
 
 
-def test_welcome_fallback_when_no_signup_question():
+def test_welcome_includes_stop_line():
+    tenant = _make_tenant()
+    reply = _welcome_and_question(tenant)
+    assert "STOP" in reply
+    print("✓ welcome reply always contains STOP opt-out line")
+
+
+def test_welcome_fallback_includes_stop():
     tenant = _make_tenant()
     tenant.signup_question = ""
     reply = _welcome_and_question(tenant)
     assert "West Side Comedy Club" in reply or "Welcome" in reply
-    print("✓ welcome fallback works when no signup_question set")
+    assert "STOP" in reply
+    print("✓ welcome fallback also includes STOP opt-out line")
+
+
+# ---------------------------------------------------------------------------
+# Pure logic: _looks_like_opt_in
+# ---------------------------------------------------------------------------
+
+def test_opt_in_keyword_match():
+    assert _looks_like_opt_in("COMEDY", keyword="COMEDY") is True
+    assert _looks_like_opt_in("comedy", keyword="COMEDY") is True
+    print("✓ signup keyword matches as opt-in")
+
+
+def test_opt_in_yes_variants():
+    for word in ["yes", "YES", "yeah", "yep", "sure", "ok", "okay", "in", "join", "i'm in", "im in"]:
+        assert _looks_like_opt_in(word) is True, f"'{word}' should be opt-in"
+    print("✓ yes/yeah/sure/ok/join all detected as opt-in")
+
+
+def test_non_opt_in_messages():
+    for msg in ["hey", "what time is the show?", "hi there", "hello", "bill burr"]:
+        assert _looks_like_opt_in(msg) is False, f"'{msg}' should NOT be opt-in"
+    print("✓ random messages not misclassified as opt-in")
 
 
 # ---------------------------------------------------------------------------
@@ -190,21 +221,49 @@ def test_preference_answer_not_detected_as_question():
 # Integration: new subscriber flow
 # ---------------------------------------------------------------------------
 
-def test_new_subscriber_gets_welcome():
-    """Any first text from unknown number → subscriber created, welcome returned."""
+def test_new_subscriber_gets_welcome_on_yes():
+    """Opt-in reply (YES) from unknown number → subscriber created, welcome returned."""
     tenant = _make_tenant()
     wrapped = _make_wrapped_conn()
     with _patch_db(wrapped):
-        with patch("app.smb.onboarding.threading.Thread"):  # suppress vCard + geo threads
+        with patch("app.smb.onboarding.threading.Thread"):
             with patch("app.smb.onboarding.tagging.tag_geo"):
-                reply = get_onboarding_reply("+15550001111", "hey there", tenant)
+                reply = get_onboarding_reply("+15550001111", "yes", tenant)
     assert reply is not None
     assert "West Side Comedy Club" in reply or "comedy" in reply.lower()
-    print("✓ new subscriber gets welcome message")
+    assert "STOP" in reply
+    print("✓ new subscriber gets welcome message with STOP on opt-in")
+
+
+def test_new_subscriber_gets_welcome_on_keyword():
+    """Signup keyword from unknown number → subscriber created, welcome returned."""
+    tenant = _make_tenant()
+    wrapped = _make_wrapped_conn()
+    with _patch_db(wrapped):
+        with patch("app.smb.onboarding.threading.Thread"):
+            with patch("app.smb.onboarding.tagging.tag_geo"):
+                reply = get_onboarding_reply("+15550001111", "COMEDY", tenant)
+    assert reply is not None
+    assert "STOP" in reply
+    print("✓ new subscriber gets welcome message on keyword")
+
+
+def test_non_optin_unknown_sender_returns_none():
+    """Unknown sender who doesn't opt in → None so brain sends the invite nudge."""
+    tenant = _make_tenant()
+    wrapped = _make_wrapped_conn()
+    with _patch_db(wrapped):
+        reply = get_onboarding_reply("+15550001111", "hey there", tenant)
+    assert reply is None
+    sub = wrapped._conn.execute(
+        "SELECT id FROM smb_subscribers WHERE phone_number=?", ("+15550001111",)
+    ).fetchone()
+    assert sub is None
+    print("✓ non-opt-in unknown sender gets None (not subscribed)")
 
 
 def test_new_subscriber_created_in_db():
-    """First message creates subscriber row with status=active, step=0."""
+    """Opt-in keyword creates subscriber row with status=active, step=0."""
     tenant = _make_tenant()
     wrapped = _make_wrapped_conn()
     with _patch_db(wrapped):
@@ -269,7 +328,7 @@ def test_geo_tagged_at_subscriber_creation():
     with _patch_db(wrapped):
         with patch("app.smb.onboarding.threading.Thread"):
             with patch("app.smb.onboarding.tagging.tag_geo") as mock_tag:
-                get_onboarding_reply("+12125550001", "hey", tenant)
+                get_onboarding_reply("+12125550001", "YES", tenant)
     mock_tag.assert_called_once()
     call_args = mock_tag.call_args
     assert call_args[0][2] == "+12125550001"  # phone_number is 3rd positional arg
