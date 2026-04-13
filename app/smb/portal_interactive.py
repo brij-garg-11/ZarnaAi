@@ -556,12 +556,15 @@ def portal_blast(slug):
     def aud_card(value, icon, label, desc, count):
         is_selected = (value == f"show:{preselect_show}") if preselect_show else (value == "all")
         cls = " selected" if is_selected else ""
+        checked = "checked" if is_selected else ""
+        person_label = "person" if count == 1 else "people"
+        desc_html = f'<div style="font-size:11px;color:#475569;margin-top:3px">{desc}</div>' if desc else ""
         return (f'<label class="audience-card{cls}">'
-                f'<input type="radio" name="audience" value="{value}" {"checked" if is_selected else ""}>'
+                f'<input type="radio" name="audience" value="{value}" {checked}>'
                 f'<div class="aud-icon">{icon}</div>'
                 f'<div class="aud-name">{label}</div>'
-                f'<div class="aud-count">{count:,} {"person" if count == 1 else "people"}</div>'
-                f'{"<div style=\\"font-size:11px;color:#475569;margin-top:3px\\">" + desc + "</div>" if desc else ""}'
+                f'<div class="aud-count">{count:,} {person_label}</div>'
+                f'{desc_html}'
                 f'</label>')
 
     audience_html = '<div class="audience-grid">'
