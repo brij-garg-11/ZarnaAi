@@ -126,13 +126,14 @@ def _fetch_detail(slug: str) -> dict:
 
             # How many of those invited actually subscribed (campaign opt-ins)
             cur.execute("""
-                SELECT COUNT(DISTINCT s.phone_number)
+                SELECT COUNT(DISTINCT s.phone_number) AS opted_in
                 FROM smb_subscribers s
                 JOIN smb_outreach_invites o
                     ON o.phone_number = s.phone_number AND o.tenant_slug = s.tenant_slug
                 WHERE s.tenant_slug = %s AND s.status = 'active'
             """, (slug,))
-            opted_in = (cur.fetchone() or [0])[0]
+            opted_in_row = cur.fetchone()
+            opted_in = (opted_in_row["opted_in"] if opted_in_row else 0) or 0
 
         outreach_stats = {
             "invites_sent": outreach_row.get("invites_sent", 0),
