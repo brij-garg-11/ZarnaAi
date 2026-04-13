@@ -424,8 +424,12 @@ def render_smb_tab() -> str:
 
 def register_smb_routes(bp):
     """Register SMB-specific admin routes on the admin blueprint."""
-    from app.admin.smb_detail import smb_client_detail_view
+    from app.admin.smb_detail import smb_client_detail_view, smb_conversation_view
 
     @bp.route("/admin/smb/<slug>")
     def smb_detail(slug):
         return smb_client_detail_view(slug)
+
+    @bp.route("/admin/smb/<slug>/conversation")
+    def smb_conversation(slug):
+        return smb_conversation_view(slug)

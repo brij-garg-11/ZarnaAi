@@ -2,8 +2,8 @@
 SMB client detail page — per-tenant deep-dive view.
 
 Accessible at /admin/smb/<slug> — linked from the SMB Clients tab.
-Shows subscriber overview, full segment breakdown, subscriber table
-with preferences, and blast history for the selected client.
+Shows: subscriber overview, outreach campaign stats, segment breakdown,
+subscriber table (click any row to view full conversation), and blast history.
 
 Registered via register_smb_routes() in app/admin/smb.py.
 """
@@ -44,6 +44,12 @@ def _fmt_time(dt) -> str:
     if hasattr(dt, "strftime"):
         return dt.astimezone(timezone.utc).strftime("%b %d %H:%M UTC")
     return str(dt)[:16]
+
+
+def _mask(phone: str) -> str:
+    if len(phone) >= 10:
+        return f"({phone[2:5]}) ***-{phone[-4:]}"
+    return phone
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +114,33 @@ def _fetch_detail(slug: str) -> dict:
             """, (slug,))
             link_clicks = [dict(r) for r in cur.fetchall()]
 
-        # Segment counts — use tenant config to define segments, query DB for counts
+            # Outreach campaign stats
+            cur.execute("""
+                SELECT
+                    COUNT(*)                               AS invites_sent,
+                    COUNT(claimed_at)                      AS tickets_claimed
+                FROM smb_outreach_invites
+                WHERE tenant_slug = %s
+            """, (slug,))
+            outreach_row = dict(cur.fetchone() or {})
+
+            # How many of those invited actually subscribed (campaign opt-ins)
+            cur.execute("""
+                SELECT COUNT(DISTINCT s.phone_number)
+                FROM smb_subscribers s
+                JOIN smb_outreach_invites o
+                    ON o.phone_number = s.phone_number AND o.tenant_slug = s.tenant_slug
+                WHERE s.tenant_slug = %s AND s.status = 'active'
+            """, (slug,))
+            opted_in = (cur.fetchone() or [0])[0]
+
+        outreach_stats = {
+            "invites_sent": outreach_row.get("invites_sent", 0),
+            "opted_in": opted_in,
+            "tickets_claimed": outreach_row.get("tickets_claimed", 0),
+        }
+
+        # Segment counts
         total = len(subscribers)
         seg_counts = []
         for seg in tenant.segments:
@@ -142,6 +174,7 @@ def _fetch_detail(slug: str) -> dict:
             "blasts": blasts,
             "link_clicks": link_clicks,
             "seg_counts": seg_counts,
+            "outreach": outreach_stats,
             "total": total,
         }
 
@@ -152,20 +185,141 @@ def _fetch_detail(slug: str) -> dict:
         conn.close()
 
 
+def _fetch_conversation(slug: str, phone: str) -> list:
+    """Return full conversation history for one subscriber, oldest-first."""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT role, body, created_at
+                FROM smb_messages
+                WHERE tenant_slug = %s AND phone_number = %s
+                ORDER BY created_at ASC
+            """, (slug, phone))
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        logger.exception("SMB detail: failed to fetch conversation slug=%s phone=...%s", slug, phone[-4:])
+        return []
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # HTML rendering
 # ---------------------------------------------------------------------------
 
 _SEG_COLORS = ["#a78bfa", "#34d399", "#fbbf24", "#f87171", "#60a5fa", "#fb923c"]
 
+_PAGE_STYLE = """
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0d1117;
+  color: #f3f4f6;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  padding: 32px 24px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.section {
+  background: #111827;
+  border: 1px solid #1f2937;
+  border-radius: 12px;
+  padding: 22px 24px;
+  margin-bottom: 20px;
+}
+.section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #6b7280;
+  margin-bottom: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+a { color: #a78bfa; text-decoration: none; }
+a:hover { text-decoration: underline; }
+code {
+  background: #1f2937;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  text-align: left; padding: 8px 12px 10px; font-size: 11px; font-weight: 700;
+  color: #4b5563; border-bottom: 1px solid #1f2937; text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+td { padding: 11px 12px; border-bottom: 1px solid #111827; vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tr.sub-row:hover td { background: #131f2e; cursor: pointer; }
+
+/* Conversation panel */
+#conv-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,.65); z-index: 100;
+}
+#conv-panel {
+  position: fixed; top: 0; right: -480px; width: 460px; height: 100vh;
+  background: #111827; border-left: 1px solid #1f2937;
+  z-index: 101; transition: right .25s ease;
+  display: flex; flex-direction: column;
+}
+#conv-panel.open { right: 0; }
+#conv-header {
+  padding: 18px 20px; border-bottom: 1px solid #1f2937;
+  display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;
+}
+#conv-header h2 { font-size: 15px; font-weight: 700; color: #f3f4f6; }
+#conv-close {
+  background: none; border: none; color: #6b7280; font-size: 20px;
+  cursor: pointer; line-height: 1; padding: 0 4px;
+}
+#conv-close:hover { color: #f3f4f6; }
+#conv-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
+.bubble-wrap { display: flex; flex-direction: column; margin-bottom: 10px; }
+.bubble-wrap.user { align-items: flex-start; }
+.bubble-wrap.bot  { align-items: flex-end; }
+.bubble {
+  max-width: 80%; padding: 9px 13px; border-radius: 12px;
+  font-size: 13px; line-height: 1.45; color: #e2e8f0;
+}
+.bubble-wrap.user .bubble { background: #1e293b; border-bottom-left-radius: 3px; }
+.bubble-wrap.bot  .bubble { background: #312e81; border-bottom-right-radius: 3px; }
+.bubble-time { font-size: 10px; color: #374151; margin-top: 3px; }
+.bubble-sender { font-size: 10px; color: #4b5563; margin-bottom: 2px; }
+
+/* Stat mini-cards */
+.mini-stats { display: grid; gap: 12px; }
+.mini-stat {
+  background: #0f172a; border: 1px solid #1f2937; border-radius: 10px;
+  padding: 14px 16px; text-align: center;
+}
+.mini-stat-num { font-size: 26px; font-weight: 800; }
+.mini-stat-lbl { font-size: 11px; color: #6b7280; margin-top: 3px; }
+
+/* Blast cards */
+.blast-card {
+  background: #0f172a; border: 1px solid #1f2937; border-radius: 10px;
+  padding: 14px 16px; margin-bottom: 10px;
+}
+.blast-card:last-child { margin-bottom: 0; }
+.blast-meta { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.blast-msg { font-size: 13px; color: #d1d5db; line-height: 1.5; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+</style>
+"""
+
 
 def render_client_detail(slug: str) -> str:
-    """Return the full HTML page for one SMB client's detail view."""
     data = _fetch_detail(slug)
 
     if "error" in data:
-        return f"""
-        <!doctype html><html><head><title>SMB Detail</title>
+        return f"""<!doctype html><html><head><title>SMB Detail</title>
         <style>body{{background:#0d1117;color:#f3f4f6;font-family:system-ui;padding:40px}}</style>
         </head><body>
         <a href="/admin?tab=smb" style="color:#a78bfa;text-decoration:none">← SMB Clients</a>
@@ -177,12 +331,13 @@ def render_client_detail(slug: str) -> str:
     blasts      = data["blasts"]
     link_clicks = data["link_clicks"]
     seg_counts  = data["seg_counts"]
+    outreach    = data["outreach"]
     total       = data["total"]
 
     pref_answered = sum(1 for s in subscribers if s["comedy_type"])
     pref_pct      = round((pref_answered / total) * 100) if total else 0
 
-    # ── Config status badges ──
+    # ── Config badges ──
     def badge(ok, label_ok, label_bad):
         if ok:
             return f'<span style="color:#4ade80;font-size:12px">✓ {label_ok}</span>'
@@ -194,68 +349,96 @@ def render_client_detail(slug: str) -> str:
         badge(tenant.keyword, f"keyword: {tenant.keyword}", "no keyword"),
     ])
 
-    # ── Stat cards ──
+    # ── Top stat cards ──
     total_clicks = sum(r["clicks"] for r in link_clicks)
     stats_html = f"""
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px">
-      <div style="background:#111827;border:1px solid #1f2937;border-radius:12px;padding:18px;text-align:center">
-        <div style="font-size:28px;font-weight:700;color:#f3f4f6">{total}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:4px">Active subscribers</div>
+      <div class="mini-stat">
+        <div class="mini-stat-num" style="color:#f3f4f6">{total}</div>
+        <div class="mini-stat-lbl">Active subscribers</div>
       </div>
-      <div style="background:#111827;border:1px solid #1f2937;border-radius:12px;padding:18px;text-align:center">
-        <div style="font-size:28px;font-weight:700;color:#a78bfa">{pref_answered}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:4px">Preference answered ({pref_pct}%)</div>
+      <div class="mini-stat">
+        <div class="mini-stat-num" style="color:#a78bfa">{pref_answered}</div>
+        <div class="mini-stat-lbl">Preference answered ({pref_pct}%)</div>
       </div>
-      <div style="background:#111827;border:1px solid #1f2937;border-radius:12px;padding:18px;text-align:center">
-        <div style="font-size:28px;font-weight:700;color:#34d399">{len(blasts)}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:4px">Blasts sent</div>
+      <div class="mini-stat">
+        <div class="mini-stat-num" style="color:#34d399">{len(blasts)}</div>
+        <div class="mini-stat-lbl">Blasts sent</div>
       </div>
-      <div style="background:#111827;border:1px solid #1f2937;border-radius:12px;padding:18px;text-align:center">
-        <div style="font-size:28px;font-weight:700;color:#fbbf24">{total_clicks}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:4px">Link clicks</div>
+      <div class="mini-stat">
+        <div class="mini-stat-num" style="color:#fbbf24">{total_clicks}</div>
+        <div class="mini-stat-lbl">Link clicks</div>
       </div>
     </div>"""
+
+    # ── Outreach campaign section ──
+    invites_sent    = outreach["invites_sent"]
+    opted_in        = outreach["opted_in"]
+    tickets_claimed = outreach["tickets_claimed"]
+    reply_rate      = round((opted_in / invites_sent) * 100) if invites_sent else 0
+
+    if invites_sent > 0:
+        outreach_html = f"""
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+          <div class="mini-stat">
+            <div class="mini-stat-num" style="color:#60a5fa">{invites_sent}</div>
+            <div class="mini-stat-lbl">Invites sent</div>
+          </div>
+          <div class="mini-stat">
+            <div class="mini-stat-num" style="color:#4ade80">{opted_in}</div>
+            <div class="mini-stat-lbl">Signed up</div>
+          </div>
+          <div class="mini-stat">
+            <div class="mini-stat-num" style="color:#fbbf24">{reply_rate}%</div>
+            <div class="mini-stat-lbl">Reply rate</div>
+          </div>
+          <div class="mini-stat">
+            <div class="mini-stat-num" style="color:#fb923c">{tickets_claimed}</div>
+            <div class="mini-stat-lbl">Free tickets claimed</div>
+          </div>
+        </div>"""
+    else:
+        outreach_html = '<div style="color:#4b5563;font-size:13px;padding:8px 0">No outreach campaigns sent yet. Use <code>scripts/send_outreach_invites.py</code> to run one.</div>'
 
     # ── Segment breakdown ──
     if seg_counts:
         seg_cards = []
         for i, seg in enumerate(seg_counts):
             color = _SEG_COLORS[i % len(_SEG_COLORS)]
-            bar_pct = min(seg["pct"], 100)
             seg_cards.append(f"""
-            <div style="background:#0f172a;border:1px solid #1f2937;border-radius:10px;padding:16px;flex:1;min-width:160px">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                <span style="font-weight:700;color:{color};font-size:14px">{_esc(seg['name'])}</span>
-                <span style="font-size:20px;font-weight:700;color:#f3f4f6">{seg['count']}</span>
+            <div style="background:#0f172a;border:1px solid #1f2937;border-radius:10px;
+                        padding:16px;flex:1;min-width:150px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                <span style="font-weight:700;color:{color};font-size:13px">{_esc(seg['name'])}</span>
+                <span style="font-size:20px;font-weight:800;color:#f3f4f6">{seg['count']}</span>
               </div>
-              <div style="font-size:11px;color:#6b7280;margin-bottom:10px">{_esc(seg['description'])}</div>
-              <div style="background:#1f2937;border-radius:4px;height:6px;overflow:hidden">
-                <div style="width:{bar_pct}%;height:100%;background:{color};border-radius:4px"></div>
+              <div style="font-size:11px;color:#6b7280;margin-bottom:8px">{_esc(seg['description'])}</div>
+              <div style="background:#1f2937;border-radius:4px;height:5px;overflow:hidden">
+                <div style="width:{min(seg['pct'],100)}%;height:100%;background:{color};border-radius:4px"></div>
               </div>
-              <div style="font-size:11px;color:#4b5563;margin-top:5px">{seg['pct']}% of subscribers</div>
+              <div style="font-size:11px;color:#4b5563;margin-top:4px">{seg['pct']}% of subscribers</div>
             </div>""")
 
         seg_unclassified = total - pref_answered
         if seg_unclassified > 0:
+            unclass_pct = round((seg_unclassified / total) * 100) if total else 0
             seg_cards.append(f"""
-            <div style="background:#0f172a;border:1px solid #1f2937;border-radius:10px;padding:16px;flex:1;min-width:160px">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                <span style="font-weight:700;color:#6b7280;font-size:14px">UNCLASSIFIED</span>
-                <span style="font-size:20px;font-weight:700;color:#6b7280">{seg_unclassified}</span>
+            <div style="background:#0f172a;border:1px solid #1f2937;border-radius:10px;
+                        padding:16px;flex:1;min-width:150px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                <span style="font-weight:700;color:#6b7280;font-size:13px">UNCLASSIFIED</span>
+                <span style="font-size:20px;font-weight:800;color:#6b7280">{seg_unclassified}</span>
               </div>
-              <div style="font-size:11px;color:#4b5563;margin-bottom:10px">Haven't answered yet (onboarding step 0)</div>
-              <div style="background:#1f2937;border-radius:4px;height:6px;overflow:hidden">
-                <div style="width:{round((seg_unclassified/total)*100) if total else 0}%;height:100%;background:#374151;border-radius:4px"></div>
+              <div style="font-size:11px;color:#4b5563;margin-bottom:8px">Haven't answered yet</div>
+              <div style="background:#1f2937;border-radius:4px;height:5px;overflow:hidden">
+                <div style="width:{unclass_pct}%;height:100%;background:#374151;border-radius:4px"></div>
               </div>
-              <div style="font-size:11px;color:#4b5563;margin-top:5px">{round((seg_unclassified/total)*100) if total else 0}% of subscribers</div>
+              <div style="font-size:11px;color:#4b5563;margin-top:4px">{unclass_pct}% of subscribers</div>
             </div>""")
 
-        seg_html = f"""
-        <div style="display:flex;flex-wrap:wrap;gap:14px">
-          {"".join(seg_cards)}
-        </div>"""
+        seg_html = f'<div style="display:flex;flex-wrap:wrap;gap:12px">{"".join(seg_cards)}</div>'
     else:
-        seg_html = '<div style="color:#6b7280;font-size:13px;padding:16px 0">No segments configured for this client.</div>'
+        seg_html = '<div style="color:#6b7280;font-size:13px">No segments configured.</div>'
 
     # ── Subscriber table ──
     if not subscribers:
@@ -264,7 +447,7 @@ def render_client_detail(slug: str) -> str:
         rows = []
         for s in subscribers:
             phone = s["phone_number"] or ""
-            masked = f"({phone[2:5]}) ***-{phone[-4:]}" if len(phone) >= 10 else phone
+            masked = _mask(phone)
             comedy_type = s["comedy_type"] or ""
             interest = s["interest_text"] or ""
 
@@ -273,97 +456,165 @@ def render_client_detail(slug: str) -> str:
                     comedy_type.upper(), "#9ca3af"
                 )
                 type_badge = (
-                    f'<span style="background:#1f2937;color:{type_color};padding:2px 8px;'
-                    f'border-radius:4px;font-size:11px;font-weight:600">{_esc(comedy_type.upper())}</span>'
+                    f'<span class="badge" style="background:#1f2937;color:{type_color}">'
+                    f'{_esc(comedy_type.upper())}</span>'
                 )
             else:
                 type_badge = '<span style="color:#4b5563;font-size:11px">—</span>'
 
+            status_badge = (
+                '<span style="color:#4ade80;font-size:11px">✓ answered</span>'
+                if s["comedy_type"] else
+                '<span style="color:#6b7280;font-size:11px">pending</span>'
+            )
+
             rows.append(f"""
-            <tr style="border-bottom:1px solid #1f2937">
-              <td style="padding:10px 12px 10px 0;color:#9ca3af;font-size:13px;white-space:nowrap">{_esc(masked)}</td>
-              <td style="padding:10px 12px;white-space:nowrap">{type_badge}</td>
-              <td style="padding:10px 12px;color:#6b7280;font-size:12px;max-width:300px;
-                         overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            <tr class="sub-row" data-phone="{_esc(phone)}" onclick="openConv(this)">
+              <td style="color:#9ca3af;white-space:nowrap">{_esc(masked)}</td>
+              <td>{type_badge}</td>
+              <td style="color:#6b7280;font-size:12px;max-width:280px;overflow:hidden;
+                         text-overflow:ellipsis;white-space:nowrap"
                   title="{_esc(interest)}">{_esc(interest[:80])}{"…" if len(interest) > 80 else ""}</td>
-              <td style="padding:10px 12px;color:#4b5563;font-size:12px;white-space:nowrap">{_fmt_dt(s["created_at"])}</td>
-              <td style="padding:10px 12px;font-size:11px">
-                {"<span style='color:#4ade80'>✓ answered</span>" if s["comedy_type"]
-                  else "<span style='color:#6b7280'>pending</span>"}
-              </td>
+              <td style="color:#4b5563;font-size:12px;white-space:nowrap">{_fmt_dt(s['created_at'])}</td>
+              <td>{status_badge}</td>
+              <td style="color:#6366f1;font-size:12px;white-space:nowrap">Chat →</td>
             </tr>""")
 
         sub_html = f"""
+        <p style="font-size:12px;color:#4b5563;margin-bottom:12px">Click any row to view the full conversation.</p>
         <div style="overflow-x:auto">
-          <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <table>
             <thead>
-              <tr style="color:#4b5563;border-bottom:1px solid #1f2937;text-align:left">
-                <th style="padding:8px 12px 8px 0;font-weight:600">Phone</th>
-                <th style="padding:8px 12px;font-weight:600">Comedy Type</th>
-                <th style="padding:8px 12px;font-weight:600">What they said</th>
-                <th style="padding:8px 12px;font-weight:600">Signed up</th>
-                <th style="padding:8px 12px;font-weight:600">Status</th>
+              <tr>
+                <th>Phone</th><th>Type</th><th>What they said</th>
+                <th>Signed up</th><th>Status</th><th></th>
               </tr>
             </thead>
             <tbody>{"".join(rows)}</tbody>
           </table>
         </div>"""
 
-    # ── Blast history ──
+    # ── Blast history (card layout) ──
     if not blasts:
-        blast_html = '<div style="color:#6b7280;font-size:13px;padding:24px;text-align:center">No blasts sent yet.</div>'
+        blast_html = '<div style="color:#6b7280;font-size:13px;padding:8px 0">No blasts sent yet.</div>'
     else:
-        b_rows = []
+        total_sent = sum(b["attempted"] for b in blasts)
+        total_delivered = sum(b["succeeded"] for b in blasts)
+        overall_rate = round((total_delivered / total_sent) * 100) if total_sent else 0
+
+        summary = f"""
+        <div style="display:flex;gap:20px;margin-bottom:16px;flex-wrap:wrap">
+          <div style="font-size:13px;color:#9ca3af">
+            <span style="font-weight:700;color:#f3f4f6;font-size:18px">{len(blasts)}</span>
+            <span style="margin-left:5px">blasts</span>
+          </div>
+          <div style="font-size:13px;color:#9ca3af">
+            <span style="font-weight:700;color:#34d399;font-size:18px">{total_sent}</span>
+            <span style="margin-left:5px">total sent</span>
+          </div>
+          <div style="font-size:13px;color:#9ca3af">
+            <span style="font-weight:700;color:#4ade80;font-size:18px">{overall_rate}%</span>
+            <span style="margin-left:5px">avg delivery</span>
+          </div>
+        </div>"""
+
+        cards = []
         for b in blasts:
             success_rate = round((b["succeeded"] / b["attempted"]) * 100) if b["attempted"] else 0
             rate_color = "#4ade80" if success_rate >= 90 else "#fbbf24" if success_rate >= 70 else "#f87171"
             seg_label = (
-                f'<span style="background:#1f2937;color:#a78bfa;padding:2px 6px;border-radius:4px;font-size:11px">'
-                f'{_esc(b["segment"])}</span>'
+                f'<span class="badge" style="background:#1e1b4b;color:#a78bfa">{_esc(b["segment"])}</span>'
                 if b.get("segment") else
-                '<span style="color:#4b5563;font-size:11px">everyone</span>'
+                '<span class="badge" style="background:#1f2937;color:#6b7280">everyone</span>'
             )
-            b_rows.append(f"""
-            <tr style="border-bottom:1px solid #111827">
-              <td style="padding:10px 12px 10px 0;color:#6b7280;font-size:12px;white-space:nowrap">{_fmt_time(b["sent_at"])}</td>
-              <td style="padding:10px 12px">{seg_label}</td>
-              <td style="padding:10px 12px;color:#d1d5db;max-width:300px;overflow:hidden;
-                         text-overflow:ellipsis;white-space:nowrap;font-size:12px"
-                  title="{_esc(b['body'])}">{_esc(b['body'][:90])}{"…" if len(b['body']) > 90 else ""}</td>
-              <td style="padding:10px 12px;text-align:center;color:#9ca3af;font-size:13px">{b["attempted"]}</td>
-              <td style="padding:10px 12px;text-align:center;font-weight:600;font-size:13px;color:{rate_color}">{success_rate}%</td>
-            </tr>""")
+            msg = b["body"] or b["owner_message"] or ""
+            cards.append(f"""
+            <div class="blast-card">
+              <div class="blast-meta">
+                <span style="font-size:11px;color:#4b5563">{_fmt_time(b['sent_at'])}</span>
+                {seg_label}
+                <span style="font-size:12px;color:#9ca3af">→ {b['attempted']} sent</span>
+                <span style="font-size:12px;font-weight:700;color:{rate_color}">{success_rate}% delivered</span>
+              </div>
+              <div class="blast-msg">{_esc(msg)}</div>
+            </div>""")
 
-        blast_html = f"""
-        <div style="overflow-x:auto">
-          <table style="width:100%;border-collapse:collapse;font-size:13px">
-            <thead>
-              <tr style="color:#4b5563;border-bottom:1px solid #1f2937;text-align:left">
-                <th style="padding:8px 12px 8px 0;font-weight:600">Sent</th>
-                <th style="padding:8px 12px;font-weight:600">Audience</th>
-                <th style="padding:8px 12px;font-weight:600">Message</th>
-                <th style="padding:8px 12px;text-align:center;font-weight:600">Sent to</th>
-                <th style="padding:8px 12px;text-align:center;font-weight:600">Success</th>
-              </tr>
-            </thead>
-            <tbody>{"".join(b_rows)}</tbody>
-          </table>
-        </div>"""
+        blast_html = summary + "".join(cards)
 
     # ── Link clicks ──
+    clicks_section = ""
     if link_clicks:
-        click_pills = " ".join(
+        pills = " ".join(
             f'<span style="background:#1f2937;color:#9ca3af;padding:4px 10px;border-radius:6px;font-size:12px">'
-            f'<span style="color:#fbbf24;font-weight:600">{r["clicks"]}</span> {_esc(r["link_key"])}</span>'
+            f'<span style="color:#fbbf24;font-weight:700">{r["clicks"]}</span> {_esc(r["link_key"])}</span>'
             for r in link_clicks
         )
         clicks_section = f"""
-        <div style="background:#111827;border:1px solid #1f2937;border-radius:12px;padding:20px;margin-bottom:20px">
-          <div style="font-size:14px;font-weight:600;color:#9ca3af;margin-bottom:12px">Link Clicks</div>
-          <div style="display:flex;flex-wrap:wrap;gap:8px">{click_pills}</div>
+        <div class="section">
+          <div class="section-title">Link Clicks</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">{pills}</div>
         </div>"""
-    else:
-        clicks_section = ""
+
+    # ── Conversation panel (JS-driven) ──
+    conv_panel = f"""
+<div id="conv-overlay" onclick="closeConv()"></div>
+<div id="conv-panel">
+  <div id="conv-header">
+    <h2 id="conv-title">Conversation</h2>
+    <button id="conv-close" onclick="closeConv()">✕</button>
+  </div>
+  <div id="conv-body">
+    <div style="color:#4b5563;font-size:13px;padding:20px 0;text-align:center">Loading…</div>
+  </div>
+</div>
+<script>
+const SLUG = "{_esc(slug)}";
+
+function openConv(row) {{
+  const phone = row.getAttribute("data-phone");
+  document.getElementById("conv-title").textContent = row.cells[0].textContent + " — Chat";
+  document.getElementById("conv-body").innerHTML =
+    '<div style="color:#4b5563;font-size:13px;padding:20px 0;text-align:center">Loading…</div>';
+  document.getElementById("conv-panel").classList.add("open");
+  document.getElementById("conv-overlay").style.display = "block";
+
+  fetch("/admin/smb/" + SLUG + "/conversation?phone=" + encodeURIComponent(phone))
+    .then(r => r.json())
+    .then(msgs => {{
+      if (!msgs.length) {{
+        document.getElementById("conv-body").innerHTML =
+          '<div style="color:#4b5563;font-size:13px;padding:20px 0;text-align:center">No messages yet.</div>';
+        return;
+      }}
+      let html = "";
+      msgs.forEach(m => {{
+        const isUser = m.role === "user";
+        html += `<div class="bubble-wrap ${{isUser ? 'user' : 'bot'}}">
+          <div class="bubble-sender">${{isUser ? "Subscriber" : "Bot"}}</div>
+          <div class="bubble">${{escHtml(m.body)}}</div>
+          <div class="bubble-time">${{m.created_at || ""}}</div>
+        </div>`;
+      }});
+      document.getElementById("conv-body").innerHTML = html;
+      document.getElementById("conv-body").scrollTop = 999999;
+    }})
+    .catch(() => {{
+      document.getElementById("conv-body").innerHTML =
+        '<div style="color:#f87171;font-size:13px;padding:20px 0;text-align:center">Failed to load.</div>';
+    }});
+}}
+
+function closeConv() {{
+  document.getElementById("conv-panel").classList.remove("open");
+  document.getElementById("conv-overlay").style.display = "none";
+}}
+
+function escHtml(s) {{
+  return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}}
+
+document.addEventListener("keydown", e => {{ if (e.key === "Escape") closeConv(); }});
+</script>"""
 
     # ── Full page ──
     return f"""<!doctype html>
@@ -372,41 +623,7 @@ def render_client_detail(slug: str) -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{_esc(tenant.display_name)} — SMB Detail</title>
-  <style>
-    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-    body {{
-      background: #0d1117;
-      color: #f3f4f6;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      padding: 32px 24px;
-      max-width: 1100px;
-      margin: 0 auto;
-    }}
-    .section {{
-      background: #111827;
-      border: 1px solid #1f2937;
-      border-radius: 12px;
-      padding: 22px 24px;
-      margin-bottom: 20px;
-    }}
-    .section-title {{
-      font-size: 14px;
-      font-weight: 600;
-      color: #9ca3af;
-      margin-bottom: 16px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }}
-    a {{ color: #a78bfa; text-decoration: none; }}
-    a:hover {{ text-decoration: underline; }}
-    code {{
-      background: #1f2937;
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 12px;
-      color: #94a3b8;
-    }}
-  </style>
+  {_PAGE_STYLE}
 </head>
 <body>
   <div style="margin-bottom:24px">
@@ -415,16 +632,20 @@ def render_client_detail(slug: str) -> str:
 
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px">
     <div>
-      <h1 style="font-size:24px;font-weight:700;color:#f3f4f6">{_esc(tenant.display_name)}</h1>
+      <h1 style="font-size:24px;font-weight:800;color:#f3f4f6">{_esc(tenant.display_name)}</h1>
       <div style="font-size:13px;color:#6b7280;margin-top:4px">
         <code>{_esc(tenant.slug)}</code> &nbsp;·&nbsp; {_esc(tenant.business_type)}
-        &nbsp;·&nbsp; {_esc(tenant.location if hasattr(tenant, 'location') else '')}
       </div>
       <div style="margin-top:8px;font-size:12px">{config_badges}</div>
     </div>
   </div>
 
   {stats_html}
+
+  <div class="section">
+    <div class="section-title">Outreach Campaigns</div>
+    {outreach_html}
+  </div>
 
   <div class="section">
     <div class="section-title">Customer Segments</div>
@@ -445,18 +666,40 @@ def render_client_detail(slug: str) -> str:
     {blast_html}
   </div>
 
+  {conv_panel}
 </body>
 </html>"""
 
 
 # ---------------------------------------------------------------------------
-# Route handler (called from register_smb_routes in smb.py)
+# Route handlers
 # ---------------------------------------------------------------------------
 
 def smb_client_detail_view(slug: str):
-    """Flask view for /admin/smb/<slug>."""
+    """Flask view for GET /admin/smb/<slug>."""
     from flask import Response
     if not check_admin_auth():
         return require_admin_auth_response()
     html = render_client_detail(slug)
     return Response(html, mimetype="text/html")
+
+
+def smb_conversation_view(slug: str):
+    """Flask view for GET /admin/smb/<slug>/conversation?phone=+1..."""
+    from flask import jsonify, request
+    if not check_admin_auth():
+        return require_admin_auth_response()
+    phone = request.args.get("phone", "").strip()
+    if not phone:
+        return jsonify([])
+    messages = _fetch_conversation(slug, phone)
+    # Format timestamps for display
+    result = []
+    for m in messages:
+        ts = m.get("created_at")
+        if ts and hasattr(ts, "strftime"):
+            ts_str = ts.astimezone(timezone.utc).strftime("%b %d, %-I:%M %p UTC")
+        else:
+            ts_str = str(ts)[:16] if ts else ""
+        result.append({"role": m["role"], "body": m["body"], "created_at": ts_str})
+    return jsonify(result)
