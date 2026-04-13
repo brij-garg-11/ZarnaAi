@@ -65,7 +65,7 @@ def _login_required(f):
 # ---------------------------------------------------------------------------
 
 def _get_subscribers():
-    """Return total subscriber count and recent subscribers."""
+    """Return total subscriber count and date of most recent subscriber."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -76,10 +76,10 @@ def _get_subscribers():
             total = cur.fetchone()[0]
             cur.execute(
                 """
-                SELECT subscribed_at
+                SELECT created_at
                 FROM smb_subscribers
                 WHERE tenant_slug = %s
-                ORDER BY subscribed_at DESC
+                ORDER BY created_at DESC
                 LIMIT 1
                 """,
                 (_SLUG,),
@@ -97,7 +97,8 @@ def _get_recent_blasts(limit=5):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, message_text, audience_type, sent_at, recipient_count
+                SELECT id, body AS message_text, segment AS audience_type,
+                       sent_at, succeeded AS recipient_count
                 FROM smb_blasts
                 WHERE tenant_slug = %s
                 ORDER BY sent_at DESC
@@ -271,10 +272,11 @@ def _record_blast(message_text: str, audience_type: str, recipient_count: int):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO smb_blasts (tenant_slug, message_text, audience_type, sent_at, recipient_count)
-                    VALUES (%s, %s, %s, NOW(), %s)
+                    INSERT INTO smb_blasts
+                        (tenant_slug, owner_message, body, attempted, succeeded, sent_at, segment)
+                    VALUES (%s, %s, %s, %s, %s, NOW(), %s)
                     """,
-                    (_SLUG, message_text, audience_type, recipient_count),
+                    (_SLUG, "", message_text, recipient_count, recipient_count, audience_type),
                 )
     except Exception:
         logger.exception("smb_portal: record_blast failed")
