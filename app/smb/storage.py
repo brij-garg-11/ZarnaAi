@@ -415,3 +415,58 @@ def get_history(conn, tenant_slug: str, phone_number: str, limit: int = 8) -> li
             (tenant_slug, phone_number, limit),
         )
         return [{"role": row[0], "body": row[1]} for row in cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Outreach invites (free-ticket / timed offer tracking)
+# ---------------------------------------------------------------------------
+
+def record_outreach_invite(conn, tenant_slug: str, phone_number: str, offer: str = "free_ticket") -> None:
+    """
+    Record that an outbound invite was sent to this number.
+    Uses UPSERT so re-sending resets the clock (updates sent_at, clears claimed_at).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO smb_outreach_invites (tenant_slug, phone_number, offer, sent_at, claimed_at)
+            VALUES (%s, %s, %s, NOW(), NULL)
+            ON CONFLICT (tenant_slug, phone_number)
+            DO UPDATE SET offer = EXCLUDED.offer, sent_at = NOW(), claimed_at = NULL
+            """,
+            (tenant_slug, phone_number, offer),
+        )
+
+
+def get_active_invite(conn, tenant_slug: str, phone_number: str, window_hours: int = 24) -> dict | None:
+    """
+    Return the invite row if one exists, was sent within window_hours, and hasn't been claimed.
+    Returns None otherwise.
+    """
+    from datetime import datetime, timedelta, timezone
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, offer, sent_at
+            FROM smb_outreach_invites
+            WHERE tenant_slug = %s
+              AND phone_number = %s
+              AND sent_at > %s
+              AND claimed_at IS NULL
+            """,
+            (tenant_slug, phone_number, cutoff),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return {"id": row[0], "offer": row[1], "sent_at": row[2]}
+
+
+def claim_invite(conn, invite_id: int) -> None:
+    """Mark an invite as claimed so it can't be used again."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE smb_outreach_invites SET claimed_at = NOW() WHERE id = %s",
+            (invite_id,),
+        )

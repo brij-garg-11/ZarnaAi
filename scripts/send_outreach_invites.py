@@ -19,6 +19,8 @@ Options:
     --tenant SLUG       Tenant slug (default: west_side_comedy)
     --message TEXT      Custom invite message to send (default: auto-generated)
     --polish            Use AI to lightly clean up the message before sending
+    --free-ticket       Attach a free-ticket offer — recipients who reply within
+                        24 hours get a free ticket line in their welcome message
     --dry-run           Print numbers and message without sending anything
     --delay SECONDS     Pause between sends in seconds (default: 1.0)
     --column NAME       Force a specific column name for phone numbers
@@ -40,6 +42,8 @@ load_dotenv()
 from app.smb.tenants import get_registry
 from app.smb.brain import _signup_nudge
 from app.smb import ai as smb_ai
+from app.smb import storage as smb_storage
+from app.admin_auth import get_db_connection
 from app.messaging.twilio_adapter import TwilioAdapter
 from app.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
 
@@ -131,6 +135,8 @@ def main():
     parser.add_argument("--tenant", default="west_side_comedy", help="Tenant slug (default: west_side_comedy)")
     parser.add_argument("--message", default=None, help="Custom invite message (default: auto-generated)")
     parser.add_argument("--polish", action="store_true", help="Use AI to lightly clean up the message")
+    parser.add_argument("--free-ticket", action="store_true", dest="free_ticket",
+                        help="Recipients who reply within 24h get a free ticket in their welcome")
     parser.add_argument("--dry-run", action="store_true", help="Preview without sending")
     parser.add_argument("--delay", type=float, default=1.0, help="Seconds between sends (default: 1.0)")
     parser.add_argument("--column", default=None, help="Force a specific column name for phone numbers")
@@ -163,9 +169,14 @@ def main():
         else:
             print("  (no changes made)")
 
+    offer = "free_ticket" if args.free_ticket else None
+
     print(f"\nTenant:  {tenant.display_name} ({tenant.slug})")
     print(f"From:    {tenant.sms_number}")
-    print(f"Message: {invite}\n")
+    print(f"Message: {invite}")
+    if offer:
+        print(f"Offer:   Free ticket for replies within 24 hours")
+    print()
 
     # Load numbers
     numbers = _load_numbers(args.csv_path, args.column)
@@ -180,6 +191,8 @@ def main():
         for n in numbers:
             print(f"  Would send to: {n}")
         print(f"\nTotal: {len(numbers)} messages")
+        if offer:
+            print(f"Free ticket offer would be recorded for all successful sends.")
         sys.exit(0)
 
     # Confirm before sending
@@ -195,6 +208,9 @@ def main():
         from_number=tenant.sms_number,
     )
 
+    # Open a single DB connection for recording invites (if offer is active)
+    db_conn = get_db_connection() if offer else None
+
     sent = 0
     failed = 0
     for i, number in enumerate(numbers, 1):
@@ -203,12 +219,23 @@ def main():
         print(f"  [{i}/{len(numbers)}] {status} {number}")
         if ok:
             sent += 1
+            if db_conn and offer:
+                try:
+                    with db_conn:
+                        smb_storage.record_outreach_invite(db_conn, tenant.slug, number, offer)
+                except Exception as e:
+                    print(f"    ⚠ DB record failed for {number}: {e}")
         else:
             failed += 1
         if i < len(numbers):
             time.sleep(args.delay)
 
+    if db_conn:
+        db_conn.close()
+
     print(f"\nDone. Sent: {sent}  Failed: {failed}")
+    if offer:
+        print(f"Offer recorded for {sent} numbers — they have 24 hours to claim their free ticket.")
 
 
 if __name__ == "__main__":

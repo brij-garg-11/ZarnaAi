@@ -135,12 +135,22 @@ def get_onboarding_reply(
                 )
                 if new_sub:
                     tagging.tag_geo(conn, new_sub["id"], phone_number)
+
+                # Check for an active timed offer (e.g. free ticket within 24h)
+                invite = smb_storage.get_active_invite(conn, phone_number, tenant.slug)
+                if invite:
+                    smb_storage.claim_invite(conn, invite["id"])
+                    logger.info(
+                        "SMB outreach offer claimed: tenant=%s phone=...%s offer=%s",
+                        tenant.slug, phone_number[-4:] if phone_number else "?", invite["offer"],
+                    )
+
                 threading.Thread(
                     target=_send_vcard_mms,
                     args=(phone_number, tenant),
                     daemon=True,
                 ).start()
-                return _welcome_and_question(tenant)
+                return _welcome_and_question(tenant, claimed_offer=invite["offer"] if invite else None)
 
             # Existing subscriber who hasn't answered the preference question yet.
             # Let the brain reply normally, but try to save a preference in the background
@@ -167,13 +177,21 @@ def get_onboarding_reply(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _welcome_and_question(tenant: BusinessTenant) -> str:
-    """Return the welcome message with the preference question and STOP opt-out line."""
+def _welcome_and_question(tenant: BusinessTenant, claimed_offer: str | None = None) -> str:
+    """Return the welcome message with the preference question and STOP opt-out line.
+
+    If claimed_offer is set (e.g. 'free_ticket'), appends the reward line.
+    """
     stop_line = "Reply STOP any time to opt out."
+    welcome = tenant.welcome_message or f"Welcome to {tenant.display_name}!"
+
+    parts = [welcome]
+    if claimed_offer == "free_ticket":
+        parts.append("As a thank-you for signing up within 24 hours, you've got a FREE ticket to any upcoming show — just show this text at the box office!")
     if tenant.signup_question:
-        welcome = tenant.welcome_message or f"Welcome to {tenant.display_name}!"
-        return f"{welcome}\n\n{tenant.signup_question}\n\n{stop_line}"
-    return (tenant.welcome_message or f"Welcome to {tenant.display_name}!") + f" {stop_line}"
+        parts.append(tenant.signup_question)
+    parts.append(stop_line)
+    return "\n\n".join(parts)
 
 
 def _save_preference_async(phone_number: str, answer: str, tenant: BusinessTenant) -> None:

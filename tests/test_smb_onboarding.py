@@ -77,6 +77,17 @@ def _make_sqlite_conn():
             UNIQUE (subscriber_id, question_key)
         )
     """)
+    conn.execute("""
+        CREATE TABLE smb_outreach_invites (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_slug  TEXT NOT NULL,
+            phone_number TEXT NOT NULL,
+            offer        TEXT NOT NULL DEFAULT 'free_ticket',
+            sent_at      TEXT DEFAULT (datetime('now')),
+            claimed_at   TEXT,
+            UNIQUE (tenant_slug, phone_number)
+        )
+    """)
     conn.commit()
     return conn
 
@@ -120,6 +131,14 @@ class _SQLiteCursorWrapper:
         if "ON CONFLICT (phone_number, tenant_slug) DO NOTHING" in sql:
             sql = sql.replace("ON CONFLICT (phone_number, tenant_slug) DO NOTHING", "")
             sql = sql.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
+        if "ON CONFLICT (tenant_slug, phone_number)" in sql and "DO UPDATE SET" in sql:
+            # Upsert for outreach invites — SQLite uses INSERT OR REPLACE
+            sql = (
+                "INSERT OR REPLACE INTO smb_outreach_invites "
+                "(tenant_slug, phone_number, offer, sent_at, claimed_at) "
+                "VALUES (?, ?, ?, datetime('now'), NULL)"
+            )
+            params = params[:3]  # tenant_slug, phone_number, offer
         self._cur.execute(sql, params)
         self.rowcount = self._cur.rowcount
 

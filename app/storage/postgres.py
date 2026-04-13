@@ -314,6 +314,23 @@ _SMB_SHOW_MIGRATIONS = (
     "CREATE INDEX IF NOT EXISTS idx_smb_show_checkins_tenant ON smb_show_checkins(tenant_slug, checked_in_at DESC)",
 )
 
+_SMB_OUTREACH_MIGRATIONS = (
+    # Tracks outbound invite sends so we can enforce the 24h free-ticket window
+    # and prevent duplicate claims.
+    """
+    CREATE TABLE IF NOT EXISTS smb_outreach_invites (
+        id           BIGSERIAL   PRIMARY KEY,
+        tenant_slug  TEXT        NOT NULL,
+        phone_number TEXT        NOT NULL,
+        offer        TEXT        NOT NULL DEFAULT 'free_ticket',
+        sent_at      TIMESTAMPTZ DEFAULT NOW(),
+        claimed_at   TIMESTAMPTZ,
+        UNIQUE (tenant_slug, phone_number)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_smb_outreach_invites_lookup ON smb_outreach_invites(tenant_slug, phone_number, sent_at DESC)",
+)
+
 
 class PostgresStorage(BaseStorage):
     """Thread-safe Postgres storage using a connection pool."""
@@ -358,6 +375,8 @@ class PostgresStorage(BaseStorage):
                     for sql in _SMB_MIGRATIONS:
                         cur.execute(sql)
                     for sql in _SMB_SHOW_MIGRATIONS:
+                        cur.execute(sql)
+                    for sql in _SMB_OUTREACH_MIGRATIONS:
                         cur.execute(sql)
                 # conversation_sessions lives in session_manager — ensure it exists here too
                 try:
