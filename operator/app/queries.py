@@ -149,12 +149,12 @@ def get_audience_phones(audience_type: str, audience_filter: str, sample_pct: in
 
             if audience_type == "tag" and audience_filter:
                 cur.execute(
-                    "SELECT DISTINCT phone_number FROM contacts WHERE %s = ANY(fan_tags)",
+                    "SELECT DISTINCT phone_number FROM contacts WHERE %s = ANY(fan_tags) AND phone_number NOT LIKE 'whatsapp:%%'",
                     (audience_filter.lower(),),
                 )
             elif audience_type == "location" and audience_filter:
                 cur.execute(
-                    "SELECT DISTINCT phone_number FROM contacts WHERE LOWER(fan_location) LIKE %s",
+                    "SELECT DISTINCT phone_number FROM contacts WHERE LOWER(fan_location) LIKE %s AND phone_number NOT LIKE 'whatsapp:%%'",
                     (f"%{audience_filter.lower()}%",),
                 )
             elif audience_type == "show" and audience_filter:
@@ -167,7 +167,7 @@ def get_audience_phones(audience_type: str, audience_filter: str, sample_pct: in
                 except (ValueError, TypeError):
                     cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE FALSE")
             else:
-                cur.execute("SELECT DISTINCT phone_number FROM contacts")
+                cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE phone_number NOT LIKE 'whatsapp:%'")
 
             phones = [r[0] for r in cur.fetchall() if r[0] not in optout_set]
 
