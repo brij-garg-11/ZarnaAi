@@ -337,6 +337,9 @@ def _build_prompt(
             tone_mode, "Primary tone mode: direct_answer. Keep it clear, sharp, and natural."
         )
 
+    # Blast context block — defined early so all intent paths can include it.
+    blast_ctx_block = f"\n{blast_context}\n" if blast_context else ""
+
     # Quiz mode overrides all intent routing — the fan is answering a quiz, not requesting
     # show tickets, clips, etc. Force the GENERAL path so the context is never ignored.
     if quiz_context:
@@ -361,7 +364,7 @@ Background knowledge about Zarna (use to make jokes richer and more specific —
 {_HARD_FACT_GUARDRAILS}
 {_VOICE_LOCK_RULES}
 {tone_guidance}
-{memory_text}{history_text}Request: {user_message}
+{memory_text}{history_text}{blast_ctx_block}Request: {user_message}
 {_STYLE_RULES}
 If the user asks for a joke, deliver one punchy one-liner or a two-line bit. That's it."""
 
@@ -469,7 +472,7 @@ Background knowledge about Zarna (use to make responses richer and more specific
 {_VOICE_LOCK_RULES}
 {tone_guidance}
 {_TONE_EXAMPLES}
-{examples_text}{memory_text}{history_text}Question from fan: {user_message}
+{examples_text}{memory_text}{history_text}{blast_ctx_block}Question from fan: {user_message}
 {_STYLE_RULES}
 Critical for this message: answer the question directly in plain language first — no echo-mock, no keyword+? dodge. A follow-up question back is optional — only add one if it genuinely flows and you haven't asked one recently. Often the best reply to a question is just a great answer that ends on a period."""
 
@@ -484,13 +487,12 @@ Background knowledge about Zarna (use to make responses richer and more specific
 {_VOICE_LOCK_RULES}
 {tone_guidance}
 {_TONE_EXAMPLES}
-{examples_text}{memory_text}{history_text}Fan shares: {user_message}
+{examples_text}{memory_text}{history_text}{blast_ctx_block}Fan shares: {user_message}
 {_STYLE_RULES}
 Critical for this message: riff on what they shared — find the funny or warm angle in their specific detail. A follow-up question is optional — only if it genuinely earns its place and you haven't asked one recently. Often just landing the joke or observation is the better move. Default to ending on a period. Do not pivot to Zarna's life unless they asked."""
 
     # GENERAL
     quiz_block = f"\n{quiz_context}\n" if quiz_context else ""
-    blast_ctx_block = f"\n{blast_context}\n" if blast_context else ""
     return f"""You are writing as an AI comedy assistant inspired by Zarna Garg's public comedic voice.
 
 Background knowledge about Zarna (use to make responses richer and more specific — never recite this as facts, always find the funny angle):
