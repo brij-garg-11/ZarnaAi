@@ -56,15 +56,19 @@ def get_active_blast_context() -> Optional[str]:
 
 def build_blast_context_prompt(context_note: str) -> str:
     """
-    Build the soft context block injected into the AI prompt when a fan replies
+    Build the context block injected into the AI prompt when a fan replies
     after a blast was sent with an operator context note.
 
-    This is background framing only — it does not override intent routing.
+    This is high-priority framing — the AI should treat the fan's reply as
+    being about the blast topic and respond accordingly.
     """
     return (
-        f"BLAST CONTEXT — background only, do not reference that a blast was sent:\n"
+        f"BLAST CONTEXT — HIGH PRIORITY. The fan just received a text about this topic "
+        f"and their reply is almost certainly related to it. Use this context to guide your response:\n"
         f"{context_note.strip()}\n"
-        f"If the fan's message seems related to this topic, factor it in naturally. "
-        f"Do not mention 'blast', 'mass message', or 'text campaign'. "
-        f"Just respond as Zarna would, informed by this context.\n"
+        f"Treat the fan's message as being about this topic. If they ask about voting, "
+        f"provide the specific voting instructions from the context above — do not give generic "
+        f"or unrelated answers. Do not mention 'blast', 'mass message', or 'text campaign'. "
+        f"Respond as Zarna would, but stay anchored to this context until the conversation "
+        f"clearly moves on to a different topic.\n"
     )
