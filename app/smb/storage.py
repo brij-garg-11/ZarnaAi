@@ -458,22 +458,7 @@ def get_active_invite(conn, tenant_slug: str, phone_number: str, window_hours: i
     """
     from datetime import datetime, timedelta, timezone
     cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
-    logger.debug(
-        "get_active_invite: tenant=%s phone=...%s cutoff=%s",
-        tenant_slug, phone_number[-4:] if phone_number else "?", cutoff,
-    )
     with conn.cursor() as cur:
-        # Debug: check raw row regardless of claimed_at/sent_at to spot any mismatch
-        cur.execute(
-            "SELECT id, offer, sent_at, claimed_at, phone_number FROM smb_outreach_invites "
-            "WHERE tenant_slug = %s AND phone_number = %s",
-            (tenant_slug, phone_number),
-        )
-        raw = cur.fetchone()
-        logger.info(
-            "get_active_invite raw lookup: tenant=%s phone=...%s result=%s",
-            tenant_slug, phone_number[-4:] if phone_number else "?", raw,
-        )
         cur.execute(
             """
             SELECT id, offer, sent_at
@@ -486,10 +471,6 @@ def get_active_invite(conn, tenant_slug: str, phone_number: str, window_hours: i
             (tenant_slug, phone_number, cutoff),
         )
         row = cur.fetchone()
-        logger.info(
-            "get_active_invite filtered result: tenant=%s phone=...%s found=%s",
-            tenant_slug, phone_number[-4:] if phone_number else "?", row is not None,
-        )
         if row is None:
             return None
         return {"id": row[0], "offer": row[1], "sent_at": row[2]}
