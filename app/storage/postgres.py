@@ -329,6 +329,10 @@ _SMB_OUTREACH_MIGRATIONS = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_smb_outreach_invites_lookup ON smb_outreach_invites(tenant_slug, phone_number, sent_at DESC)",
+    # Sequential free-ticket numbers (starts at 100 per tenant) — assigned when the invite is claimed
+    "ALTER TABLE smb_outreach_invites ADD COLUMN IF NOT EXISTS ticket_number INT",
+    # Blast batch label so admin can track which CSV send each invite came from
+    "ALTER TABLE smb_outreach_invites ADD COLUMN IF NOT EXISTS batch_name TEXT",
 )
 
 

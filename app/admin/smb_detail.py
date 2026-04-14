@@ -114,7 +114,7 @@ def _fetch_detail(slug: str) -> dict:
             """, (slug,))
             link_clicks = [dict(r) for r in cur.fetchall()]
 
-            # Outreach campaign stats
+            # Outreach campaign stats (totals)
             cur.execute("""
                 SELECT
                     COUNT(*)                               AS invites_sent,
@@ -135,10 +135,36 @@ def _fetch_detail(slug: str) -> dict:
             opted_in_row = cur.fetchone()
             opted_in = (opted_in_row["opted_in"] if opted_in_row else 0) or 0
 
+            # Per-batch stats
+            cur.execute("""
+                SELECT
+                    COALESCE(batch_name, '(unlabelled)') AS batch,
+                    MIN(sent_at)                         AS first_sent,
+                    COUNT(*)                             AS invites,
+                    COUNT(claimed_at)                    AS claimed
+                FROM smb_outreach_invites
+                WHERE tenant_slug = %s
+                GROUP BY COALESCE(batch_name, '(unlabelled)')
+                ORDER BY MIN(sent_at) DESC
+            """, (slug,))
+            batch_rows = [dict(r) for r in cur.fetchall()]
+
+            # Last 50 claimed tickets
+            cur.execute("""
+                SELECT phone_number, ticket_number, claimed_at, batch_name
+                FROM smb_outreach_invites
+                WHERE tenant_slug = %s AND claimed_at IS NOT NULL AND ticket_number IS NOT NULL
+                ORDER BY ticket_number ASC
+                LIMIT 50
+            """, (slug,))
+            ticket_log = [dict(r) for r in cur.fetchall()]
+
         outreach_stats = {
             "invites_sent": outreach_row.get("invites_sent", 0),
             "opted_in": opted_in,
             "tickets_claimed": outreach_row.get("tickets_claimed", 0),
+            "batch_rows": batch_rows,
+            "ticket_log": ticket_log,
         }
 
         # Segment counts
@@ -376,11 +402,14 @@ def render_client_detail(slug: str) -> str:
     invites_sent    = outreach["invites_sent"]
     opted_in        = outreach["opted_in"]
     tickets_claimed = outreach["tickets_claimed"]
+    batch_rows      = outreach.get("batch_rows", [])
+    ticket_log      = outreach.get("ticket_log", [])
     reply_rate      = round((opted_in / invites_sent) * 100) if invites_sent else 0
 
     if invites_sent > 0:
+        # Summary stats
         outreach_html = f"""
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
           <div class="mini-stat">
             <div class="mini-stat-num" style="color:#60a5fa">{invites_sent}</div>
             <div class="mini-stat-lbl">Invites sent</div>
@@ -397,6 +426,62 @@ def render_client_detail(slug: str) -> str:
             <div class="mini-stat-num" style="color:#fb923c">{tickets_claimed}</div>
             <div class="mini-stat-lbl">Free tickets claimed</div>
           </div>
+        </div>"""
+
+        # Per-batch table
+        if batch_rows:
+            batch_trs = "".join(
+                f"""<tr>
+                  <td style="padding:6px 10px;color:#e5e7eb">{_esc(str(b["batch"]))}</td>
+                  <td style="padding:6px 10px;color:#9ca3af">{str(b["first_sent"])[:10] if b["first_sent"] else "—"}</td>
+                  <td style="padding:6px 10px;color:#60a5fa;text-align:right">{b["invites"]}</td>
+                  <td style="padding:6px 10px;color:#fb923c;text-align:right">{b["claimed"]}</td>
+                </tr>"""
+                for b in batch_rows
+            )
+            outreach_html += f"""
+        <div style="margin-top:4px">
+          <div style="font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;
+                      letter-spacing:.05em;margin-bottom:6px">Blast batches</div>
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead>
+              <tr style="border-bottom:1px solid #1f2937">
+                <th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:500">Batch</th>
+                <th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:500">Date</th>
+                <th style="padding:5px 10px;text-align:right;color:#6b7280;font-weight:500">Sent</th>
+                <th style="padding:5px 10px;text-align:right;color:#6b7280;font-weight:500">Claimed</th>
+              </tr>
+            </thead>
+            <tbody>{batch_trs}</tbody>
+          </table>
+        </div>"""
+
+        # Ticket log
+        if ticket_log:
+            ticket_trs = "".join(
+                f"""<tr>
+                  <td style="padding:5px 10px;color:#fbbf24;font-weight:700;text-align:center">#{t["ticket_number"]}</td>
+                  <td style="padding:5px 10px;color:#9ca3af">{_mask(t["phone_number"] or "")}</td>
+                  <td style="padding:5px 10px;color:#6b7280">{str(t["claimed_at"])[:16] if t["claimed_at"] else "—"}</td>
+                  <td style="padding:5px 10px;color:#4b5563">{_esc(str(t["batch_name"] or "—"))}</td>
+                </tr>"""
+                for t in ticket_log
+            )
+            outreach_html += f"""
+        <div style="margin-top:16px">
+          <div style="font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;
+                      letter-spacing:.05em;margin-bottom:6px">Claimed tickets</div>
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead>
+              <tr style="border-bottom:1px solid #1f2937">
+                <th style="padding:5px 10px;text-align:center;color:#6b7280;font-weight:500">Ticket #</th>
+                <th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:500">Phone</th>
+                <th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:500">Claimed at</th>
+                <th style="padding:5px 10px;text-align:left;color:#6b7280;font-weight:500">Batch</th>
+              </tr>
+            </thead>
+            <tbody>{ticket_trs}</tbody>
+          </table>
         </div>"""
     else:
         outreach_html = '<div style="color:#4b5563;font-size:13px;padding:8px 0">No outreach campaigns sent yet. Use <code>scripts/send_outreach_invites.py</code> to run one.</div>'

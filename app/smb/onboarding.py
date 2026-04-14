@@ -138,11 +138,13 @@ def get_onboarding_reply(
 
                 # Check for an active timed offer (e.g. free ticket within 24h)
                 invite = smb_storage.get_active_invite(conn, phone_number, tenant.slug)
+                ticket_number = None
                 if invite:
-                    smb_storage.claim_invite(conn, invite["id"])
+                    ticket_number = smb_storage.claim_invite(conn, invite["id"], tenant.slug)
                     logger.info(
-                        "SMB outreach offer claimed: tenant=%s phone=...%s offer=%s",
-                        tenant.slug, phone_number[-4:] if phone_number else "?", invite["offer"],
+                        "SMB outreach offer claimed: tenant=%s phone=...%s offer=%s ticket=#%s",
+                        tenant.slug, phone_number[-4:] if phone_number else "?",
+                        invite["offer"], ticket_number,
                     )
 
                 threading.Thread(
@@ -150,7 +152,11 @@ def get_onboarding_reply(
                     args=(phone_number, tenant),
                     daemon=True,
                 ).start()
-                return _welcome_and_question(tenant, claimed_offer=invite["offer"] if invite else None)
+                return _welcome_and_question(
+                    tenant,
+                    claimed_offer=invite["offer"] if invite else None,
+                    ticket_number=ticket_number,
+                )
 
             # Existing subscriber who hasn't answered the preference question yet.
             # Let the brain reply normally, but try to save a preference in the background
@@ -177,17 +183,31 @@ def get_onboarding_reply(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _welcome_and_question(tenant: BusinessTenant, claimed_offer: str | None = None) -> str:
+def _welcome_and_question(
+    tenant: BusinessTenant,
+    claimed_offer: str | None = None,
+    ticket_number: int | None = None,
+) -> str:
     """Return the welcome message with the preference question and STOP opt-out line.
 
-    If claimed_offer is set (e.g. 'free_ticket'), appends the reward line.
+    If claimed_offer is set (e.g. 'free_ticket'), appends the reward line including
+    the unique ticket_number so they can show it at the door.
     """
     stop_line = "Reply STOP any time to opt out."
     welcome = tenant.welcome_message or f"Welcome to {tenant.display_name}!"
 
     parts = [welcome]
     if claimed_offer == "free_ticket":
-        parts.append("As a thank-you for signing up within 24 hours, you've got a FREE ticket to any upcoming show — just show this text at the box office!")
+        if ticket_number is not None:
+            parts.append(
+                f"🎟️ Your free ticket number is #{ticket_number} — "
+                f"just show this text at the box office when you arrive. Enjoy the show!"
+            )
+        else:
+            parts.append(
+                "As a thank-you for signing up, you've got a FREE ticket to any upcoming show "
+                "— just show this text at the box office!"
+            )
     if tenant.signup_question:
         parts.append(tenant.signup_question)
     parts.append(stop_line)

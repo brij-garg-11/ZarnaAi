@@ -16,18 +16,23 @@ recipients reply YES/yeah/sure/ok/join/COMEDY the existing bot flow subscribes
 them and sends the welcome + STOP + vCard.
 
 Options:
-    --tenant SLUG       Tenant slug (default: west_side_comedy)
-    --message TEXT      Custom invite message to send (default: auto-generated)
-    --polish            Use AI to lightly clean up the message before sending
-    --free-ticket       Attach a free-ticket offer — recipients who reply within
-                        24 hours get a free ticket line in their welcome message
-    --dry-run           Print numbers and message without sending anything
-    --delay SECONDS     Pause between sends in seconds (default: 1.0)
-    --column NAME       Force a specific column name for phone numbers
+    --tenant SLUG           Tenant slug (default: west_side_comedy)
+    --message TEXT          Custom invite message to send (default: auto-generated)
+    --polish                Use AI to lightly clean up the message before sending
+    --free-ticket           Attach a free-ticket offer — recipients who reply within
+                            24 hours get a free ticket line in their welcome message
+                            with a unique ticket number starting at #100
+    --batch-name NAME       Label for this blast batch (shown in admin dashboard)
+    --batch-size N          Pause every N sends (default: 50) to avoid rate limits
+    --batch-pause SECONDS   Pause duration between batches (default: 10)
+    --dry-run               Print numbers and message without sending anything
+    --delay SECONDS         Pause between individual sends (default: 1.0)
+    --column NAME           Force a specific column name for phone numbers
 """
 
 import argparse
 import csv
+import logging
 import os
 import re
 import sys
@@ -38,6 +43,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from dotenv import load_dotenv
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("outreach_blast")
 
 from app.smb.tenants import get_registry
 from app.smb.brain import _signup_nudge
@@ -87,10 +99,10 @@ def _load_numbers(csv_path: str, column: str | None = None) -> list[str]:
                 col = headers[0]
 
         if col is None:
-            print(f"ERROR: CSV has no headers. Columns found: {headers}")
+            logger.error("CSV has no headers. Columns found: %s", headers)
             sys.exit(1)
 
-        print(f"Reading phone numbers from column: '{col}'")
+        logger.info("Reading phone numbers from column: '%s'", col)
 
         numbers = []
         skipped = []
@@ -103,9 +115,15 @@ def _load_numbers(csv_path: str, column: str | None = None) -> list[str]:
                 numbers.append(normalised)
             else:
                 skipped.append(raw)
+                logger.debug("Skipped invalid number: %s", raw)
 
         if skipped:
-            print(f"  Skipped {len(skipped)} invalid numbers: {skipped[:5]}{'…' if len(skipped)>5 else ''}")
+            logger.warning(
+                "Skipped %d invalid/unrecognised numbers: %s%s",
+                len(skipped),
+                skipped[:5],
+                "…" if len(skipped) > 5 else "",
+            )
 
         return numbers
 
@@ -136,9 +154,15 @@ def main():
     parser.add_argument("--message", default=None, help="Custom invite message (default: auto-generated)")
     parser.add_argument("--polish", action="store_true", help="Use AI to lightly clean up the message")
     parser.add_argument("--free-ticket", action="store_true", dest="free_ticket",
-                        help="Recipients who reply within 24h get a free ticket in their welcome")
+                        help="Recipients who reply within 24h get a unique free ticket number (#100, #101, …)")
+    parser.add_argument("--batch-name", default=None, dest="batch_name",
+                        help="Label for this blast (shown in admin dashboard, e.g. 'April 2026 CSV')")
+    parser.add_argument("--batch-size", type=int, default=50, dest="batch_size",
+                        help="Pause every N sends to respect rate limits (default: 50)")
+    parser.add_argument("--batch-pause", type=float, default=10.0, dest="batch_pause",
+                        help="Seconds to pause between batches (default: 10)")
     parser.add_argument("--dry-run", action="store_true", help="Preview without sending")
-    parser.add_argument("--delay", type=float, default=1.0, help="Seconds between sends (default: 1.0)")
+    parser.add_argument("--delay", type=float, default=1.0, help="Seconds between individual sends (default: 1.0)")
     parser.add_argument("--column", default=None, help="Force a specific column name for phone numbers")
     args = parser.parse_args()
 
@@ -146,11 +170,11 @@ def main():
     registry = get_registry()
     tenant = registry.get_by_slug(args.tenant)
     if tenant is None:
-        print(f"ERROR: Tenant '{args.tenant}' not found. Available: {[t.slug for t in registry.all_tenants()]}")
+        logger.error("Tenant '%s' not found. Available: %s", args.tenant, [t.slug for t in registry.all_tenants()])
         sys.exit(1)
 
     if not tenant.sms_number:
-        print(f"ERROR: Tenant '{args.tenant}' has no SMS number configured.")
+        logger.error("Tenant '%s' has no SMS number configured.", args.tenant)
         sys.exit(1)
 
     # Build invite message
@@ -160,30 +184,32 @@ def main():
         invite = _signup_nudge(tenant)
 
     if args.polish:
-        print("Polishing message with AI...")
+        logger.info("Polishing message with AI...")
         original = invite
         invite = _polish_message(invite, tenant)
         if invite != original:
-            print(f"  Original: {original}")
-            print(f"  Polished: {invite}")
+            logger.info("  Original : %s", original)
+            logger.info("  Polished : %s", invite)
         else:
-            print("  (no changes made)")
+            logger.info("  (no changes made by AI)")
 
     offer = "free_ticket" if args.free_ticket else None
+    batch_name = args.batch_name
 
-    print(f"\nTenant:  {tenant.display_name} ({tenant.slug})")
-    print(f"From:    {tenant.sms_number}")
-    print(f"Message: {invite}")
-    if offer:
-        print(f"Offer:   Free ticket for replies within 24 hours")
-    print()
+    print(f"\n{'='*60}")
+    print(f"  Tenant  : {tenant.display_name} ({tenant.slug})")
+    print(f"  From    : {tenant.sms_number}")
+    print(f"  Batch   : {batch_name or '(unlabelled)'}")
+    print(f"  Offer   : {'Free ticket for replies within 24h (numbers start at #100)' if offer else 'None'}")
+    print(f"  Message :\n\n{invite}\n")
+    print(f"{'='*60}\n")
 
     # Load numbers
     numbers = _load_numbers(args.csv_path, args.column)
-    print(f"Found {len(numbers)} valid phone numbers\n")
+    logger.info("Loaded %d valid phone numbers from CSV", len(numbers))
 
     if not numbers:
-        print("Nothing to send.")
+        logger.warning("Nothing to send — exiting.")
         sys.exit(0)
 
     if args.dry_run:
@@ -192,11 +218,13 @@ def main():
             print(f"  Would send to: {n}")
         print(f"\nTotal: {len(numbers)} messages")
         if offer:
-            print(f"Free ticket offer would be recorded for all successful sends.")
+            print("Free ticket offer would be recorded for all successful sends.")
         sys.exit(0)
 
     # Confirm before sending
-    confirm = input(f"Send '{invite[:60]}...' to {len(numbers)} numbers from {tenant.sms_number}? [y/N] ").strip().lower()
+    confirm = input(
+        f"Send to {len(numbers)} numbers from {tenant.sms_number}? [y/N] "
+    ).strip().lower()
     if confirm != "y":
         print("Aborted.")
         sys.exit(0)
@@ -208,34 +236,60 @@ def main():
         from_number=tenant.sms_number,
     )
 
-    # Open a single DB connection for recording invites (if offer is active)
     db_conn = get_db_connection() if offer else None
 
     sent = 0
     failed = 0
+    batch_num = 1
+
     for i, number in enumerate(numbers, 1):
+        logger.debug("[%d/%d] Sending to ...%s", i, len(numbers), number[-4:])
         ok = adapter.send_reply(to_number=number, body=invite, from_number=tenant.sms_number)
         status = "✓" if ok else "✗"
-        print(f"  [{i}/{len(numbers)}] {status} {number}")
+        print(f"  [{i}/{len(numbers)}] {status} ...{number[-4:]}")
+
         if ok:
             sent += 1
             if db_conn and offer:
                 try:
                     with db_conn:
-                        smb_storage.record_outreach_invite(db_conn, tenant.slug, number, offer)
+                        smb_storage.record_outreach_invite(
+                            db_conn, tenant.slug, number, offer,
+                            batch_name=batch_name,
+                        )
+                    logger.debug("  ↳ Invite recorded in DB for ...%s", number[-4:])
                 except Exception as e:
-                    print(f"    ⚠ DB record failed for {number}: {e}")
+                    logger.warning("  ↳ DB record failed for ...%s: %s", number[-4:], e)
         else:
             failed += 1
+            logger.warning("  ↳ Send FAILED for ...%s", number[-4:])
+
+        # Batch pause every batch_size sends
         if i < len(numbers):
-            time.sleep(args.delay)
+            if i % args.batch_size == 0:
+                batch_num += 1
+                logger.info(
+                    "Batch %d complete (%d sent, %d failed). Pausing %.0fs before next batch…",
+                    batch_num - 1, sent, failed, args.batch_pause,
+                )
+                print(f"\n  ── Batch pause {args.batch_pause:.0f}s (sent so far: {sent}, failed: {failed}) ──\n")
+                time.sleep(args.batch_pause)
+            else:
+                time.sleep(args.delay)
 
     if db_conn:
         db_conn.close()
 
-    print(f"\nDone. Sent: {sent}  Failed: {failed}")
+    print(f"\n{'='*60}")
+    print(f"  Done.  Sent: {sent}  Failed: {failed}  Total: {len(numbers)}")
     if offer:
-        print(f"Offer recorded for {sent} numbers — they have 24 hours to claim their free ticket.")
+        print(f"  Free ticket offer recorded for {sent} numbers.")
+        print(f"  They have 24 hours to reply YES and claim their ticket.")
+    if batch_name:
+        print(f"  Batch '{batch_name}' is now visible in the WSCC admin dashboard.")
+    print(f"{'='*60}\n")
+
+    logger.info("Blast complete — sent=%d failed=%d total=%d batch=%s", sent, failed, len(numbers), batch_name)
 
 
 if __name__ == "__main__":

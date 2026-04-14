@@ -421,7 +421,13 @@ def get_history(conn, tenant_slug: str, phone_number: str, limit: int = 8) -> li
 # Outreach invites (free-ticket / timed offer tracking)
 # ---------------------------------------------------------------------------
 
-def record_outreach_invite(conn, tenant_slug: str, phone_number: str, offer: str = "free_ticket") -> None:
+def record_outreach_invite(
+    conn,
+    tenant_slug: str,
+    phone_number: str,
+    offer: str = "free_ticket",
+    batch_name: str | None = None,
+) -> None:
     """
     Record that an outbound invite was sent to this number.
 
@@ -432,15 +438,16 @@ def record_outreach_invite(conn, tenant_slug: str, phone_number: str, offer: str
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO smb_outreach_invites (tenant_slug, phone_number, offer, sent_at, claimed_at)
-            VALUES (%s, %s, %s, NOW(), NULL)
+            INSERT INTO smb_outreach_invites (tenant_slug, phone_number, offer, sent_at, claimed_at, batch_name)
+            VALUES (%s, %s, %s, NOW(), NULL, %s)
             ON CONFLICT (tenant_slug, phone_number)
             DO UPDATE SET
-                offer    = EXCLUDED.offer,
-                sent_at  = NOW()
+                offer      = EXCLUDED.offer,
+                sent_at    = NOW(),
+                batch_name = COALESCE(EXCLUDED.batch_name, smb_outreach_invites.batch_name)
             WHERE smb_outreach_invites.claimed_at IS NULL
             """,
-            (tenant_slug, phone_number, offer),
+            (tenant_slug, phone_number, offer, batch_name),
         )
 
 
@@ -469,10 +476,28 @@ def get_active_invite(conn, tenant_slug: str, phone_number: str, window_hours: i
         return {"id": row[0], "offer": row[1], "sent_at": row[2]}
 
 
-def claim_invite(conn, invite_id: int) -> None:
-    """Mark an invite as claimed so it can't be used again."""
+def claim_invite(conn, invite_id: int, tenant_slug: str) -> int:
+    """
+    Mark an invite as claimed, assign the next sequential ticket number for this
+    tenant (starting at 100), and return that number.
+
+    The ticket number is assigned atomically in a single UPDATE so concurrent
+    claims cannot collide.
+    """
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE smb_outreach_invites SET claimed_at = NOW() WHERE id = %s",
-            (invite_id,),
+            """
+            UPDATE smb_outreach_invites
+            SET claimed_at    = NOW(),
+                ticket_number = (
+                    SELECT COALESCE(MAX(ticket_number), 99) + 1
+                    FROM smb_outreach_invites
+                    WHERE tenant_slug = %s
+                )
+            WHERE id = %s
+            RETURNING ticket_number
+            """,
+            (tenant_slug, invite_id),
         )
+        row = cur.fetchone()
+        return row[0] if row else 100
