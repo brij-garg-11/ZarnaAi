@@ -33,6 +33,7 @@ class BusinessTenant:
     keyword: Optional[str]          # Signup keyword (e.g. "LAUGH")
     tone: str = ""
     welcome_message: str = ""
+    outreach_invite_message: str = ""  # default message for send_outreach_invites.py blasts
     signup_question: str = ""          # single open-ended onboarding question
     signup_questions: list = field(default_factory=list)  # legacy multi-step (fallback)
     value_content_topics: list = field(default_factory=list)
@@ -81,6 +82,7 @@ def _load_tenant(path: Path) -> Optional[BusinessTenant]:
         keyword=_resolve(f"{prefix}_KEYWORD", "sms_keyword"),
         tone=cfg.get("tone", ""),
         welcome_message=cfg.get("welcome_message", ""),
+        outreach_invite_message=cfg.get("outreach_invite_message", ""),
         signup_question=cfg.get("signup_question", ""),
         signup_questions=cfg.get("signup_questions", []),
         value_content_topics=cfg.get("value_content_topics", []),

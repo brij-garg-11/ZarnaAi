@@ -177,9 +177,12 @@ def main():
         logger.error("Tenant '%s' has no SMS number configured.", args.tenant)
         sys.exit(1)
 
-    # Build invite message
+    # Build invite message — priority: --message flag > tenant config > AI-generated nudge
     if args.message:
         invite = args.message.strip()
+    elif tenant.outreach_invite_message:
+        invite = tenant.outreach_invite_message.strip()
+        logger.info("Using outreach_invite_message from tenant config.")
     else:
         invite = _signup_nudge(tenant)
 
@@ -241,6 +244,9 @@ def main():
     sent = 0
     failed = 0
     batch_num = 1
+    consecutive_failures = 0
+    CONSECUTIVE_FAIL_LIMIT = 5   # pause and warn after this many in a row
+    FAIL_RATE_LIMIT       = 0.20 # stop if failure rate exceeds 20% (after 20+ sends)
 
     for i, number in enumerate(numbers, 1):
         logger.debug("[%d/%d] Sending to ...%s", i, len(numbers), number[-4:])
@@ -250,6 +256,7 @@ def main():
 
         if ok:
             sent += 1
+            consecutive_failures = 0
             if db_conn and offer:
                 try:
                     with db_conn:
@@ -262,23 +269,48 @@ def main():
                     logger.warning("  ↳ DB record failed for ...%s: %s", number[-4:], e)
         else:
             failed += 1
+            consecutive_failures += 1
             logger.warning("  ↳ Send FAILED for ...%s", number[-4:])
+
+        # ── Health checks after every send ──
+
+        # 1. Too many consecutive failures — something is wrong (Twilio down, rate limit, etc.)
+        if consecutive_failures >= CONSECUTIVE_FAIL_LIMIT:
+            print(f"\n  🚨  {consecutive_failures} CONSECUTIVE FAILURES — pausing 30s before continuing.")
+            print(f"      Check your Twilio console or network. Press Ctrl+C now to abort.")
+            logger.error(
+                "CONSECUTIVE FAILURE LIMIT hit (%d in a row) at [%d/%d]. Pausing 30s.",
+                consecutive_failures, i, len(numbers),
+            )
+            time.sleep(30)
+            consecutive_failures = 0  # reset after pause so we don't loop-pause forever
+
+        # 2. High failure rate after a meaningful sample — likely a systemic issue
+        if i >= 20:
+            fail_rate = failed / i
+            if fail_rate > FAIL_RATE_LIMIT:
+                print(f"\n  🛑  STOPPING EARLY — failure rate is {fail_rate:.0%} ({failed}/{i} failed).")
+                print(f"      {sent} messages sent successfully and recorded before stopping.")
+                logger.error(
+                    "FAIL RATE %d%% exceeded limit (%d%%) at [%d/%d]. Stopping. sent=%d failed=%d",
+                    int(fail_rate * 100), int(FAIL_RATE_LIMIT * 100), i, len(numbers), sent, failed,
+                )
+                numbers = numbers[:i]  # truncate so post-run summary shows actual work done
+                break
 
         # Batch pause every batch_size sends
         if i < len(numbers):
             if i % args.batch_size == 0:
                 batch_num += 1
+                fail_rate_pct = round((failed / i) * 100) if i else 0
                 logger.info(
-                    "Batch %d complete (%d sent, %d failed). Pausing %.0fs before next batch…",
-                    batch_num - 1, sent, failed, args.batch_pause,
+                    "Batch %d complete (%d sent, %d failed, %d%% fail rate). Pausing %.0fs…",
+                    batch_num - 1, sent, failed, fail_rate_pct, args.batch_pause,
                 )
-                print(f"\n  ── Batch pause {args.batch_pause:.0f}s (sent so far: {sent}, failed: {failed}) ──\n")
+                print(f"\n  ── Batch {batch_num - 1} done │ sent: {sent} │ failed: {failed} │ fail rate: {fail_rate_pct}% │ pausing {args.batch_pause:.0f}s ──\n")
                 time.sleep(args.batch_pause)
             else:
                 time.sleep(args.delay)
-
-    if db_conn:
-        db_conn.close()
 
     print(f"\n{'='*60}")
     print(f"  Done.  Sent: {sent}  Failed: {failed}  Total: {len(numbers)}")
@@ -290,6 +322,46 @@ def main():
     print(f"{'='*60}\n")
 
     logger.info("Blast complete — sent=%d failed=%d total=%d batch=%s", sent, failed, len(numbers), batch_name)
+
+    # ── Post-run DB verification ──
+    if offer and db_conn is None:
+        # re-open if we closed early
+        db_conn = get_db_connection()
+
+    if db_conn:
+        try:
+            logger.info("Running post-blast DB verification…")
+            with db_conn.cursor() as cur:
+                # How many invite rows exist for this batch in DB
+                if batch_name:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM smb_outreach_invites WHERE tenant_slug = %s AND batch_name = %s",
+                        (tenant.slug, batch_name),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM smb_outreach_invites WHERE tenant_slug = %s AND sent_at > NOW() - INTERVAL '1 hour'",
+                        (tenant.slug,),
+                    )
+                db_recorded = cur.fetchone()[0]
+
+            mismatch = db_recorded != sent
+            print(f"\n{'='*60}")
+            print(f"  POST-BLAST VERIFICATION")
+            print(f"  Messages sent by Twilio : {sent}")
+            print(f"  Invites recorded in DB  : {db_recorded}")
+            if mismatch:
+                print(f"\n  ⚠️  MISMATCH — {sent - db_recorded} invite(s) failed to record.")
+                print(f"     Check logs above for '↳ DB record failed' warnings.")
+                logger.warning("Post-blast mismatch: sent=%d db_recorded=%d", sent, db_recorded)
+            else:
+                print(f"\n  ✅  All good — Twilio count matches DB count.")
+                logger.info("Post-blast verification passed: sent=%d db_recorded=%d", sent, db_recorded)
+            print(f"{'='*60}\n")
+        except Exception as e:
+            logger.warning("Post-blast verification failed: %s", e)
+        finally:
+            db_conn.close()
 
 
 if __name__ == "__main__":
