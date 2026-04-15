@@ -129,6 +129,15 @@ def count_audience(audience_type: str, audience_filter: str, sample_pct: int = 1
                     )
                 except (ValueError, TypeError):
                     cur.execute("SELECT 0")
+            elif audience_type == "tier" and audience_filter:
+                valid_tiers = {"superfan", "engaged", "lurker", "dormant"}
+                if audience_filter.lower() in valid_tiers:
+                    cur.execute(
+                        "SELECT COUNT(DISTINCT phone_number) FROM contacts WHERE fan_tier = %s",
+                        (audience_filter.lower(),),
+                    )
+                else:
+                    cur.execute("SELECT 0")
             else:
                 cur.execute("SELECT COUNT(DISTINCT phone_number) FROM contacts")
             total = cur.fetchone()[0]
@@ -165,6 +174,15 @@ def get_audience_phones(audience_type: str, audience_filter: str, sample_pct: in
                         (show_id,),
                     )
                 except (ValueError, TypeError):
+                    cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE FALSE")
+            elif audience_type == "tier" and audience_filter:
+                valid_tiers = {"superfan", "engaged", "lurker", "dormant"}
+                if audience_filter.lower() in valid_tiers:
+                    cur.execute(
+                        "SELECT DISTINCT phone_number FROM contacts WHERE fan_tier = %s AND phone_number NOT LIKE 'whatsapp:%%'",
+                        (audience_filter.lower(),),
+                    )
+                else:
                     cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE FALSE")
             else:
                 cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE phone_number NOT LIKE 'whatsapp:%'")

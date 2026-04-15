@@ -160,6 +160,20 @@ def init_db():
         # blast_category: 'friendly' | 'sales' | 'show' — used to split Blast Performance table
         "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS blast_category TEXT DEFAULT NULL",
 
+        # ── blast_recipients: per-fan record of every blast send ────────────
+        # Foundation for Smart Blast frequency logic and per-fan tier cadence.
+        """
+        CREATE TABLE IF NOT EXISTS blast_recipients (
+            id           BIGSERIAL PRIMARY KEY,
+            blast_id     BIGINT NOT NULL REFERENCES blast_drafts(id) ON DELETE CASCADE,
+            phone_number TEXT NOT NULL,
+            sent_at      TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE (blast_id, phone_number)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_blast_recipients_phone ON blast_recipients (phone_number, sent_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_blast_recipients_blast ON blast_recipients (blast_id)",
+
         # ── Data-cleanup on every startup ──────────────────────────────────
         # 1. Clear /tmp-based image URLs (ephemeral Railway filesystem, gone on redeploy)
         "UPDATE blast_drafts SET media_url='' WHERE media_url LIKE '%/operator/blast/uploads/%'",

@@ -352,12 +352,84 @@ def upload_image():
         return jsonify({"error": f"Upload failed: {e}"}), 500
 
 
+@blast_bp.route("/operator/blast/smart-send-preview", methods=["POST"])
+@login_required
+def smart_send_preview():
+    """
+    Smart Send preview — returns a JSON breakdown of how many fans per tier
+    would receive the blast, accounting for per-tier frequency cadence.
+
+    Cadence rules (days since last blast to suppress):
+      superfan : 5 days
+      engaged  : 7 days
+      lurker   : 14 days
+      dormant  : 30 days
+
+    Response:
+      {
+        "tiers": {
+          "superfan": {"total": N, "suppressed": N, "sending": N},
+          ...
+        },
+        "total_sending": N,
+        "total_suppressed": N
+      }
+    """
+    from ..db import get_conn as _get_conn
+    CADENCE_DAYS = {"superfan": 5, "engaged": 7, "lurker": 14, "dormant": 30}
+    conn = _get_conn()
+    result = {"tiers": {}, "total_sending": 0, "total_suppressed": 0}
+    try:
+        with conn.cursor() as cur:
+            # Optouts — exclude from all tiers
+            cur.execute("SELECT phone_number FROM broadcast_optouts")
+            optouts = {r[0] for r in cur.fetchall()}
+
+            for tier, cadence in CADENCE_DAYS.items():
+                # All fans in this tier (excluding WhatsApp + optouts)
+                cur.execute(
+                    "SELECT DISTINCT phone_number FROM contacts "
+                    "WHERE fan_tier = %s AND phone_number NOT LIKE 'whatsapp:%%'",
+                    (tier,),
+                )
+                all_phones = {r[0] for r in cur.fetchall()} - optouts
+
+                # Fans in this tier blasted within cadence window
+                cur.execute(
+                    """
+                    SELECT DISTINCT br.phone_number
+                    FROM   blast_recipients br
+                    JOIN   blast_drafts bd ON bd.id = br.blast_id
+                    JOIN   contacts c ON c.phone_number = br.phone_number
+                    WHERE  c.fan_tier = %s
+                      AND  br.sent_at >= NOW() - (%s || ' days')::INTERVAL
+                    """,
+                    (tier, str(cadence)),
+                )
+                recently_blasted = {r[0] for r in cur.fetchall()}
+
+                suppressed = len(all_phones & recently_blasted)
+                sending    = len(all_phones - recently_blasted)
+                result["tiers"][tier] = {
+                    "total":      len(all_phones),
+                    "suppressed": suppressed,
+                    "sending":    sending,
+                    "cadence_days": cadence,
+                }
+                result["total_sending"]    += sending
+                result["total_suppressed"] += suppressed
+    finally:
+        conn.close()
+
+    return jsonify(result)
+
+
 @blast_bp.route("/operator/blast/preview-count", methods=["POST"])
 @login_required
 def preview_count():
     """HTMX or AJAX endpoint — returns audience count for current filter."""
     audience_type = request.form.get("audience_type", "all")
-    if audience_type not in ("all", "tag", "location", "random", "show"):
+    if audience_type not in ("all", "tag", "location", "random", "show", "tier"):
         audience_type = "all"
     audience_filter = request.form.get("audience_filter", "").strip()
     sample_pct = _safe_int(request.form.get("audience_sample_pct"), 100, 1, 100)
@@ -387,7 +459,7 @@ def save_draft():
     if channel not in ("twilio", "slicktext"):
         channel = "twilio"
     audience_type = request.form.get("audience_type", "all")
-    if audience_type not in ("all", "tag", "location", "random", "show"):
+    if audience_type not in ("all", "tag", "location", "random", "show", "tier"):
         audience_type = "all"
     audience_filter = (request.form.get("audience_filter") or "").strip()[:200]
     sample_pct = _safe_int(request.form.get("audience_sample_pct"), 100, 1, 100)

@@ -171,7 +171,7 @@
         <div class="mb-5">
           <label class="section-label mb-2 block">Audience</label>
           <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-3">
-            {% for val, lbl in [("all","Everyone"),("show","By Show"),("tag","By Tag"),("location","By Location"),("random","Random %")] %}
+            {% for val, lbl in [("all","Everyone"),("tier","By Tier"),("show","By Show"),("tag","By Tag"),("location","By Location"),("random","Random %")] %}
             <label class="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg border cursor-pointer text-xs font-medium transition-colors"
                    :style="audienceType==='{{ val }}' ? 'border-color:var(--pink);background:#3a2a0e;color:var(--pink);' : 'border-color:var(--border);color:var(--text-muted);'">
               <input type="radio" name="audience_type" value="{{ val }}" x-model="audienceType" class="sr-only"
@@ -217,6 +217,16 @@
                    x-model="audienceFilter"
                    @input.debounce.500ms="updateCount()">
           </div>
+          <div x-show="audienceType==='tier'" x-transition>
+            <select name="audience_filter_tier" class="zarna-input" x-model="audienceFilter"
+                    @change="updateCount()">
+              <option value="">— select a tier —</option>
+              <option value="superfan"  {{ 'selected' if active_draft and active_draft.audience_filter == 'superfan'  else '' }}>⭐ Superfan — highly engaged, multi-session fans</option>
+              <option value="engaged"   {{ 'selected' if active_draft and active_draft.audience_filter == 'engaged'   else '' }}>✅ Engaged — active fans who reply</option>
+              <option value="lurker"    {{ 'selected' if active_draft and active_draft.audience_filter == 'lurker'    else '' }}>👀 Lurker — opted in, rarely replies</option>
+              <option value="dormant"   {{ 'selected' if active_draft and active_draft.audience_filter == 'dormant'   else '' }}>💤 Dormant — inactive 60+ days</option>
+            </select>
+          </div>
           <div x-show="audienceType==='random'" x-transition>
             <div class="flex items-center gap-4">
               <input type="range" name="audience_sample_pct" min="1" max="100"
@@ -233,7 +243,7 @@
           <input type="hidden" name="audience_sample_pct" :value="samplePct">
 
           <!-- Live count preview -->
-          <div class="mt-3 flex items-center gap-3">
+          <div class="mt-3 flex items-center gap-3 flex-wrap">
             <div class="px-4 py-2 rounded-lg text-sm font-semibold" style="background:#1A1714;border:1px solid var(--border);">
               <span x-show="!countLoading" style="color:var(--pink);">
                 <span x-text="audienceCount.toLocaleString()"></span> recipients match
@@ -241,6 +251,40 @@
               <span x-show="countLoading" style="color:var(--text-muted);">Counting…</span>
             </div>
             <button type="button" @click="updateCount()" class="btn-ghost btn-sm">Refresh</button>
+            <button type="button" @click="loadSmartSend()" class="btn-ghost btn-sm" style="border-color:var(--pink);color:var(--pink);">
+              ⚡ Smart Send Preview
+            </button>
+          </div>
+
+          <!-- Smart Send breakdown panel -->
+          <div x-show="smartSend" x-transition class="mt-3 rounded-xl border p-4 text-sm" style="border-color:var(--border);background:#0F0D0B;">
+            <div class="flex items-center justify-between mb-3">
+              <span class="font-semibold" style="color:var(--text);">⚡ Smart Send Breakdown</span>
+              <button type="button" @click="smartSend=null" class="btn-ghost btn-sm">✕</button>
+            </div>
+            <template x-if="smartSendLoading">
+              <p style="color:var(--text-muted);">Calculating…</p>
+            </template>
+            <template x-if="!smartSendLoading && smartSend">
+              <div>
+                <div class="grid grid-cols-4 gap-2 mb-3 text-xs font-medium" style="color:var(--text-muted);">
+                  <span>Tier</span><span class="text-right">Total</span><span class="text-right">Suppressed</span><span class="text-right">Sending</span>
+                </div>
+                <template x-for="[tier, data] in Object.entries(smartSend.tiers)" :key="tier">
+                  <div class="grid grid-cols-4 gap-2 py-1.5 border-t text-xs" style="border-color:var(--border);">
+                    <span class="font-medium capitalize" style="color:var(--text);" x-text="tier"></span>
+                    <span class="text-right" style="color:var(--text-muted);" x-text="data.total.toLocaleString()"></span>
+                    <span class="text-right" style="color:#888;" x-text="data.suppressed > 0 ? '–' + data.suppressed.toLocaleString() + ' (blasted <' + data.cadence_days + 'd ago)' : '—'"></span>
+                    <span class="text-right font-semibold" style="color:var(--pink);" x-text="data.sending.toLocaleString()"></span>
+                  </div>
+                </template>
+                <div class="mt-3 pt-3 border-t flex justify-between font-semibold text-sm" style="border-color:var(--border);">
+                  <span style="color:var(--text);">Total sending</span>
+                  <span style="color:var(--pink);" x-text="smartSend.total_sending.toLocaleString()"></span>
+                </div>
+                <p class="mt-2 text-xs" style="color:var(--text-muted);">Suppressed fans received a blast too recently per their tier cadence. You can override by selecting a specific tier above.</p>
+              </div>
+            </template>
           </div>
         </div>
 
@@ -573,6 +617,8 @@ function blastCompose() {
     body: `{{ (active_draft.body or '')|replace('`', '\\`')|replace('\\', '\\\\')|safe if active_draft else '' }}`,
     audienceCount: {{ audience_count or 0 }},
     countLoading: false,
+    smartSend: null,
+    smartSendLoading: false,
     showSchedule: false,
     sendAt: '',
     isQuiz: {{ 'true' if active_draft and active_draft.is_quiz else 'false' }},
@@ -582,6 +628,7 @@ function blastCompose() {
       if (this.audienceType === 'tag') return this.audienceFilter;
       if (this.audienceType === 'location') return this.audienceFilter;
       if (this.audienceType === 'show') return this.audienceFilter;
+      if (this.audienceType === 'tier') return this.audienceFilter;
       return '';
     },
 
@@ -598,6 +645,18 @@ function blastCompose() {
         if (match) this.audienceCount = parseInt(match[1].replace(',', ''));
       } catch(e) {}
       this.countLoading = false;
+    },
+
+    async loadSmartSend() {
+      this.smartSendLoading = true;
+      this.smartSend = {};
+      try {
+        const resp = await fetch('/operator/blast/smart-send-preview', { method: 'POST' });
+        this.smartSend = await resp.json();
+      } catch(e) {
+        this.smartSend = null;
+      }
+      this.smartSendLoading = false;
     },
   }
 }

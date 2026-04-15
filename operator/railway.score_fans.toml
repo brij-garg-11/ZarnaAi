@@ -1,0 +1,13 @@
+# Nightly fan scoring — computes fan_score + fan_tier on every contact.
+#
+# Point a separate Railway cron service at this file:
+#   Service → Settings → Railway config file → operator/railway.score_fans.toml
+#
+# Runs nightly (recommended: 3am UTC so it's fresh before any morning blasts).
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+# -u = unbuffered stdout/stderr so Railway shows logs line-by-line before exit
+startCommand = "python -u scripts/score_fans.py"

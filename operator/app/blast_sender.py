@@ -82,6 +82,7 @@ def execute_blast(draft_id: int):
 
     sent = 0
     failed = 0
+    sent_phones: list[str] = []
 
     for i, phone in enumerate(phones):
         try:
@@ -89,6 +90,7 @@ def execute_blast(draft_id: int):
             logger.info("  send to ...%s via %s: %s", phone[-4:], channel, "OK" if ok else "FAIL")
             if ok:
                 sent += 1
+                sent_phones.append(phone)
             else:
                 failed += 1
         except Exception as e:
@@ -101,6 +103,10 @@ def execute_blast(draft_id: int):
 
     mark_blast_sent(draft_id, sent, failed, total)
     logger.info("=== BLAST %s DONE: %s sent, %s failed of %s ===", draft_id, sent, failed, len(phones))
+
+    # Record per-fan recipients for Smart Blast frequency tracking.
+    if sent_phones:
+        _record_recipients(draft_id, sent_phones)
 
     # If this was a quiz blast, create a quiz_sessions row now so inbound replies get context.
     if draft.get("is_quiz") and (draft.get("quiz_correct_answer") or "").strip():
@@ -202,6 +208,35 @@ def _create_blast_context_session(blast_draft_id: int, context_note: str) -> Non
         )
     except Exception as e:
         logger.exception("_create_blast_context_session failed: %s", e)
+
+
+def _record_recipients(blast_id: int, phones: list[str]) -> None:
+    """
+    Bulk-insert one row per successfully sent phone into blast_recipients.
+    Used by Smart Blast to enforce per-fan frequency cadence.
+    Silently skips duplicates (UNIQUE constraint) so reruns are safe.
+    """
+    if not phones:
+        return
+    try:
+        from .db import get_conn
+        conn = get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                from psycopg2.extras import execute_values
+                execute_values(
+                    cur,
+                    """
+                    INSERT INTO blast_recipients (blast_id, phone_number)
+                    VALUES %s
+                    ON CONFLICT (blast_id, phone_number) DO NOTHING
+                    """,
+                    [(blast_id, p) for p in phones],
+                )
+        conn.close()
+        logger.info("_record_recipients: recorded %d recipients for blast %s", len(phones), blast_id)
+    except Exception as e:
+        logger.exception("_record_recipients failed for blast %s: %s", blast_id, e)
 
 
 def _send_one(phone: str, body: str, channel: str, *, media_url: str = "") -> bool:
