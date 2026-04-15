@@ -63,7 +63,7 @@ def ensure_columns(conn):
     """Add fan_score and fan_tier columns to contacts if they don't exist."""
     with conn.cursor() as cur:
         cur.execute("ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_score INT DEFAULT 0")
-        cur.execute("ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_tier  TEXT DEFAULT 'dormant'")
+        cur.execute("ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_tier  TEXT DEFAULT 'engaged'")
     conn.commit()
     logger.info("ensure_columns: fan_score and fan_tier ready on contacts")
 
