@@ -33,6 +33,27 @@ logger = logging.getLogger(__name__)
 blast_bp = Blueprint("blast", __name__)
 
 
+def _get_tier_counts() -> dict:
+    """Return {tier: count} for all four tiers. Fast single query."""
+    from ..db import get_conn
+    counts = {"superfan": 0, "engaged": 0, "lurker": 0, "dormant": 0}
+    try:
+        conn = get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT fan_tier, COUNT(*) FROM contacts "
+                    "WHERE fan_tier IS NOT NULL GROUP BY fan_tier"
+                )
+                for tier, cnt in cur.fetchall():
+                    if tier in counts:
+                        counts[tier] = cnt
+        conn.close()
+    except Exception as e:
+        logger.warning("_get_tier_counts failed: %s", e)
+    return counts
+
+
 @blast_bp.route("/operator/blast")
 @login_required
 def blast_index():
@@ -50,6 +71,7 @@ def blast_index():
         audience_count=None,
         image_upload_enabled=_image_upload_configured(),
         tracked_short_url="",
+        tier_counts=_get_tier_counts(),
     )
 
 
@@ -149,6 +171,7 @@ def blast_compose(draft_id: int):
         audience_count=audience_count,
         image_upload_enabled=_image_upload_configured(),
         tracked_short_url=tracked_short_url,
+        tier_counts=_get_tier_counts(),
     )
 
 

@@ -502,6 +502,20 @@ def _fetch_dashboard(
             """)
             tag_breakdown = [(r["tag"], r["cnt"]) for r in cur.fetchall()]
 
+            cur.execute("""
+                SELECT fan_tier, COUNT(*) as cnt
+                FROM contacts
+                WHERE fan_tier IS NOT NULL
+                GROUP BY fan_tier
+                ORDER BY CASE fan_tier
+                    WHEN 'superfan' THEN 1
+                    WHEN 'engaged'  THEN 2
+                    WHEN 'lurker'   THEN 3
+                    WHEN 'dormant'  THEN 4
+                    ELSE 5 END
+            """)
+            tier_breakdown = [(r["fan_tier"], r["cnt"]) for r in cur.fetchall()]
+
             if tag_filter and location_filter:
                 cur.execute("""
                     SELECT phone_number, fan_memory, fan_tags, fan_location, created_at, source
@@ -1058,6 +1072,7 @@ def _fetch_dashboard(
             "top_messages": top_messages,
             "top_area_codes": top_area_codes,
             "tag_breakdown": tag_breakdown,
+            "tier_breakdown": tier_breakdown,
             "fan_profiles": fan_profiles,
             "tag_filter": tag_filter,
             "messages_last_hour": messages_last_hour,
@@ -1718,6 +1733,30 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
         <div class="stat-label">Profiled Fans</div>
         <div class="stat-value purple">{stats["profiled_fans"]:,}</div>
         <div class="stat-trend" style="color:#64748b;font-size:12px">with memory built</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Fan Tiers — updated nightly</div>
+      <div style="margin-top:8px">
+        {''.join(f"""
+        <details style="margin-bottom:8px;border:1px solid #2d2d2d;border-radius:8px;overflow:hidden">
+          <summary style="padding:10px 14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;background:#1a1a1a;list-style:none;user-select:none">
+            <span style="font-weight:600;color:#e2e8f0;text-transform:capitalize">{
+              '⭐ Superfan' if tier == 'superfan' else
+              '✅ Engaged'  if tier == 'engaged'  else
+              '👀 Lurker'   if tier == 'lurker'   else
+              '💤 Dormant'
+            }</span>
+            <span style="background:#374151;color:#94a3b8;font-size:12px;font-weight:700;padding:2px 10px;border-radius:999px">{cnt:,}</span>
+          </summary>
+          <div style="padding:10px 14px;font-size:13px;color:#94a3b8;background:#111">
+            {'Highly engaged fans — multiple sessions, fast replies, show sign-ups.' if tier == 'superfan' else
+             'Active fans who reply and engage with the bot regularly.' if tier == 'engaged' else
+             'Opted in but rarely reply — still reading, just quiet.' if tier == 'lurker' else
+             'No activity in 60+ days. Good for re-engagement blasts (monthly max).'}
+          </div>
+        </details>""" for tier, cnt in stats["tier_breakdown"]) or '<p style="color:#64748b;font-size:13px">Tiers will appear after the nightly scoring cron runs.</p>'}
       </div>
     </div>
 

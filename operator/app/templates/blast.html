@@ -167,6 +167,19 @@
           </p>
         </div>
 
+        <!-- Tier summary strip -->
+        {% if tier_counts %}
+        <div class="mb-4 grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {% for tier, emoji, label in [("superfan","⭐","Superfan"),("engaged","✅","Engaged"),("lurker","👀","Lurker"),("dormant","💤","Dormant")] %}
+          <div class="rounded-lg border px-3 py-2 text-center" style="border-color:var(--border);background:#1A1714;">
+            <div class="text-xs mb-0.5" style="color:var(--text-muted);">{{ emoji }} {{ label }}</div>
+            <div class="text-lg font-bold" style="color:var(--pink);">{{ "{:,}".format(tier_counts.get(tier, 0)) }}</div>
+          </div>
+          {% endfor %}
+        </div>
+        <p class="text-xs mb-4" style="color:var(--text-dim);">Fan tiers update nightly. Select "By Tier" below to blast a specific group.</p>
+        {% endif %}
+
         <!-- Audience -->
         <div class="mb-5">
           <label class="section-label mb-2 block">Audience</label>
