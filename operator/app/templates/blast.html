@@ -171,22 +171,22 @@
         {% if tier_counts %}
         <div class="mb-4 grid grid-cols-2 sm:grid-cols-4 gap-2">
           {% for tier, emoji, label in [("superfan","⭐","Superfan"),("engaged","✅","Engaged"),("lurker","👀","Lurker"),("dormant","💤","Dormant")] %}
-          <div class="rounded-lg border px-3 py-2 text-center" style="border-color:var(--border);background:#1A1714;">
-            <div class="text-xs mb-0.5" style="color:var(--text-muted);">{{ emoji }} {{ label }}</div>
-            <div class="text-lg font-bold" style="color:var(--pink);">{{ "{:,}".format(tier_counts.get(tier, 0)) }}</div>
+          <div class="rounded-lg border px-3 py-2 text-center" style="border-color:#3d3530;background:#221e1a;">
+            <div class="text-xs font-medium mb-1" style="color:#a89080;">{{ emoji }} {{ label }}</div>
+            <div class="text-xl font-bold" style="color:var(--pink);">{{ "{:,}".format(tier_counts.get(tier, 0)) }}</div>
           </div>
           {% endfor %}
         </div>
-        <p class="text-xs mb-4" style="color:var(--text-dim);">Fan tiers update nightly. Select "By Tier" below to blast a specific group.</p>
+        <p class="text-xs mb-4" style="color:#6b7280;">Fan tiers update nightly. Select "By Tier" below to blast a specific group.</p>
         {% endif %}
 
         <!-- Audience -->
         <div class="mb-5">
           <label class="section-label mb-2 block">Audience</label>
-          <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-3">
+          <div class="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-3">
             {% for val, lbl in [("all","Everyone"),("tier","By Tier"),("show","By Show"),("tag","By Tag"),("location","By Location"),("random","Random %")] %}
             <label class="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg border cursor-pointer text-xs font-medium transition-colors"
-                   :style="audienceType==='{{ val }}' ? 'border-color:var(--pink);background:#3a2a0e;color:var(--pink);' : 'border-color:var(--border);color:var(--text-muted);'">
+                   :style="audienceType==='{{ val }}' ? 'border-color:var(--pink);background:#3a2a0e;color:var(--pink);' : 'border-color:#3d3530;color:#a89080;'">
               <input type="radio" name="audience_type" value="{{ val }}" x-model="audienceType" class="sr-only"
                      {{ 'checked' if active_draft.audience_type == val else '' }}>
               {{ lbl }}
@@ -280,14 +280,16 @@
             </template>
             <template x-if="!smartSendLoading && smartSend">
               <div>
-                <div class="grid grid-cols-4 gap-2 mb-3 text-xs font-medium" style="color:var(--text-muted);">
+                <div class="grid grid-cols-4 gap-2 mb-3 text-xs font-medium" style="color:#94a3b8;">
                   <span>Tier</span><span class="text-right">Total</span><span class="text-right">Suppressed</span><span class="text-right">Sending</span>
                 </div>
                 <template x-for="[tier, data] in Object.entries(smartSend.tiers)" :key="tier">
-                  <div class="grid grid-cols-4 gap-2 py-1.5 border-t text-xs" style="border-color:var(--border);">
-                    <span class="font-medium capitalize" style="color:var(--text);" x-text="tier"></span>
-                    <span class="text-right" style="color:var(--text-muted);" x-text="data.total.toLocaleString()"></span>
-                    <span class="text-right" style="color:#888;" x-text="data.suppressed > 0 ? '–' + data.suppressed.toLocaleString() + ' (blasted <' + data.cadence_days + 'd ago)' : '—'"></span>
+                  <div class="grid grid-cols-4 gap-2 py-1.5 border-t text-xs" style="border-color:#2d2d2d;">
+                    <span class="font-medium" style="color:#e2e8f0;"
+                      x-text="tier === 'superfan' ? '⭐ Superfan' : tier === 'engaged' ? '✅ Engaged' : tier === 'lurker' ? '👀 Lurker' : '💤 Dormant'">
+                    </span>
+                    <span class="text-right" style="color:#94a3b8;" x-text="data.total.toLocaleString()"></span>
+                    <span class="text-right" style="color:#6b7280;" x-text="data.suppressed > 0 ? '–' + data.suppressed.toLocaleString() + ' (<' + data.cadence_days + 'd ago)' : '—'"></span>
                     <span class="text-right font-semibold" style="color:var(--pink);" x-text="data.sending.toLocaleString()"></span>
                   </div>
                 </template>
