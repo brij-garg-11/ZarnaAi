@@ -135,7 +135,7 @@ def execute_blast(draft_id: int):
         _create_blast_context_session(draft_id, combined)
 
     # Update tracked_links.sent_to with the number of recipients this blast reached
-    if tracked_link_slug and len(phones) > 0:
+    if tracked_link_slug and sent > 0:
         try:
             from .db import get_conn
             conn = get_conn()
@@ -143,10 +143,10 @@ def execute_blast(draft_id: int):
                 with conn.cursor() as cur:
                     cur.execute(
                         "UPDATE tracked_links SET sent_to = sent_to + %s WHERE slug = %s",
-                        (len(phones), tracked_link_slug),
+                        (sent, tracked_link_slug),
                     )
             conn.close()
-            logger.info("  updated sent_to +%d for slug=%r", len(phones), tracked_link_slug)
+            logger.info("  updated sent_to +%d for slug=%r", sent, tracked_link_slug)
         except Exception as e:
             logger.warning("  could not update sent_to: %s", e)
 
