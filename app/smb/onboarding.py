@@ -137,7 +137,7 @@ def get_onboarding_reply(
                     tagging.tag_geo(conn, new_sub["id"], phone_number)
 
                 # Check for an active timed offer (e.g. free ticket within 24h)
-                invite = smb_storage.get_active_invite(conn, tenant.slug, phone_number)
+                invite = smb_storage.get_active_invite(conn, tenant.slug, phone_number, window_hours=168)
                 ticket_number = None
                 if invite:
                     ticket_number = smb_storage.claim_invite(conn, invite["id"], tenant.slug)
