@@ -120,6 +120,14 @@ def _init_tracking_tables():
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_tlc_clicked_at ON tracked_link_clicks(clicked_at)"
                 )
+                # phone_number: fan identity for personalized link attribution
+                cur.execute(
+                    "ALTER TABLE tracked_link_clicks ADD COLUMN IF NOT EXISTS phone_number TEXT DEFAULT NULL"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_tlc_phone ON tracked_link_clicks(phone_number) "
+                    "WHERE phone_number IS NOT NULL"
+                )
                 # sent_to: total recipients across all blasts that used this link
                 cur.execute(
                     "ALTER TABLE tracked_links ADD COLUMN IF NOT EXISTS sent_to INT DEFAULT 0"

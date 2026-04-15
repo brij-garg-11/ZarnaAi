@@ -120,9 +120,6 @@ _ENGAGEMENT_ANALYTICS_MIGRATIONS = (
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS msgs_after_this     INT",
     # Source tag so blast messages can be excluded from bot conversation history
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS msg_source          TEXT DEFAULT 'bot'",
-    # phone_number on tracked_link_clicks: populated when fan identity is known
-    "ALTER TABLE tracked_link_clicks ADD COLUMN IF NOT EXISTS phone_number TEXT DEFAULT NULL",
-    "CREATE INDEX IF NOT EXISTS idx_tlc_phone ON tracked_link_clicks(phone_number) WHERE phone_number IS NOT NULL",
     # Index for fast analytics queries (filter to scored assistant rows)
     """
     CREATE INDEX IF NOT EXISTS idx_messages_analytics
