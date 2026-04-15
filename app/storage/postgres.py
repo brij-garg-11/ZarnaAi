@@ -212,6 +212,39 @@ _QUALITY_DIGEST_MIGRATIONS = (
     "CREATE INDEX IF NOT EXISTS idx_quality_reports_week ON ai_quality_reports(week_start DESC)",
 )
 
+# Pillar 1 — winning examples corpus for cold-start bootstrapping.
+# Rows are seeded from top historical replies and versioned by snapshot_tag.
+# Set is_active=FALSE on a snapshot_tag to roll it back without deleting data.
+_WINNING_EXAMPLES_MIGRATIONS = (
+    """
+    CREATE TABLE IF NOT EXISTS winning_examples_corpus (
+        id            BIGSERIAL PRIMARY KEY,
+        creator_slug  TEXT        NOT NULL DEFAULT 'zarna',
+        intent        TEXT        NOT NULL,
+        tone_mode     TEXT        NOT NULL,
+        text          TEXT        NOT NULL,
+        snapshot_tag  TEXT        NOT NULL DEFAULT 'manual',
+        is_active     BOOLEAN     NOT NULL DEFAULT TRUE,
+        source_msg_id BIGINT,
+        created_at    TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_wec_creator_intent_tone ON winning_examples_corpus(creator_slug, intent, tone_mode) WHERE is_active = TRUE",
+    "CREATE INDEX IF NOT EXISTS idx_wec_snapshot ON winning_examples_corpus(snapshot_tag)",
+    # Ensure creator_slug exists on tables created before this column was added
+    "ALTER TABLE winning_examples_corpus ADD COLUMN IF NOT EXISTS creator_slug TEXT NOT NULL DEFAULT 'zarna'",
+    """
+    CREATE TABLE IF NOT EXISTS winning_examples_snapshots (
+        id            SERIAL PRIMARY KEY,
+        tag           TEXT UNIQUE NOT NULL,
+        notes         TEXT        DEFAULT '',
+        example_count INT         DEFAULT 0,
+        created_at    TIMESTAMPTZ DEFAULT NOW(),
+        rolled_back_at TIMESTAMPTZ
+    )
+    """,
+)
+
 # SMB (Small-Medium Business) vertical tables
 _SMB_MIGRATIONS = (
     """
@@ -377,6 +410,8 @@ class PostgresStorage(BaseStorage):
                     for sql in _QUIZ_MIGRATIONS:
                         cur.execute(sql)
                     for sql in _QUALITY_DIGEST_MIGRATIONS:
+                        cur.execute(sql)
+                    for sql in _WINNING_EXAMPLES_MIGRATIONS:
                         cur.execute(sql)
                     for sql in _SMB_MIGRATIONS:
                         cur.execute(sql)
@@ -667,14 +702,19 @@ class PostgresStorage(BaseStorage):
         intent: str,
         tone_mode: str,
         limit: int = 4,
+        creator_slug: str = "zarna",
     ) -> list:
         """
         Return up to `limit` bot reply texts that performed best for this
         intent + tone_mode combo, ordered by follow-up depth then reply speed.
         Results are cached for 5 minutes so this never adds per-message latency.
         Requires at least 3 qualifying examples — returns [] otherwise.
+
+        Cold-start fallback: when fewer than 3 organic examples exist, supplements
+        from the seeded winning_examples_corpus table — scoped strictly to
+        creator_slug so one creator's voice can never bleed into another's.
         """
-        cache_key = (intent, tone_mode)
+        cache_key = (creator_slug, intent, tone_mode)
         now = time.monotonic()
         cached, ts = _REPLY_CACHE.get(cache_key, (None, 0))
         if cached is not None and now - ts < _REPLY_CACHE_TTL:
@@ -683,6 +723,7 @@ class PostgresStorage(BaseStorage):
         conn = self._acquire()
         try:
             with conn.cursor() as cur:
+                # 1. Organic examples from real conversations
                 cur.execute(
                     """
                     SELECT text
@@ -691,6 +732,7 @@ class PostgresStorage(BaseStorage):
                       AND  intent             = %s
                       AND  tone_mode          = %s
                       AND  did_user_reply     = TRUE
+                      AND  msg_source IS DISTINCT FROM 'blast'
                       AND  reply_length_chars BETWEEN 40 AND 380
                       AND  source IS DISTINCT FROM 'blast'
                       AND  text NOT LIKE '%%zarnagarg.com%%'
@@ -702,7 +744,35 @@ class PostgresStorage(BaseStorage):
                     """,
                     (intent, tone_mode, limit),
                 )
-                rows = [r[0] for r in cur.fetchall()]
+                organic = [r[0] for r in cur.fetchall()]
+
+                # 2. Cold-start fallback: supplement from seeded corpus when sparse.
+                # Hard-scoped to creator_slug — no cross-creator contamination possible.
+                if len(organic) < 3:
+                    needed = limit - len(organic)
+                    cur.execute(
+                        """
+                        SELECT text
+                        FROM   winning_examples_corpus
+                        WHERE  creator_slug = %s
+                          AND  intent       = %s
+                          AND  tone_mode    = %s
+                          AND  is_active    = TRUE
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (creator_slug, intent, tone_mode, needed),
+                    )
+                    corpus = [r[0] for r in cur.fetchall()]
+                    rows = organic + corpus
+                    logger.debug(
+                        "get_top_performing_replies: intent=%s tone=%s "
+                        "organic=%d corpus=%d",
+                        intent, tone_mode, len(organic), len(corpus),
+                    )
+                else:
+                    rows = organic
+
             result = rows if len(rows) >= 3 else []
             _REPLY_CACHE[cache_key] = (result, now)
             return result

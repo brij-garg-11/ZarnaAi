@@ -1,0 +1,14 @@
+# Pillar 1 — dedicated silence-scoring cron.
+#
+# Runs independently of the general backfill (railway.cron.toml) so silence
+# scoring can be monitored, retried, and tuned without affecting session or
+# fan-scoring jobs.
+#
+# Recommended schedule: nightly at 2 AM UTC (before score_fans at 3 AM).
+# Set in Railway: Service → Settings → Cron Schedule → "0 2 * * *"
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python -u scripts/score_silence.py"
