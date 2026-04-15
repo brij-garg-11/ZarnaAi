@@ -270,34 +270,34 @@
           </div>
 
           <!-- Smart Send breakdown panel -->
-          <div x-show="smartSend" x-transition class="mt-3 rounded-xl border p-4 text-sm" style="border-color:var(--border);background:#0F0D0B;">
+          <div x-show="smartSend" x-transition class="mt-3 rounded-xl border p-4 text-sm" style="border:1px solid #d1d5db;background:#ffffff;">
             <div class="flex items-center justify-between mb-3">
-              <span class="font-semibold" style="color:var(--text);">⚡ Smart Send Breakdown</span>
-              <button type="button" @click="smartSend=null" class="btn-ghost btn-sm">✕</button>
+              <span class="font-semibold" style="color:#111827;">⚡ Smart Send Breakdown</span>
+              <button type="button" @click="smartSend=null" style="background:none;border:none;cursor:pointer;font-size:14px;color:#6b7280;">✕</button>
             </div>
             <template x-if="smartSendLoading">
-              <p style="color:var(--text-muted);">Calculating…</p>
+              <p style="color:#6b7280;">Calculating…</p>
             </template>
             <template x-if="!smartSendLoading && smartSend">
               <div>
-                <div class="grid grid-cols-4 gap-2 mb-3 text-xs font-medium" style="color:#94a3b8;">
+                <div class="grid grid-cols-4 gap-2 mb-2 text-xs font-semibold" style="color:#6b7280;border-bottom:1px solid #e5e7eb;padding-bottom:6px;">
                   <span>Tier</span><span class="text-right">Total</span><span class="text-right">Suppressed</span><span class="text-right">Sending</span>
                 </div>
                 <template x-for="[tier, data] in Object.entries(smartSend.tiers)" :key="tier">
-                  <div class="grid grid-cols-4 gap-2 py-1.5 border-t text-xs" style="border-color:#2d2d2d;">
-                    <span class="font-medium" style="color:#e2e8f0;"
+                  <div class="grid grid-cols-4 gap-2 py-2 text-xs" style="border-bottom:1px solid #f3f4f6;">
+                    <span class="font-medium" style="color:#111827;"
                       x-text="tier === 'superfan' ? '⭐ Superfan' : tier === 'engaged' ? '✅ Engaged' : tier === 'lurker' ? '👀 Lurker' : '💤 Dormant'">
                     </span>
-                    <span class="text-right" style="color:#94a3b8;" x-text="data.total.toLocaleString()"></span>
-                    <span class="text-right" style="color:#6b7280;" x-text="data.suppressed > 0 ? '–' + data.suppressed.toLocaleString() + ' (<' + data.cadence_days + 'd ago)' : '—'"></span>
-                    <span class="text-right font-semibold" style="color:var(--pink);" x-text="data.sending.toLocaleString()"></span>
+                    <span class="text-right" style="color:#374151;" x-text="data.total.toLocaleString()"></span>
+                    <span class="text-right" style="color:#ef4444;" x-text="data.suppressed > 0 ? '–' + data.suppressed.toLocaleString() + ' (<' + data.cadence_days + 'd ago)' : '—'"></span>
+                    <span class="text-right font-semibold" style="color:#16a34a;" x-text="data.sending.toLocaleString()"></span>
                   </div>
                 </template>
-                <div class="mt-3 pt-3 border-t flex justify-between font-semibold text-sm" style="border-color:var(--border);">
-                  <span style="color:var(--text);">Total sending</span>
-                  <span style="color:var(--pink);" x-text="smartSend.total_sending.toLocaleString()"></span>
+                <div class="mt-3 pt-2 flex justify-between font-bold text-sm" style="border-top:2px solid #e5e7eb;">
+                  <span style="color:#111827;">Total sending</span>
+                  <span style="color:#16a34a;" x-text="smartSend.total_sending.toLocaleString()"></span>
                 </div>
-                <p class="mt-2 text-xs" style="color:var(--text-muted);">Suppressed fans received a blast too recently per their tier cadence. You can override by selecting a specific tier above.</p>
+                <p class="mt-2 text-xs" style="color:#6b7280;">Suppressed fans received a blast too recently per their tier cadence. You can override by selecting a specific tier above.</p>
               </div>
             </template>
           </div>
