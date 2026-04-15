@@ -15,6 +15,7 @@ Configure via env vars:
   MAIN_APP_BASE_URL      (e.g. https://zarnaai-production.up.railway.app)
 """
 
+import base64
 import logging
 import os
 import re
@@ -111,6 +112,25 @@ def _ensure_bot_links(base_url: str) -> dict[str, str]:
     return result
 
 
+# ── Phone token helpers ─────────────────────────────────────────────────────
+
+def encode_phone_token(phone: str) -> str:
+    """Encode a phone number to a URL-safe base64 token for embedding in tracked links."""
+    return base64.urlsafe_b64encode(phone.encode()).decode()
+
+
+def decode_phone_token(token: str) -> str | None:
+    """Decode a base64 phone token back to a phone number string. Returns None on error."""
+    try:
+        # Add padding if needed
+        padding = 4 - len(token) % 4
+        if padding != 4:
+            token += "=" * padding
+        return base64.urlsafe_b64decode(token).decode()
+    except Exception:
+        return None
+
+
 # ── URL classification ───────────────────────────────────────────────────────
 
 def _classify_url(url: str) -> str | None:
@@ -128,11 +148,15 @@ def _classify_url(url: str) -> str | None:
 
 # ── Public entry point ───────────────────────────────────────────────────────
 
-def rewrite_bot_reply(reply: str) -> str:
+def rewrite_bot_reply(reply: str, phone_number: str | None = None) -> str:
     """
     Scan an outbound bot reply for tracked domains and replace matching
     URLs with the canonical short /t/<slug> link.  Non-matching URLs are
     left untouched.  Returns the (possibly rewritten) reply string.
+
+    When phone_number is supplied, a ?f=<token> query parameter is appended
+    to each rewritten URL so clicks can be attributed back to this fan and
+    link_clicked_1h can be set on their message row.
     """
     if not reply:
         return reply
@@ -157,6 +181,7 @@ def rewrite_bot_reply(reply: str) -> str:
     if not slug_map:
         return reply
 
+    fan_suffix = f"?f={encode_phone_token(phone_number)}" if phone_number else ""
     website_short = slug_map.get(_SLUG_WEBSITE, "")
     podcast_short = slug_map.get(_SLUG_PODCAST, "")
 
@@ -164,11 +189,13 @@ def rewrite_bot_reply(reply: str) -> str:
         url = m.group(0)
         bucket = _classify_url(url)
         if bucket == "website" and website_short:
-            _logger.info("link_tracker: website %r → %s", url[:80], website_short)
-            return website_short
+            short = f"{website_short}{fan_suffix}"
+            _logger.info("link_tracker: website %r → %s", url[:80], short)
+            return short
         if bucket == "podcast" and podcast_short:
-            _logger.info("link_tracker: podcast %r → %s", url[:80], podcast_short)
-            return podcast_short
+            short = f"{podcast_short}{fan_suffix}"
+            _logger.info("link_tracker: podcast %r → %s", url[:80], short)
+            return short
         return url
 
     return _URL_RE.sub(_replace, reply)

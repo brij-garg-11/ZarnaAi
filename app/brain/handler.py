@@ -171,9 +171,10 @@ class ZarnaBrain:
         gen_ms = (time.perf_counter() - t_gen) * 1000
 
         # Silently rewrite known URLs (website, podcast) to tracked /t/<slug> links
+        # Phone number is embedded as ?f=<token> so clicks can be attributed to this fan.
         try:
             from app.link_tracker import rewrite_bot_reply
-            reply = rewrite_bot_reply(reply)
+            reply = rewrite_bot_reply(reply, phone_number=phone_number)
         except Exception:
             pass  # never block a reply over tracking
 

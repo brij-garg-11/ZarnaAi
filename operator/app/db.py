@@ -99,6 +99,11 @@ def init_db():
         """,
         "CREATE INDEX IF NOT EXISTS idx_tlc_link_id ON tracked_link_clicks(link_id)",
         "CREATE INDEX IF NOT EXISTS idx_tlc_clicked_at ON tracked_link_clicks(clicked_at)",
+        # phone_number on clicks: populated when fan identity is known (personalized links)
+        "ALTER TABLE tracked_link_clicks ADD COLUMN IF NOT EXISTS phone_number TEXT DEFAULT NULL",
+        "CREATE INDEX IF NOT EXISTS idx_tlc_phone ON tracked_link_clicks(phone_number) WHERE phone_number IS NOT NULL",
+        # msg_source on messages: 'bot' for reply messages, 'blast' for mass-send messages
+        "ALTER TABLE messages ADD COLUMN IF NOT EXISTS msg_source TEXT DEFAULT 'bot'",
         # sent_to on tracked_links: cumulative recipients across all blasts using this link
         "ALTER TABLE tracked_links ADD COLUMN IF NOT EXISTS sent_to INT DEFAULT 0",
         "ALTER TABLE operator_blast_images ADD COLUMN IF NOT EXISTS data_b64 TEXT",

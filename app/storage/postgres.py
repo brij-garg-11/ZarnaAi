@@ -118,6 +118,11 @@ _ENGAGEMENT_ANALYTICS_MIGRATIONS = (
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS went_silent_after   BOOLEAN",
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS link_clicked_1h     BOOLEAN",
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS msgs_after_this     INT",
+    # Source tag so blast messages can be excluded from bot conversation history
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS msg_source          TEXT DEFAULT 'bot'",
+    # phone_number on tracked_link_clicks: populated when fan identity is known
+    "ALTER TABLE tracked_link_clicks ADD COLUMN IF NOT EXISTS phone_number TEXT DEFAULT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_tlc_phone ON tracked_link_clicks(phone_number) WHERE phone_number IS NOT NULL",
     # Index for fast analytics queries (filter to scored assistant rows)
     """
     CREATE INDEX IF NOT EXISTS idx_messages_analytics
@@ -446,6 +451,34 @@ class PostgresStorage(BaseStorage):
             self._release(conn)
         return Message(phone_number=phone_number, role=role, text=text, id=row_id)
 
+    def mark_link_clicked_1h(self, phone_number: str) -> None:
+        """
+        Flip link_clicked_1h = TRUE on the most recent assistant message for this fan
+        if it was sent within 60 minutes of now.  Covers both bot replies
+        (msg_source='bot') and blast messages (msg_source='blast').
+        """
+        conn = self._acquire()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE messages
+                        SET link_clicked_1h = TRUE
+                        WHERE id = (
+                            SELECT id FROM messages
+                            WHERE phone_number = %s
+                              AND role = 'assistant'
+                              AND created_at >= NOW() - INTERVAL '60 minutes'
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                        )
+                        """,
+                        (phone_number,),
+                    )
+        finally:
+            self._release(conn)
+
     def get_conversation_history(self, phone_number: str, limit: int = 10) -> List[Message]:
         conn = self._acquire()
         try:
@@ -456,6 +489,7 @@ class PostgresStorage(BaseStorage):
                         SELECT role, text, created_at
                         FROM messages
                         WHERE phone_number = %s
+                          AND (msg_source IS NULL OR msg_source != 'blast')
                         ORDER BY created_at DESC
                         LIMIT %s
                     ) sub

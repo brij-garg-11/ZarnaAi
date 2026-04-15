@@ -10,6 +10,7 @@ Tabs:
   /admin?tab=convos   → Inbox (per-member list) + click for threaded conversation
 """
 
+import base64
 import csv
 import hashlib
 import io
@@ -311,21 +312,61 @@ def track_redirect(slug: str):
         return "Link not found", 404
 
     # Always redirect — log the click separately so an error there never breaks the redirect
+    phone_number: str | None = None
     try:
+        # Decode fan identity from ?f= query param (base64url-encoded phone number)
+        fan_token = request.args.get("f", "")
+        if fan_token:
+            try:
+                padding = 4 - len(fan_token) % 4
+                padded = fan_token + ("=" * padding if padding != 4 else "")
+                phone_number = base64.urlsafe_b64decode(padded).decode()
+            except Exception:
+                phone_number = None
+
         ip_raw = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
         ip_hash = hashlib.sha256(ip_raw.encode()).hexdigest()[:16] if ip_raw else ""
         ua_short = (request.user_agent.string or "")[:120]
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO tracked_link_clicks (link_id, ip_hash, ua_short) VALUES (%s,%s,%s)",
-                    (link_id, ip_hash, ua_short),
+                    "INSERT INTO tracked_link_clicks (link_id, ip_hash, ua_short, phone_number) VALUES (%s,%s,%s,%s)",
+                    (link_id, ip_hash, ua_short, phone_number),
                 )
-        _tlog.info("track_redirect: logged click for slug=%r link_id=%s", slug, link_id)
+        _tlog.info("track_redirect: logged click for slug=%r link_id=%s phone=%s",
+                   slug, link_id, "known" if phone_number else "anonymous")
     except Exception as e:
         _tlog.error("track_redirect: failed to log click for slug=%r link_id=%s: %s", slug, link_id, e)
     finally:
         conn.close()
+
+    # Flip link_clicked_1h on the most recent assistant message for this fan (if within 60 min)
+    if phone_number:
+        try:
+            db_conn = _get_db()
+            if db_conn:
+                with db_conn:
+                    with db_conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            UPDATE messages
+                            SET link_clicked_1h = TRUE
+                            WHERE id = (
+                                SELECT id FROM messages
+                                WHERE phone_number = %s
+                                  AND role = 'assistant'
+                                  AND created_at >= NOW() - INTERVAL '60 minutes'
+                                ORDER BY created_at DESC
+                                LIMIT 1
+                            )
+                            """,
+                            (phone_number,),
+                        )
+                db_conn.close()
+                _tlog.info("track_redirect: set link_clicked_1h for phone ...%s slug=%r",
+                           phone_number[-4:] if len(phone_number) >= 4 else phone_number, slug)
+        except Exception as e:
+            _tlog.warning("track_redirect: link_clicked_1h update failed for slug=%r: %s", slug, e)
 
     return _redirect(destination, 302)
 

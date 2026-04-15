@@ -71,11 +71,12 @@ def execute_blast(draft_id: int):
         mark_blast_sent(draft_id, 0, len(phones), len(phones))
         return
 
-    # Append the tracked short URL to every outgoing message (invisible to operator)
+    # send_body is the fallback when no tracked link slug is present.
+    # When a tracked slug exists, each fan gets a personalized URL in the send loop.
     send_body = body
     if tracked_short_url:
         send_body = f"{body}\n{tracked_short_url}"
-        logger.info("  appended tracked URL to body — final length=%d", len(send_body))
+        logger.info("  blast has tracked link — will personalize URL per fan")
 
     total = len(phones)
     mark_blast_started(draft_id, total)
@@ -84,13 +85,34 @@ def execute_blast(draft_id: int):
     failed = 0
     sent_phones: list[str] = []
 
+    # Build base URL for personalized per-fan tracked links
+    main_base_for_token = ""
+    if tracked_link_slug:
+        main_base_for_token = os.getenv("MAIN_APP_BASE_URL", "").rstrip("/")
+        if not main_base_for_token:
+            railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
+            main_base_for_token = f"https://{railway_domain}" if railway_domain else ""
+
     for i, phone in enumerate(phones):
         try:
-            ok = _send_one(phone, send_body, channel, media_url=media_url)
+            # Build a per-fan body: personalize the tracked URL with ?f=<phone_token>
+            # so clicks can be attributed back to this specific fan.
+            if tracked_link_slug and main_base_for_token:
+                from base64 import urlsafe_b64encode
+                fan_token = urlsafe_b64encode(phone.encode()).decode()
+                fan_tracked_url = f"{main_base_for_token}/t/{tracked_link_slug}?f={fan_token}"
+                fan_body = f"{body}\n{fan_tracked_url}"
+            else:
+                fan_body = send_body
+
+            ok = _send_one(phone, fan_body, channel, media_url=media_url)
             logger.info("  send to ...%s via %s: %s", phone[-4:], channel, "OK" if ok else "FAIL")
             if ok:
                 sent += 1
                 sent_phones.append(phone)
+                # Save a messages row so link_clicked_1h can be tracked per fan
+                if tracked_link_slug:
+                    _save_blast_message(phone, fan_body)
             else:
                 failed += 1
         except Exception as e:
@@ -208,6 +230,29 @@ def _create_blast_context_session(blast_draft_id: int, context_note: str) -> Non
         )
     except Exception as e:
         logger.exception("_create_blast_context_session failed: %s", e)
+
+
+def _save_blast_message(phone: str, text: str) -> None:
+    """
+    Save a single blast message to the shared messages table so
+    link_clicked_1h can be tracked per fan.  Uses msg_source='blast'
+    to keep these rows out of the bot's conversation history.
+    """
+    try:
+        from .db import get_conn
+        conn = get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO messages (phone_number, role, text, has_link, msg_source)
+                    VALUES (%s, 'assistant', %s, TRUE, 'blast')
+                    """,
+                    (phone, text),
+                )
+        conn.close()
+    except Exception as e:
+        logger.warning("_save_blast_message failed for ...%s: %s", phone[-4:], e)
 
 
 def _record_recipients(blast_id: int, phones: list[str]) -> None:
