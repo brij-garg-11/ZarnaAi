@@ -212,6 +212,28 @@ def _fetch_detail(slug: str) -> dict:
         conn.close()
 
 
+def _fetch_quality_reports(slug: str) -> list:
+    """Return SMB quality reports for this tenant, newest-first (up to 8)."""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, created_at, week_start, headline_json, findings_json, notion_page_id
+                FROM smb_quality_reports
+                WHERE tenant_slug = %s
+                ORDER BY created_at DESC
+                LIMIT 8
+            """, (slug,))
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
 def _fetch_conversation(slug: str, phone: str) -> list:
     """Return full conversation history for one subscriber, oldest-first."""
     conn = get_db_connection()
@@ -340,6 +362,183 @@ tr.sub-row:hover td { background: #131f2e; cursor: pointer; }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
 </style>
 """
+
+
+def _render_quality_section(slug: str) -> str:
+    """Inline AI quality digest section for the SMB detail page."""
+    import json as _json
+
+    reports = _fetch_quality_reports(slug)
+
+    def _trend_badge(t: str) -> str:
+        colors = {"improving": "#4ade80", "declining": "#f87171", "stable": "#fbbf24",
+                  "insufficient_data": "#6b7280"}
+        icons  = {"improving": "📈", "declining": "📉", "stable": "➡️",
+                  "insufficient_data": "📊"}
+        c = colors.get(t, "#6b7280")
+        label = t.replace("_", " ").title()
+        return (
+            f'<span style="background:{c}22;color:{c};border:1px solid {c}44;'
+            f'border-radius:99px;padding:2px 10px;font-size:11px;font-weight:700">'
+            f'{icons.get(t,"")} {label}</span>'
+        )
+
+    def _sev_badge(s: str) -> str:
+        colors = {"high": "#f87171", "medium": "#fbbf24", "low": "#4ade80"}
+        c = colors.get(s, "#6b7280")
+        return (
+            f'<span style="background:{c}22;color:{c};border:1px solid {c}44;'
+            f'border-radius:99px;padding:2px 8px;font-size:11px;font-weight:700">'
+            f'{s.upper()}</span>'
+        )
+
+    if not reports:
+        body = (
+            '<div style="color:#4b5563;font-size:13px;padding:8px 0">'
+            'No quality reports yet — first run fires next Monday, or hit '
+            '"Run digest now" in the Quality tab.</div>'
+        )
+    else:
+        items = ""
+        for idx, r in enumerate(reports):
+            try:
+                headline = _json.loads(r["headline_json"] or "{}")
+            except Exception:
+                headline = {}
+            try:
+                findings = _json.loads(r["findings_json"] or "{}")
+            except Exception:
+                findings = {}
+
+            ws        = r["week_start"]
+            created   = r["created_at"]
+            notion    = r.get("notion_page_id")
+            rr        = headline.get("reply_rate")
+            silence   = headline.get("silence_rate")
+            scored    = headline.get("scored", 0)
+            opt_outs  = headline.get("opt_outs", 0)
+            summary   = findings.get("one_line_summary", "")
+            trend     = findings.get("overall_trend", "stable")
+            problems  = findings.get("problems", [])
+            working   = findings.get("whats_working", [])
+
+            rr_str      = f"{rr}%" if rr is not None else "—"
+            silence_str = f"{silence}%" if silence is not None else "—"
+            created_str = (created.strftime("%b %d, %Y")
+                           if hasattr(created, "strftime") else str(created)[:10])
+
+            notion_link = ""
+            if notion:
+                url = f"https://notion.so/{notion.replace('-','')}"
+                notion_link = (
+                    f' <a href="{url}" target="_blank" onclick="event.stopPropagation()" '
+                    f'style="font-size:12px;color:#818cf8;text-decoration:none">↗ Notion</a>'
+                )
+
+            rr_color = (
+                "4ade80" if rr and float(rr) >= 60
+                else "fbbf24" if rr and float(rr) >= 40
+                else "f87171" if rr else "6b7280"
+            )
+            oo_color = "#f87171" if opt_outs else "#4b5563"
+
+            stats_strip = f"""
+            <div style="display:flex;gap:20px;flex-wrap:wrap;padding:12px 0 14px;
+                        border-bottom:1px solid #1f2937;margin-bottom:14px;">
+              <div style="text-align:center">
+                <div style="font-size:18px;font-weight:700;color:#e2e8f0">{scored:,}</div>
+                <div style="font-size:11px;color:#6b7280">Scored</div>
+              </div>
+              <div style="text-align:center">
+                <div style="font-size:18px;font-weight:700;color:#{rr_color}">{rr_str}</div>
+                <div style="font-size:11px;color:#6b7280">Reply rate</div>
+              </div>
+              <div style="text-align:center">
+                <div style="font-size:18px;font-weight:700;color:#9ca3af">{silence_str}</div>
+                <div style="font-size:11px;color:#6b7280">Silence rate</div>
+              </div>
+              <div style="text-align:center">
+                <div style="font-size:18px;font-weight:700;color:{oo_color}">{opt_outs}</div>
+                <div style="font-size:11px;color:#6b7280">Opt-outs</div>
+              </div>
+            </div>"""
+
+            problems_html = ""
+            for i, p in enumerate(problems, 1):
+                sev = p.get("severity", "low")
+                problems_html += f"""
+                <div style="background:#0f172a;border:1px solid #1f2937;border-radius:8px;
+                            padding:12px 14px;margin-bottom:8px;">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                    <span style="font-weight:700;color:#e2e8f0;font-size:13px">
+                      {i}. {p.get("title","Untitled")}
+                    </span>
+                    {_sev_badge(sev)}
+                  </div>
+                  <div style="color:#9ca3af;font-size:12px;margin-bottom:8px;line-height:1.5">
+                    <strong style="color:#cbd5e1">Evidence:</strong> {p.get("evidence","—")}
+                  </div>
+                  <div style="background:#1e3a5f22;border:1px solid #3b82f644;border-radius:6px;
+                              padding:8px 12px;color:#93c5fd;font-size:12px;line-height:1.5">
+                    💡 <strong>Fix:</strong> {p.get("proposed_change","—")}
+                  </div>
+                </div>"""
+
+            working_items = "".join(
+                f'<li style="color:#9ca3af;font-size:12px;margin-bottom:4px;line-height:1.5">{w}</li>'
+                for w in working
+            )
+
+            inner = stats_strip
+            if summary:
+                inner += f'<div style="font-size:12px;color:#6b7280;margin-bottom:12px;font-style:italic">{_esc(summary)}</div>'
+            if problems_html:
+                inner += (
+                    '<div style="margin-bottom:14px"><div style="font-size:12px;font-weight:600;'
+                    'color:#cbd5e1;margin-bottom:8px">🔴 Problems</div>' + problems_html + '</div>'
+                )
+            if working_items:
+                inner += (
+                    '<div><div style="font-size:12px;font-weight:600;color:#cbd5e1;margin-bottom:6px">'
+                    "✅ What's working</div>"
+                    f'<ul style="margin:0;padding-left:16px">{working_items}</ul></div>'
+                )
+
+            open_attr = "open" if idx == 0 else ""
+            items += f"""
+            <details {open_attr} style="background:#0f172a;border:1px solid #1f2937;
+                      border-radius:10px;margin-bottom:8px;overflow:hidden;">
+              <summary style="display:flex;align-items:center;justify-content:space-between;
+                              padding:12px 16px;cursor:pointer;list-style:none;user-select:none;
+                              gap:8px;flex-wrap:wrap;">
+                <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
+                  <span style="font-size:13px;font-weight:700;color:#f1f5f9;white-space:nowrap">
+                    Week of {ws}
+                  </span>
+                  <span style="font-size:11px;color:#4b5563">{created_str}</span>
+                  {notion_link}
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+                  {_trend_badge(trend)}
+                  <span style="color:#6b7280;font-size:14px">›</span>
+                </div>
+              </summary>
+              <div style="padding:0 16px 16px;">{inner}</div>
+            </details>"""
+
+        body = items
+
+    return f"""
+<style>
+#smb-quality-section details[open] > summary > div:last-child > span:last-child {{
+  transform: rotate(90deg); display: inline-block;
+}}
+#smb-quality-section details > summary::-webkit-details-marker {{ display: none; }}
+</style>
+<div id="smb-quality-section" class="section">
+  <div class="section-title">AI Quality Digest</div>
+  {body}
+</div>"""
 
 
 def render_client_detail(slug: str) -> str:
@@ -627,6 +826,8 @@ def render_client_detail(slug: str) -> str:
 
         blast_html = summary + "".join(cards)
 
+    quality_section = _render_quality_section(slug)
+
     # ── Link clicks ──
     clicks_section = ""
     if link_clicks:
@@ -751,6 +952,8 @@ document.addEventListener("keydown", e => {{ if (e.key === "Escape") closeConv()
     <div class="section-title">Blast History (last 30)</div>
     {blast_html}
   </div>
+
+  {quality_section}
 
   {conv_panel}
 </body>
