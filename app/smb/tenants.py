@@ -41,6 +41,13 @@ class BusinessTenant:
     segments: list = field(default_factory=list)
     logo_url: str = ""
     timezone: str = "America/New_York"   # IANA tz used for date labels (Tonight, Tomorrow, etc.)
+    # Tracked short-links served at /smb/r/<slug>/<link_key>
+    # Keyed by link_key (e.g. "tickets", "calendar") → destination URL.
+    # If empty, the redirect endpoint returns 404 for this tenant.
+    tracked_links: dict = field(default_factory=dict)
+    # Optional override copy — neutral defaults are used when these are empty.
+    signup_nudge: str = ""         # SMS sent to unknown subscribers ("Reply YES to join")
+    checkin_confirmation: str = "" # Reply sent on a successful show check-in
     raw: dict = field(default_factory=dict)
 
 
@@ -90,6 +97,9 @@ def _load_tenant(path: Path) -> Optional[BusinessTenant]:
         segments=cfg.get("segments", []),
         logo_url=cfg.get("logo_url", ""),
         timezone=cfg.get("timezone", "America/New_York"),
+        tracked_links=cfg.get("tracked_links", {}),
+        signup_nudge=cfg.get("signup_nudge", ""),
+        checkin_confirmation=cfg.get("checkin_confirmation", ""),
         raw=cfg,
     )
 

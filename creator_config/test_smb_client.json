@@ -1,0 +1,29 @@
+{
+  "_note": "Minimal SMB config for bleed-through testing — ensures zero WSCC strings appear for a different tenant.",
+  "slug": "test_smb_client",
+  "display_name": "The Test Barbershop",
+  "business_type": "barbershop",
+  "location": "Austin, TX",
+  "owner_phone": "TBD",
+  "sms_keyword": "TRIM",
+  "tone": "friendly, laid-back — like a neighborhood barber who remembers your name",
+  "welcome_message": "Welcome to The Test Barbershop! Text anytime — hours, bookings, whatever you need.",
+  "signup_nudge": "Hey! The Test Barbershop here ✂️ Want exclusive deals and first dibs on appointments? Reply YES to join — it's free!",
+  "checkin_confirmation": "You're checked in — thanks for stopping by! Enjoy your visit ✂️",
+  "tracked_links": {
+    "book":    "https://example.com/test-barbershop/book",
+    "deals":   "https://example.com/test-barbershop/deals"
+  },
+  "value_content_topics": [
+    "grooming tips",
+    "new styles available",
+    "appointment reminders"
+  ],
+  "blast_triggers": [
+    "opening",
+    "deal",
+    "discount",
+    "available",
+    "tonight"
+  ]
+}

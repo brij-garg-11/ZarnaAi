@@ -33,6 +33,14 @@
     "special",
     "show"
   ],
+  "tracked_links": {
+    "tickets":  "https://www.westsidecomedyclub.com",
+    "calendar": "https://www.westsidecomedyclub.com/calendar",
+    "menu":     "https://www.westsidecomedyclub.com/menu",
+    "map":      "https://maps.google.com/?q=201+West+75th+Street+New+York+NY"
+  },
+  "signup_nudge": "Hey! West Side Comedy Club here 🎤 Want show updates and exclusive deals? Reply YES to join — it's free!",
+  "checkin_confirmation": "You're checked in — thanks so much for coming out tonight! Enjoy the show 🎉",
   "knowledge_base": {
     "address": "201 West 75th Street, New York, NY (Upper West Side)",
     "maps_link": "https://maps.google.com/?q=201+West+75th+Street+New+York+NY",

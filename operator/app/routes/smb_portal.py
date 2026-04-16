@@ -1,21 +1,19 @@
 """
-WSCC Client Portal — self-contained Flask blueprint for the operator app.
+SMB Client Portal — generic multi-tenant operator portal.
 
-Felicia (the owner) logs in here to manage shows, view check-ins, and send blasts.
+Any SMB tenant registered in creator_config/<slug>.json gets a portal at:
+  /portal/<slug>/login
 
-URL: /portal/west_side_comedy/login
-
-Authentication: password stored in env var SMB_PORTAL_WEST_SIDE_COMEDY_PASSWORD
-SMS blast:       Twilio, from the WSCC number in env var WEST_SIDE_COMEDY_SMS_NUMBER
+Authentication: password stored in env var SMB_PORTAL_<SLUG_UPPER>_PASSWORD
+SMS blast:       Twilio, from the tenant's number in env var SMB_<SLUG_UPPER>_SMS_NUMBER
 """
 
 import logging
 import os
 import threading
 import time
-from functools import wraps
 
-from flask import Blueprint, redirect, request, session, url_for
+from flask import Blueprint, abort, redirect, request, session, url_for
 
 from ..db import get_conn
 
@@ -23,55 +21,58 @@ logger = logging.getLogger(__name__)
 
 smb_portal_bp = Blueprint("wscc_portal", __name__)
 
-# ---------------------------------------------------------------------------
-# Tenant config — read from env vars, fall back to known defaults
-# ---------------------------------------------------------------------------
-
-_SLUG = "west_side_comedy"
-_DISPLAY_NAME = "West Side Comedy Club"
-_LOGO_URL = "https://imagedelivery.net/7Ze32-hXUdrEDVtqvlbDMQ/2fa2cff3-e63c-4d6d-c193-0cbd39e86d00/public"
-
-
-def _sms_number() -> str:
-    return os.getenv("SMB_WEST_SIDE_COMEDY_SMS_NUMBER", "")
-
-
-def _portal_password() -> str:
-    return os.getenv("SMB_PORTAL_WEST_SIDE_COMEDY_PASSWORD", "")
-
 
 # ---------------------------------------------------------------------------
-# Auth helpers
+# Per-tenant helpers — all derived dynamically from the slug
 # ---------------------------------------------------------------------------
 
-_SESSION_KEY = f"smb_portal_auth_{_SLUG}"
+def _session_key(slug: str) -> str:
+    return f"smb_portal_auth_{slug}"
 
 
-def _is_authenticated() -> bool:
-    return bool(session.get(_SESSION_KEY))
+def _sms_number(slug: str) -> str:
+    return os.getenv(f"SMB_{slug.upper()}_SMS_NUMBER", "")
 
 
-def _login_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not _is_authenticated():
-            return redirect(url_for("wscc_portal.portal_login"))
-        return f(*args, **kwargs)
-    return decorated
+def _portal_password(slug: str) -> str:
+    return os.getenv(f"SMB_PORTAL_{slug.upper()}_PASSWORD", "")
+
+
+def _is_authenticated(slug: str) -> bool:
+    return bool(session.get(_session_key(slug)))
+
+
+def _get_tenant_or_404(slug: str):
+    """Load the BusinessTenant from the SMB registry or abort with 404."""
+    import sys
+    import os as _os
+    # Ensure the main app package is importable from the operator context
+    _ws_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(__file__))))
+    if _ws_root not in sys.path:
+        sys.path.insert(0, _ws_root)
+    try:
+        from app.smb.tenants import get_registry
+        tenant = get_registry().get_by_slug(slug)
+    except Exception:
+        logger.exception("smb_portal: failed to load tenant registry for slug=%s", slug)
+        tenant = None
+    if tenant is None:
+        abort(404)
+    return tenant
 
 
 # ---------------------------------------------------------------------------
-# Database helpers
+# Database helpers — all take slug explicitly
 # ---------------------------------------------------------------------------
 
-def _get_subscribers():
+def _get_subscribers(slug: str):
     """Return total subscriber count and date of most recent subscriber."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT COUNT(*) FROM smb_subscribers WHERE tenant_slug = %s",
-                (_SLUG,),
+                (slug,),
             )
             total = cur.fetchone()[0]
             cur.execute(
@@ -82,7 +83,7 @@ def _get_subscribers():
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
-                (_SLUG,),
+                (slug,),
             )
             row = cur.fetchone()
             latest_at = row[0] if row else None
@@ -91,7 +92,7 @@ def _get_subscribers():
         conn.close()
 
 
-def _get_recent_blasts(limit=5):
+def _get_recent_blasts(slug: str, limit=5):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -104,7 +105,7 @@ def _get_recent_blasts(limit=5):
                 ORDER BY sent_at DESC
                 LIMIT %s
                 """,
-                (_SLUG, limit),
+                (slug, limit),
             )
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, row)) for row in cur.fetchall()]
@@ -115,7 +116,7 @@ def _get_recent_blasts(limit=5):
         conn.close()
 
 
-def _list_shows():
+def _list_shows(slug: str):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -129,7 +130,7 @@ def _list_shows():
                 GROUP BY s.id
                 ORDER BY s.show_date DESC
                 """,
-                (_SLUG,),
+                (slug,),
             )
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, row)) for row in cur.fetchall()]
@@ -140,7 +141,7 @@ def _list_shows():
         conn.close()
 
 
-def _create_show(name: str, show_date: str, checkin_keyword: str) -> str | None:
+def _create_show(slug: str, name: str, show_date: str, checkin_keyword: str) -> str | None:
     """Insert a new show. Returns None on success, error string on failure."""
     conn = get_conn()
     try:
@@ -151,7 +152,7 @@ def _create_show(name: str, show_date: str, checkin_keyword: str) -> str | None:
                     INSERT INTO smb_shows (tenant_slug, name, show_date, checkin_keyword, status)
                     VALUES (%s, %s, %s, %s, 'active')
                     """,
-                    (_SLUG, name.strip(), show_date, checkin_keyword.upper().strip()),
+                    (slug, name.strip(), show_date, checkin_keyword.upper().strip()),
                 )
         return None
     except Exception as exc:
@@ -161,7 +162,7 @@ def _create_show(name: str, show_date: str, checkin_keyword: str) -> str | None:
         conn.close()
 
 
-def _get_show(show_id: int):
+def _get_show(slug: str, show_id: int):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -174,7 +175,7 @@ def _get_show(show_id: int):
                 WHERE s.id = %s AND s.tenant_slug = %s
                 GROUP BY s.id
                 """,
-                (show_id, _SLUG),
+                (show_id, slug),
             )
             row = cur.fetchone()
             if not row:
@@ -199,7 +200,7 @@ def _get_show_attendees(show_id: int):
         conn.close()
 
 
-def _get_segments():
+def _get_segments(slug: str):
     """Return available blast audience segments from smb_preferences."""
     conn = get_conn()
     try:
@@ -212,7 +213,7 @@ def _get_segments():
                 GROUP BY question_key, answer
                 ORDER BY question_key, cnt DESC
                 """,
-                (_SLUG,),
+                (slug,),
             )
             return cur.fetchall()
     except Exception:
@@ -221,20 +222,20 @@ def _get_segments():
         conn.close()
 
 
-def _get_all_subscriber_phones():
+def _get_all_subscriber_phones(slug: str):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT phone_number FROM smb_subscribers WHERE tenant_slug = %s",
-                (_SLUG,),
+                (slug,),
             )
             return [r[0] for r in cur.fetchall()]
     finally:
         conn.close()
 
 
-def _get_segment_phones(question_key: str, answer: str):
+def _get_segment_phones(slug: str, question_key: str, answer: str):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -245,7 +246,7 @@ def _get_segment_phones(question_key: str, answer: str):
                 JOIN smb_preferences p ON p.phone_number = s.phone_number AND p.tenant_slug = s.tenant_slug
                 WHERE s.tenant_slug = %s AND p.question_key = %s AND p.answer = %s
                 """,
-                (_SLUG, question_key, answer),
+                (slug, question_key, answer),
             )
             return [r[0] for r in cur.fetchall()]
     finally:
@@ -265,7 +266,7 @@ def _get_show_attendee_phones(show_id: int):
         conn.close()
 
 
-def _record_blast(message_text: str, audience_type: str, recipient_count: int):
+def _record_blast(slug: str, message_text: str, audience_type: str, recipient_count: int):
     conn = get_conn()
     try:
         with conn:
@@ -276,7 +277,7 @@ def _record_blast(message_text: str, audience_type: str, recipient_count: int):
                         (tenant_slug, owner_message, body, attempted, succeeded, sent_at, segment)
                     VALUES (%s, %s, %s, %s, %s, NOW(), %s)
                     """,
-                    (_SLUG, "", message_text, recipient_count, recipient_count, audience_type),
+                    (slug, "", message_text, recipient_count, recipient_count, audience_type),
                 )
     except Exception:
         logger.exception("smb_portal: record_blast failed")
@@ -288,10 +289,10 @@ def _record_blast(message_text: str, audience_type: str, recipient_count: int):
 # SMS helper
 # ---------------------------------------------------------------------------
 
-def _send_sms(to: str, body: str) -> bool:
-    from_number = _sms_number()
+def _send_sms(slug: str, to: str, body: str) -> bool:
+    from_number = _sms_number(slug)
     if not from_number:
-        logger.error("smb_portal: WEST_SIDE_COMEDY_SMS_NUMBER not set")
+        logger.error("smb_portal: SMB_%s_SMS_NUMBER not set", slug.upper())
         return False
     try:
         from twilio.rest import Client
@@ -307,15 +308,15 @@ def _send_sms(to: str, body: str) -> bool:
         return False
 
 
-def _blast_async(phones: list, message_text: str, audience_type: str):
+def _blast_async(slug: str, phones: list, message_text: str, audience_type: str):
     def run():
         sent = 0
         for phone in phones:
-            if _send_sms(phone, message_text):
+            if _send_sms(slug, phone, message_text):
                 sent += 1
             time.sleep(0.05)  # gentle rate limiting
-        _record_blast(message_text, audience_type, sent)
-        logger.info("smb_portal blast done: sent=%d/%d audience=%s", sent, len(phones), audience_type)
+        _record_blast(slug, message_text, audience_type, sent)
+        logger.info("smb_portal blast done: sent=%d/%d audience=%s slug=%s", sent, len(phones), audience_type, slug)
 
     threading.Thread(target=run, daemon=True).start()
 
@@ -558,21 +559,25 @@ _STYLE = """
 """
 
 
-def _nav(active: str) -> str:
+def _nav(slug: str, display_name: str, logo_url: str, active: str) -> str:
     links = [
-        ("dashboard", url_for("wscc_portal.portal_dashboard"), "Dashboard"),
-        ("shows",     url_for("wscc_portal.portal_shows"),    "Shows"),
-        ("blast",     url_for("wscc_portal.portal_blast"),    "Send Blast"),
+        ("dashboard", url_for("wscc_portal.portal_dashboard", slug=slug), "Dashboard"),
+        ("shows",     url_for("wscc_portal.portal_shows",     slug=slug), "Shows"),
+        ("blast",     url_for("wscc_portal.portal_blast",     slug=slug), "Send Blast"),
     ]
     items = "".join(
         f'<a href="{url}" class="{"active" if tab == active else ""}">{label}</a>'
         for tab, url, label in links
     )
-    logout_url = url_for("wscc_portal.portal_logout")
+    logout_url = url_for("wscc_portal.portal_logout", slug=slug)
+    logo_html = (
+        f'<img src="{logo_url}" class="nav-logo" alt="{display_name}">'
+        if logo_url else ""
+    )
     return f"""
     <nav class="nav">
-      <img src="{_LOGO_URL}" class="nav-logo" alt="WSCC">
-      <span class="nav-title">West Side Comedy Club</span>
+      {logo_html}
+      <span class="nav-title">{display_name}</span>
       <div class="nav-links">{items}</div>
       <a href="{logout_url}" class="nav-logout">Sign out</a>
     </nav>"""
@@ -582,33 +587,38 @@ def _nav(active: str) -> str:
 # Routes
 # ---------------------------------------------------------------------------
 
-@smb_portal_bp.route("/portal/west_side_comedy/login", methods=["GET", "POST"])
-def portal_login():
-    if _is_authenticated():
-        return redirect(url_for("wscc_portal.portal_dashboard"))
+@smb_portal_bp.route("/portal/<slug>/login", methods=["GET", "POST"])
+def portal_login(slug: str):
+    tenant = _get_tenant_or_404(slug)
+    if _is_authenticated(slug):
+        return redirect(url_for("wscc_portal.portal_dashboard", slug=slug))
 
     error = ""
     if request.method == "POST":
         pwd = request.form.get("password", "")
-        expected = _portal_password()
+        expected = _portal_password(slug)
         if not expected:
-            error = "Portal password not configured — contact your Zarna team."
+            error = "Portal password not configured — contact your team."
         elif pwd == expected:
-            session[_SESSION_KEY] = True
-            return redirect(url_for("wscc_portal.portal_dashboard"))
+            session[_session_key(slug)] = True
+            return redirect(url_for("wscc_portal.portal_dashboard", slug=slug))
         else:
             error = "Incorrect password. Try again."
 
     error_html = f'<div class="alert alert-error">{error}</div>' if error else ""
+    logo_html = (
+        f'<img src="{tenant.logo_url}" class="login-logo" alt="{tenant.display_name}">'
+        if tenant.logo_url else ""
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in — West Side Comedy Club</title>{_STYLE}</head>
+<title>Sign in — {tenant.display_name}</title>{_STYLE}</head>
 <body>
 <div class="login-wrap">
   <div class="login-box">
-    <img src="{_LOGO_URL}" class="login-logo" alt="WSCC">
-    <h1>West Side Comedy Club</h1>
+    {logo_html}
+    <h1>{tenant.display_name}</h1>
     <p>Owner dashboard — sign in to continue</p>
     <div class="login-divider"></div>
     {error_html}
@@ -626,20 +636,22 @@ def portal_login():
 </body></html>"""
 
 
-@smb_portal_bp.route("/portal/west_side_comedy/logout")
-def portal_logout():
-    session.pop(_SESSION_KEY, None)
-    return redirect(url_for("wscc_portal.portal_login"))
+@smb_portal_bp.route("/portal/<slug>/logout")
+def portal_logout(slug: str):
+    session.pop(_session_key(slug), None)
+    return redirect(url_for("wscc_portal.portal_login", slug=slug))
 
 
-@smb_portal_bp.route("/portal/west_side_comedy/")
-@smb_portal_bp.route("/portal/west_side_comedy")
-@_login_required
-def portal_dashboard():
-    total_subs, latest_at = _get_subscribers()
-    shows = _list_shows()
+@smb_portal_bp.route("/portal/<slug>/")
+@smb_portal_bp.route("/portal/<slug>")
+def portal_dashboard(slug: str):
+    tenant = _get_tenant_or_404(slug)
+    if not _is_authenticated(slug):
+        return redirect(url_for("wscc_portal.portal_login", slug=slug))
+    total_subs, latest_at = _get_subscribers(slug)
+    shows = _list_shows(slug)
     active_shows = [s for s in shows if s["status"] == "active"]
-    recent_blasts = _get_recent_blasts(5)
+    recent_blasts = _get_recent_blasts(slug, 5)
 
     latest_str = latest_at.strftime("%-m/%-d/%Y") if latest_at else "—"
 
@@ -648,7 +660,7 @@ def portal_dashboard():
         for s in active_shows[:5]:
             rows += f"""
             <tr>
-              <td><a href="{url_for('wscc_portal.portal_show_detail', show_id=s['id'])}">{s['name']}</a></td>
+              <td><a href="{url_for('wscc_portal.portal_show_detail', slug=slug, show_id=s['id'])}">{s['name']}</a></td>
               <td style="color:var(--muted)">{s['show_date']}</td>
               <td><span class="keyword">{s['checkin_keyword']}</span></td>
               <td style="font-weight:600;color:var(--cream)">{s['checkin_count']}</td>
@@ -657,7 +669,7 @@ def portal_dashboard():
         <div class="card card-accent">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
             <span class="card-title" style="margin:0">Active Shows</span>
-            <a href="{url_for('wscc_portal.portal_shows')}" class="btn btn-sm btn-outline">All shows →</a>
+            <a href="{url_for('wscc_portal.portal_shows', slug=slug)}" class="btn btn-sm btn-outline">All shows →</a>
           </div>
           <table class="tbl">
             <thead><tr><th>Show</th><th>Date</th><th>Check-in Word</th><th>Check-ins</th></tr></thead>
@@ -669,9 +681,9 @@ def portal_dashboard():
         <div class="card" style="text-align:center;padding:40px 32px;border-style:dashed">
           <div style="font-size:40px;margin-bottom:14px">🎭</div>
           <div style="color:var(--muted);margin-bottom:20px;font-size:15px">
-            No active shows yet.<br>Create one and fans text a keyword to check in at the door.
+            No active shows yet.<br>Create one and fans text a keyword to check in.
           </div>
-          <a href="{url_for('wscc_portal.portal_shows')}" class="btn btn-primary">Create your first show</a>
+          <a href="{url_for('wscc_portal.portal_shows', slug=slug)}" class="btn btn-primary">Create your first show</a>
         </div>"""
 
     if recent_blasts:
@@ -692,7 +704,7 @@ def portal_dashboard():
         <div class="card card-accent">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
             <span class="card-title" style="margin:0">Recent Blasts</span>
-            <a href="{url_for('wscc_portal.portal_blast')}" class="btn btn-sm btn-primary">Send blast →</a>
+            <a href="{url_for('wscc_portal.portal_blast', slug=slug)}" class="btn btn-sm btn-primary">Send blast →</a>
           </div>
           <table class="tbl">
             <thead><tr><th>Sent</th><th>Message</th><th>Audience</th><th>Sent to</th></tr></thead>
@@ -706,7 +718,7 @@ def portal_dashboard():
           <div style="color:var(--muted);margin-bottom:20px;font-size:15px">
             No blasts sent yet. Text your audience directly from here.
           </div>
-          <a href="{url_for('wscc_portal.portal_blast')}" class="btn btn-primary">Send your first blast</a>
+          <a href="{url_for('wscc_portal.portal_blast', slug=slug)}" class="btn btn-primary">Send your first blast</a>
         </div>"""
 
     total_checkins = sum(s["checkin_count"] for s in shows)
@@ -714,12 +726,12 @@ def portal_dashboard():
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Dashboard — West Side Comedy Club</title>{_STYLE}</head>
+<title>Dashboard — {tenant.display_name}</title>{_STYLE}</head>
 <body>
-{_nav("dashboard")}
+{_nav(slug, tenant.display_name, tenant.logo_url, "dashboard")}
 <div class="page">
   <h1>Dashboard</h1>
-  <p class="page-sub">Welcome back, Felicia</p>
+  <p class="page-sub">{tenant.display_name}</p>
   <div class="stats">
     <div class="stat-card">
       <div class="stat-label">Subscribers</div>
@@ -748,9 +760,12 @@ def portal_dashboard():
 # Shows
 # ---------------------------------------------------------------------------
 
-@smb_portal_bp.route("/portal/west_side_comedy/shows", methods=["GET", "POST"])
-@_login_required
-def portal_shows():
+@smb_portal_bp.route("/portal/<slug>/shows", methods=["GET", "POST"])
+def portal_shows(slug: str):
+    tenant = _get_tenant_or_404(slug)
+    if not _is_authenticated(slug):
+        return redirect(url_for("wscc_portal.portal_login", slug=slug))
+
     error = ""
     success = ""
 
@@ -761,10 +776,10 @@ def portal_shows():
 
         if not name or not show_date or not keyword:
             error = "All fields are required."
-        elif not keyword.isalpha():
-            error = "Check-in keyword must be letters only (e.g. STANDUP, COMEDY24)."
+        elif not keyword.isalnum():
+            error = "Check-in keyword must be letters/numbers only (e.g. STANDUP, APR18)."
         else:
-            err = _create_show(name, show_date, keyword)
+            err = _create_show(slug, name, show_date, keyword)
             if err:
                 if "unique" in err.lower():
                     error = f"The keyword '{keyword}' is already used by another show. Pick a different one."
@@ -773,7 +788,7 @@ def portal_shows():
             else:
                 success = f"Show '{name}' created! Fans text '{keyword}' to check in."
 
-    shows = _list_shows()
+    shows = _list_shows(slug)
 
     alert_html = ""
     if success:
@@ -790,12 +805,12 @@ def portal_shows():
         )
         rows += f"""
         <tr>
-          <td><a href="{url_for('wscc_portal.portal_show_detail', show_id=s['id'])}">{s['name']}</a></td>
+          <td><a href="{url_for('wscc_portal.portal_show_detail', slug=slug, show_id=s['id'])}">{s['name']}</a></td>
           <td style="color:var(--muted)">{s['show_date']}</td>
           <td><span class="keyword">{s['checkin_keyword']}</span></td>
           <td>{status_badge}</td>
           <td style="font-weight:600;color:var(--cream)">{s['checkin_count']}</td>
-          <td><a href="{url_for('wscc_portal.portal_show_detail', show_id=s['id'])}" class="btn btn-sm btn-outline">View →</a></td>
+          <td><a href="{url_for('wscc_portal.portal_show_detail', slug=slug, show_id=s['id'])}" class="btn btn-sm btn-outline">View →</a></td>
         </tr>"""
 
     table_html = f"""
@@ -809,9 +824,9 @@ def portal_shows():
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Shows — West Side Comedy Club</title>{_STYLE}</head>
+<title>Shows — {tenant.display_name}</title>{_STYLE}</head>
 <body>
-{_nav("shows")}
+{_nav(slug, tenant.display_name, tenant.logo_url, "shows")}
 <div class="page">
   <h1>Shows</h1>
   <p class="page-sub">Create a show and give it a check-in keyword. Fans text that word at the door to check in.</p>
@@ -829,7 +844,7 @@ def portal_shows():
         <form method="post">
           <div class="form-group">
             <label>Show Name</label>
-            <input type="text" name="name" placeholder="e.g. Friday Night Comedy" required>
+            <input type="text" name="name" placeholder="e.g. Friday Night Live" required>
           </div>
           <div class="form-group">
             <label>Date</label>
@@ -852,10 +867,13 @@ def portal_shows():
 </body></html>"""
 
 
-@smb_portal_bp.route("/portal/west_side_comedy/shows/<int:show_id>")
-@_login_required
-def portal_show_detail(show_id: int):
-    show = _get_show(show_id)
+@smb_portal_bp.route("/portal/<slug>/shows/<int:show_id>")
+def portal_show_detail(slug: str, show_id: int):
+    tenant = _get_tenant_or_404(slug)
+    if not _is_authenticated(slug):
+        return redirect(url_for("wscc_portal.portal_login", slug=slug))
+
+    show = _get_show(slug, show_id)
     if not show:
         return "Show not found", 404
 
@@ -866,17 +884,17 @@ def portal_show_detail(show_id: int):
         else '<span class="badge badge-gray">Closed</span>'
     )
 
-    blast_url = url_for("wscc_portal.portal_blast") + f"?show_id={show_id}"
+    blast_url = url_for("wscc_portal.portal_blast", slug=slug) + f"?show_id={show_id}"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{show['name']} — West Side Comedy Club</title>{_STYLE}</head>
+<title>{show['name']} — {tenant.display_name}</title>{_STYLE}</head>
 <body>
-{_nav("shows")}
+{_nav(slug, tenant.display_name, tenant.logo_url, "shows")}
 <div class="page">
   <div style="margin-bottom:12px">
-    <a href="{url_for('wscc_portal.portal_shows')}" style="font-size:13px;color:var(--muted)">← Back to shows</a>
+    <a href="{url_for('wscc_portal.portal_shows', slug=slug)}" style="font-size:13px;color:var(--muted)">← Back to shows</a>
   </div>
   <h1>{show['name']}</h1>
   <p class="page-sub">{show['show_date']} &nbsp;·&nbsp; {status_badge}</p>
@@ -895,9 +913,9 @@ def portal_show_detail(show_id: int):
   <div class="card card-accent">
     <div class="card-title">How Check-ins Work</div>
     <p style="color:var(--cream2);font-size:14px;line-height:1.7">
-      Fans text <span class="keyword">{show['checkin_keyword']}</span> to your WSCC number when they arrive at the door.
+      Fans text <span class="keyword">{show['checkin_keyword']}</span> to your {tenant.display_name} number when they arrive.
       The system automatically records who came.<br><br>
-      After the show, send a personal thank-you blast to everyone who checked in — it builds real loyalty.
+      After the event, send a personal thank-you blast to everyone who checked in — it builds real loyalty.
     </p>
     <div style="margin-top:20px">
       <a href="{blast_url}" class="btn btn-primary">Send blast to attendees →</a>
@@ -911,11 +929,14 @@ def portal_show_detail(show_id: int):
 # Blast
 # ---------------------------------------------------------------------------
 
-@smb_portal_bp.route("/portal/west_side_comedy/blast", methods=["GET", "POST"])
-@_login_required
-def portal_blast():
-    total_subs, _ = _get_subscribers()
-    shows = _list_shows()
+@smb_portal_bp.route("/portal/<slug>/blast", methods=["GET", "POST"])
+def portal_blast(slug: str):
+    tenant = _get_tenant_or_404(slug)
+    if not _is_authenticated(slug):
+        return redirect(url_for("wscc_portal.portal_login", slug=slug))
+
+    total_subs, _ = _get_subscribers(slug)
+    shows = _list_shows(slug)
     preselect_show_id = request.args.get("show_id", "")
 
     success = ""
@@ -934,20 +955,20 @@ def portal_blast():
             audience_label = ""
 
             if audience == "all":
-                phones = _get_all_subscriber_phones()
+                phones = _get_all_subscriber_phones(slug)
                 audience_label = "All subscribers"
             elif audience.startswith("show:"):
                 try:
                     show_id = int(audience.split(":")[1])
                     phones = _get_show_attendee_phones(show_id)
-                    show = _get_show(show_id)
+                    show = _get_show(slug, show_id)
                     audience_label = f"Attendees of {show['name']}" if show else "Show attendees"
                 except (ValueError, IndexError):
                     error = "Invalid show selection."
             elif audience.startswith("seg:"):
                 parts = audience[4:].split(":", 1)
                 if len(parts) == 2:
-                    phones = _get_segment_phones(parts[0], parts[1])
+                    phones = _get_segment_phones(slug, parts[0], parts[1])
                     audience_label = f"Segment: {parts[1]}"
                 else:
                     error = "Invalid segment."
@@ -955,10 +976,10 @@ def portal_blast():
             if not error:
                 if not phones:
                     error = "No recipients in that audience — nobody has subscribed or checked in yet."
-                elif not _sms_number():
-                    error = "SMS number not configured. Ask your Zarna team to set SMB_WEST_SIDE_COMEDY_SMS_NUMBER."
+                elif not _sms_number(slug):
+                    error = f"SMS number not configured. Set SMB_{slug.upper()}_SMS_NUMBER in environment."
                 else:
-                    _blast_async(phones, message_text, audience_label)
+                    _blast_async(slug, phones, message_text, audience_label)
                     success = f"Blast is sending to {len(phones):,} people! They'll receive it within a few minutes."
 
     # Build audience cards
@@ -998,7 +1019,7 @@ def portal_blast():
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Send Blast — West Side Comedy Club</title>{_STYLE}
+<title>Send Blast — {tenant.display_name}</title>{_STYLE}
 <script>
   document.addEventListener('DOMContentLoaded', function() {{
     var ta = document.getElementById('msg');
@@ -1020,10 +1041,10 @@ def portal_blast():
 </script>
 </head>
 <body>
-{_nav("blast")}
+{_nav(slug, tenant.display_name, tenant.logo_url, "blast")}
 <div class="page">
   <h1>Send Blast</h1>
-  <p class="page-sub">Text your audience directly from your WSCC number.</p>
+  <p class="page-sub">Text your audience directly from your {tenant.display_name} number.</p>
   {alert_html}
   <form method="post">
     <div class="card card-accent">
@@ -1034,7 +1055,7 @@ def portal_blast():
       <div class="card-title">2 — Write your message</div>
       <div class="form-group">
         <textarea id="msg" name="message" rows="6"
-          placeholder="e.g. Hey! Thanks so much for coming out last night — it meant everything to us. We hope to see you again soon 🎭"></textarea>
+          placeholder="e.g. Hey! Thanks so much for coming out — we hope to see you again soon!"></textarea>
         <div style="font-size:12px;margin-top:6px;text-align:right">
           <span id="cc" style="color:var(--muted)">0</span>
           <span style="color:var(--muted)"> / 1600 characters</span>

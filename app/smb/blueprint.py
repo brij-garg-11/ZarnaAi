@@ -236,25 +236,16 @@ def _process_smb_message(from_number: str, to_number: str, message_text: str) ->
 # Link click tracking  GET /smb/r/<slug>/<link_key>
 # ---------------------------------------------------------------------------
 
-# Registered trackable links per tenant slug
-_TRACKED_LINKS: dict[str, dict[str, str]] = {
-    "west_side_comedy": {
-        "tickets":  "https://www.westsidecomedyclub.com",
-        "calendar": "https://www.westsidecomedyclub.com/calendar",
-        "menu":     "https://www.westsidecomedyclub.com/menu",
-        "map":      "https://maps.google.com/?q=201+West+75th+Street+New+York+NY",
-    },
-}
-
-
 @smb_bp.route("/r/<slug>/<link_key>", methods=["GET"])
 def smb_link_redirect(slug: str, link_key: str):
     """
     Tracked redirect for links sent to subscribers.
+    Links are loaded from each tenant's creator_config JSON (tracked_links key).
     Logs the click then issues a 302 to the real URL.
     """
-    links = _TRACKED_LINKS.get(slug, {})
-    target = links.get(link_key)
+    from app.smb.tenants import get_registry as _smb_registry
+    tenant = _smb_registry().get_by_slug(slug)
+    target = tenant.tracked_links.get(link_key) if tenant else None
 
     if not target:
         from flask import abort

@@ -149,9 +149,12 @@ def _signup_nudge(tenant: BusinessTenant) -> str:
     """
     Invite an unknown sender to join — sent before they've opted in so no
     STOP line is required or appropriate here.
+    Uses tenant-specific copy when configured; falls back to a generic line.
     """
+    if tenant.signup_nudge:
+        return tenant.signup_nudge
     return (
-        f"Hey! {tenant.display_name} here. Want show updates and deals? "
+        f"Hey! {tenant.display_name} here. Want updates and exclusive offers? "
         "Reply YES to join — it's free!"
     )
 
@@ -283,13 +286,13 @@ def _try_show_checkin(
         conn.close()
 
     if is_new:
+        if tenant.checkin_confirmation:
+            return tenant.checkin_confirmation
         return (
             f"You're checked in for {show['name']}! "
-            f"Thanks so much for coming out — enjoy the show 🎉"
+            "Thanks for coming — enjoy the event! 🎉"
         )
-    return (
-        f"You're already checked in for {show['name']} — see you there! 🎉"
-    )
+    return f"You're already checked in for {show['name']} — see you there! 🎉"
 
 
 def create_smb_brain() -> SMBBrain:
