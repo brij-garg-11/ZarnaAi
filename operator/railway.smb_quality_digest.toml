@@ -1,40 +1,84 @@
-# Weekly SMB AI Quality Digest — runs per-tenant, scores engagement, auto-promotes winners,
-# texts a digest to each business owner, and saves the report to smb_quality_reports.
+# Weekly SMB AI Quality Digest — per-tenant scoring, opt-out alerts, auto-improvement,
+# Notion pages, and owner SMS digest. Runs every Monday.
 #
-# Setup steps:
+# ─────────────────────────────────────────────────────────────────────────────
+# SETUP (one-time)
+# ─────────────────────────────────────────────────────────────────────────────
 #
-# 1) Railway project → + New Service → GitHub Repo → same repo.
-#
-# 2) Service → Settings → Config-as-code → set path:
+# ── Railway service ───────────────────────────────────────────────────────────
+# 1. Railway project → + New Service → GitHub Repo → same repo.
+# 2. Service → Settings → Config-as-code → set path:
 #      operator/railway.smb_quality_digest.toml
 #
-# 3) Variables (reference existing vars — do NOT create a new database):
-#      DATABASE_URL        → Variable Reference → same Postgres as the web service
-#      GEMINI_API_KEY      → Variable Reference → same as web service
-#      TWILIO_ACCOUNT_SID  → Variable Reference → same as web service (for owner SMS)
-#      TWILIO_AUTH_TOKEN   → Variable Reference → same as web service
+# ── Variables ─────────────────────────────────────────────────────────────────
+# 3. Add variables (use Variable Reference so they stay in sync with the web service):
 #
-#    Optional:
-#      SMB_DIGEST_DAYS     → days to analyse (default 7)
-#      SMB_DIGEST_TENANT   → run for one slug only (leave blank for all tenants)
-#      GENERATION_MODEL    → default gemini-2.5-flash
+#    REQUIRED:
+#      DATABASE_URL          → Variable Reference → web service DATABASE_URL
+#      GEMINI_API_KEY        → Variable Reference → web service GEMINI_API_KEY
+#      TWILIO_ACCOUNT_SID    → Variable Reference → web service TWILIO_ACCOUNT_SID
+#      TWILIO_AUTH_TOKEN     → Variable Reference → web service TWILIO_AUTH_TOKEN
 #
-# 4) Cron schedule — Railway service Settings → "Run on Schedule":
-#      0 10 * * 1   = every Monday 10:00 UTC (6:00 AM Eastern during DST)
+#    NOTION (strongly recommended):
+#      NOTION_TOKEN                  → Variable Reference → web service NOTION_TOKEN
+#      SMB_NOTION_DIGEST_PARENT_ID   → paste the UUID of a Notion page called
+#                                       "SMB AI Quality Digest" (see Notion setup below)
+#      NOTION_API_VERSION            → leave blank to use default 2022-06-28
 #
-# 5) One-off run (local or via Railway deploy button):
-#      python scripts/generate_smb_quality_digest.py
+#    OPTIONAL TUNING:
+#      GENERATION_MODEL      → default gemini-2.5-flash
+#      SMB_DIGEST_DAYS       → days to analyse (default 7)
+#      SMB_DIGEST_TENANT     → run for one tenant slug only (blank = all tenants)
+#
+#    PER-TENANT SMS NUMBERS (add one pair per tenant):
+#      SMB_WEST_SIDE_COMEDY_SMS_NUMBER    → Variable Reference → web service
+#      SMB_WEST_SIDE_COMEDY_OWNER_PHONE   → Variable Reference → web service
+#      (add equivalent vars for each new client you onboard)
+#
+# ── Cron schedule ─────────────────────────────────────────────────────────────
+# 4. Service → Settings → Run on Schedule:
+#      0 10 * * 1   =  every Monday 10:00 UTC  (6:00 AM Eastern during DST)
+#
+# ── One-off / test runs ────────────────────────────────────────────────────────
+# 5. Click "Deploy now" in Railway, or run locally:
 #      python scripts/generate_smb_quality_digest.py --dry-run
 #      python scripts/generate_smb_quality_digest.py --tenant west_side_comedy
+#      python scripts/generate_smb_quality_digest.py --dry-run --tenant west_side_comedy
 #
-# The first run will apply schema migrations (ALTER TABLE smb_messages, CREATE TABLE
-# smb_winning_examples, CREATE TABLE smb_quality_reports) automatically.
+#    The first run automatically applies all schema migrations (ALTER TABLE smb_messages,
+#    CREATE TABLE smb_winning_examples, CREATE TABLE smb_quality_reports) — no manual DB work.
 #
-# After a few weeks of data the digest will:
-#  • Text each owner a ~4-line weekly performance summary
-#  • Surface which bot replies drove opt-outs and why
-#  • Automatically inject the week's top-performing replies as few-shot examples
-#    so the bot gets a little better every Monday — zero manual intervention needed
+# ─────────────────────────────────────────────────────────────────────────────
+# NOTION SETUP
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# a) In your Notion workspace, create a new full-page called "SMB AI Quality Digest".
+# b) Open the page → Share → Connections → Add connection → select your Zarna integration.
+# c) Copy the page UUID from the URL (the 32-char hex string after the last "-").
+# d) Set SMB_NOTION_DIGEST_PARENT_ID to that UUID in Railway.
+#
+# Each Monday, a child page per tenant is created automatically:
+#   "West Side Comedy Club — SMB Digest — Week of 2026-04-14"
+#
+# Each page contains:
+#   📊 This Week at a Glance      (reply rate, silence rate, avg length)
+#   🚨 Opt-outs This Week         (who stopped + their last 3 messages — critical for quality)
+#   🔴 Problems Identified        (Gemini-detected issues + proposed fixes)
+#   ✅ What's Working
+#   🔇 Replies That Drove Silence (sample of bad replies)
+#   🏆 Top Replies Auto-Promoted  (examples that are now used as few-shot prompts)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# HOW AUTO-IMPROVEMENT WORKS
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Each Monday run:
+#  1. Scores last week's smb_messages (did subscriber reply? how fast? went silent?)
+#  2. Picks the top 5 bot replies that got the fastest subscriber responses
+#  3. Saves them to smb_winning_examples (per tenant)
+#  4. The SMB brain automatically injects these as few-shot examples in future replies
+#
+# Net result: the bot gets measurably better every Monday with zero manual work.
 
 [build]
 builder = "nixpacks"

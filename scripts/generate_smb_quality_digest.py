@@ -79,6 +79,266 @@ def _load_all_tenants() -> list:
 
 
 # ---------------------------------------------------------------------------
+# Notion helpers — shared primitives
+# ---------------------------------------------------------------------------
+
+def _notion_headers() -> dict:
+    token = os.getenv("NOTION_TOKEN", "")
+    version = os.getenv("NOTION_API_VERSION", "2022-06-28")
+    if not token:
+        raise RuntimeError("NOTION_TOKEN not set")
+    return {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Notion-Version": version,
+    }
+
+
+def _rich_text(content: str) -> list:
+    return [{"type": "text", "text": {"content": content[:2000]}}]
+
+
+def _heading2(text: str) -> dict:
+    return {"object": "block", "type": "heading_2",
+            "heading_2": {"rich_text": _rich_text(text)}}
+
+
+def _heading3(text: str) -> dict:
+    return {"object": "block", "type": "heading_3",
+            "heading_3": {"rich_text": _rich_text(text)}}
+
+
+def _para(text: str) -> dict:
+    return {"object": "block", "type": "paragraph",
+            "paragraph": {"rich_text": _rich_text(text)}}
+
+
+def _bullet(text: str) -> dict:
+    return {"object": "block", "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": _rich_text(text)}}
+
+
+def _divider() -> dict:
+    return {"object": "block", "type": "divider", "divider": {}}
+
+
+def _callout(text: str, emoji: str = "📌") -> dict:
+    return {
+        "object": "block",
+        "type": "callout",
+        "callout": {
+            "rich_text": _rich_text(text),
+            "icon": {"type": "emoji", "emoji": emoji},
+            "color": "gray_background",
+        },
+    }
+
+
+def _severity_emoji(s: str) -> str:
+    return {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(s, "⚪")
+
+
+def _trend_emoji(t: str) -> str:
+    return {"improving": "📈", "declining": "📉", "stable": "➡️",
+            "insufficient_data": "📊"}.get(t, "📊")
+
+
+# ---------------------------------------------------------------------------
+# Notion page builder — SMB variant
+# ---------------------------------------------------------------------------
+
+def build_smb_notion_blocks(
+    tenant_display_name: str,
+    business_type: str,
+    week_start: date,
+    data: dict,
+    findings: dict,
+    promoted_count: int,
+) -> list:
+    h = data["headline"]
+    rr = h.get("reply_rate")
+    base = h.get("baseline_reply_rate")
+    silence = h.get("silence_rate")
+    trend = findings.get("overall_trend", "stable")
+    summary = findings.get("one_line_summary", "")
+    problems = findings.get("problems", [])
+    working = findings.get("whats_working", [])
+    opt_outs = data.get("opt_outs", [])
+    silenced = data.get("silenced", [])
+    winners = data.get("winners", [])
+
+    rr_str = f"{rr}%" if rr is not None else "—"
+    base_str = f"{base}%" if base is not None else "—"
+
+    blocks: list = []
+
+    # Banner callout
+    blocks.append(_callout(
+        f"{_trend_emoji(trend)}  {tenant_display_name} — Week of {week_start}  |  {summary}",
+        _trend_emoji(trend) or "📊",
+    ))
+    blocks.append(_divider())
+
+    # At-a-glance
+    blocks.append(_heading2("📊 This Week at a Glance"))
+    blocks.append(_bullet(f"Business: {tenant_display_name} ({business_type})"))
+    blocks.append(_bullet(f"Scored bot replies: {h.get('scored', 0):,}"))
+    blocks.append(_bullet(f"Subscriber reply rate: {rr_str}  (4-week baseline: {base_str})"))
+    blocks.append(_bullet(f"Silence rate (no reply): {silence if silence is not None else '—'}%"))
+    blocks.append(_bullet(f"Avg bot reply length: {h.get('avg_len', '—')} chars"))
+    blocks.append(_bullet(f"Auto-promoted winning examples this week: {promoted_count}"))
+    blocks.append(_divider())
+
+    # Opt-outs — most urgent section
+    if opt_outs:
+        blocks.append(_heading2(f"🚨 Opt-outs This Week ({len(opt_outs)})"))
+        blocks.append(_callout(
+            "These subscribers texted STOP this week. Review their last conversation to understand why.",
+            "⚠️",
+        ))
+        for o in opt_outs:
+            blocks.append(_para(
+                f"Subscriber ...{o['phone_suffix']}  stopped at {o.get('stopped_at', '?')}"
+            ))
+            for m in o.get("last_messages", []):
+                role_label = "Bot" if m["role"] == "assistant" else "Subscriber"
+                blocks.append(_bullet(f"{role_label}: {m['body']}"))
+        blocks.append(_divider())
+    else:
+        blocks.append(_callout("✅ No opt-outs this week!", "🎉"))
+        blocks.append(_divider())
+
+    # Problems
+    blocks.append(_heading2("🔴 Problems Identified"))
+    if not problems:
+        blocks.append(_para("No significant problems detected this week — or not enough data yet."))
+    for i, p in enumerate(problems, 1):
+        sev_emoji = _severity_emoji(p.get("severity", "low"))
+        blocks.append(_heading3(f"{sev_emoji} Problem {i}: {p.get('title', 'Untitled')}"))
+        blocks.append(_para(f"Evidence: {p.get('evidence', '—')}"))
+        blocks.append(_callout(
+            f"Proposed fix: {p.get('proposed_change', '—')}",
+            "💡",
+        ))
+    blocks.append(_divider())
+
+    # What's working
+    blocks.append(_heading2("✅ What's Working"))
+    if working:
+        for w in working:
+            blocks.append(_bullet(w))
+    else:
+        blocks.append(_para("Not enough data to identify patterns yet."))
+    blocks.append(_divider())
+
+    # Silenced replies sample
+    if silenced:
+        blocks.append(_heading2("🔇 Replies That Drove Silence"))
+        for r in silenced[:6]:
+            preview = (r.get("preview") or "").strip()
+            meta = f"[{r.get('chars', '?')}ch]"
+            blocks.append(_bullet(f"{meta}  \"{preview}\""))
+        blocks.append(_divider())
+
+    # Winning examples promoted
+    if winners:
+        blocks.append(_heading2("🏆 Top Replies Auto-Promoted This Week"))
+        blocks.append(_para(
+            "These bot replies got the fastest subscriber responses and are now "
+            "automatically used as examples to improve future replies."
+        ))
+        for w in winners[:5]:
+            delay = w.get("reply_s") or w.get("reply_delay_seconds")
+            delay_str = f"  (subscriber replied in {delay}s)" if delay else ""
+            blocks.append(_bullet(f"\"{(w.get('preview') or w.get('text',''))}\"{delay_str}"))
+        blocks.append(_divider())
+
+    blocks.append(_callout(
+        "Review full report at your operator portal. Next digest: next Monday.",
+        "📋",
+    ))
+
+    return blocks
+
+
+def _notion_post(url: str, payload: dict) -> dict:
+    import urllib.request
+    headers = _notion_headers()
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    with urllib.request.urlopen(req) as resp:
+        return json.loads(resp.read().decode())
+
+
+def _notion_patch_children(page_id: str, blocks: list) -> None:
+    import urllib.request
+    headers = _notion_headers()
+    payload = {"children": blocks}
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        f"https://api.notion.com/v1/blocks/{page_id}/children",
+        data=body, headers=headers, method="PATCH",
+    )
+    with urllib.request.urlopen(req):
+        pass
+
+
+def create_smb_notion_page(
+    tenant_display_name: str,
+    business_type: str,
+    week_start: date,
+    data: dict,
+    findings: dict,
+    promoted_count: int,
+) -> str | None:
+    """
+    Create (or skip if NOTION vars not set) a Notion page for this tenant's weekly digest.
+
+    Parent page: SMB_NOTION_DIGEST_PARENT_ID  (one shared parent for all tenants)
+    Page title:  "{Tenant Name} — SMB Digest — Week of {date}"
+
+    Returns the Notion page ID, or None if Notion is not configured.
+    """
+    parent_id = os.getenv("SMB_NOTION_DIGEST_PARENT_ID", "")
+    if not parent_id:
+        log.info("Notion: SMB_NOTION_DIGEST_PARENT_ID not set — skipping Notion page")
+        return None
+    if not os.getenv("NOTION_TOKEN", ""):
+        log.info("Notion: NOTION_TOKEN not set — skipping Notion page")
+        return None
+
+    title = f"{tenant_display_name} — SMB Digest — Week of {week_start}"
+    blocks = build_smb_notion_blocks(
+        tenant_display_name, business_type, week_start, data, findings, promoted_count,
+    )
+
+    first_batch = blocks[:100]
+    rest = blocks[100:]
+
+    payload = {
+        "parent": {"type": "page_id", "page_id": parent_id},
+        "properties": {
+            "title": {"title": _rich_text(title)},
+        },
+        "children": first_batch,
+    }
+
+    try:
+        result = _notion_post("https://api.notion.com/v1/pages", payload)
+        page_id = result.get("id")
+        if not page_id:
+            log.error("Notion: page creation returned no ID: %s", result)
+            return None
+        for i in range(0, len(rest), 100):
+            _notion_patch_children(page_id, rest[i:i + 100])
+        log.info("Notion: created page '%s' (id=%s)", title, page_id)
+        return page_id
+    except Exception:
+        log.exception("Notion: failed to create page for %s", tenant_display_name)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Gemini analysis — business-voice variant
 # ---------------------------------------------------------------------------
 
@@ -343,11 +603,25 @@ def run_tenant_digest(
         print(json.dumps({"headline": h, "findings": findings, "winners_found": len(winners)}, indent=2, default=str))
         return findings
 
-    # 5. Save report
-    smb_storage.save_smb_quality_report(conn, tenant.slug, week_start, h, findings)
-    log.info("[%s] Report saved", tenant.slug)
+    # 5. Notion page
+    notion_page_id = None
+    try:
+        notion_page_id = create_smb_notion_page(
+            tenant.display_name,
+            tenant.business_type,
+            week_start,
+            data,
+            findings,
+            promoted,
+        )
+    except Exception:
+        log.exception("[%s] Notion page creation failed — continuing", tenant.slug)
 
-    # 6. Send SMS digest to owner
+    # 6. Save report to DB
+    smb_storage.save_smb_quality_report(conn, tenant.slug, week_start, h, findings)
+    log.info("[%s] Report saved (notion_page_id=%s)", tenant.slug, notion_page_id or "none")
+
+    # 7. Send SMS digest to owner
     sms_text = _format_owner_sms(tenant.display_name, week_start, h, findings, data.get("opt_outs", []))
     _send_owner_digest_sms(tenant, sms_text)
 
