@@ -643,6 +643,198 @@ def save_report(conn, week_start: date, headline: dict, findings: dict, notion_p
             return (row or {}).get("id")
 
 
+# ── Auto-winner promotion ─────────────────────────────────────────────────────
+
+# Intents that produce sell links — never promote these into the corpus.
+_SELL_INTENTS = frozenset({"show", "book", "clip", "podcast", "merch"})
+
+# Rolling window: keep this many auto-snapshot batches active at once.
+# Older batches are deactivated so the corpus stays lean.
+_AUTO_SNAPSHOTS_TO_KEEP = 3
+
+# Quality bar: fan replied within this many seconds (genuine fast engagement).
+_MAX_REPLY_SECONDS = 300
+
+# Per intent+tone combo, take at most this many winners per week.
+_MAX_PER_COMBO = 2
+
+
+def fetch_winners_for_corpus(
+    conn,
+    this_start: datetime,
+    this_end: datetime,
+) -> list[dict]:
+    """
+    Return the top-performing bot replies from this window that are candidates
+    for the winning examples corpus.
+
+    Selection criteria (all must hold):
+      - Fan replied (did_user_reply = TRUE)
+      - Did NOT drive silence after (went_silent_after IS NOT TRUE)
+      - Fan replied within _MAX_REPLY_SECONDS seconds (genuine engagement)
+      - Reply is 40–250 chars (not a stub, not a wall of text)
+      - Intent is not a sell intent (no ticket/book/merch links)
+      - Not already in the corpus (deduped by source_msg_id)
+      - Not from a blast send
+
+    Returns up to _MAX_PER_COMBO entries per (intent, tone_mode) combo,
+    ranked by conversation depth (msgs_after_this DESC) then reply speed.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH ranked AS (
+                SELECT
+                    m.id                                        AS source_msg_id,
+                    m.text,
+                    m.intent,
+                    COALESCE(m.tone_mode, 'unknown')            AS tone_mode,
+                    m.reply_delay_seconds,
+                    COALESCE(m.msgs_after_this, 0)              AS depth,
+                    RANK() OVER (
+                        PARTITION BY m.intent, COALESCE(m.tone_mode, 'unknown')
+                        ORDER BY COALESCE(m.msgs_after_this, 0) DESC,
+                                 m.reply_delay_seconds ASC
+                    )                                           AS rk
+                FROM messages m
+                WHERE m.role                = 'assistant'
+                  AND m.did_user_reply      = TRUE
+                  AND (m.went_silent_after IS DISTINCT FROM TRUE)
+                  AND m.msg_source         IS DISTINCT FROM 'blast'
+                  AND m.reply_delay_seconds BETWEEN 5 AND %s
+                  AND m.reply_length_chars  BETWEEN 40 AND 250
+                  AND m.intent              IS NOT NULL
+                  AND m.intent              NOT IN %s
+                  AND m.text NOT LIKE '%%zarnagarg.com%%'
+                  AND m.text NOT LIKE '%%amazon.com%%'
+                  AND m.text NOT LIKE '%%youtube.com%%'
+                  AND m.text NOT LIKE '%%shopmy.us%%'
+                  AND m.created_at          >= %s
+                  AND m.created_at          <  %s
+                  AND m.id NOT IN (
+                      SELECT source_msg_id
+                      FROM   winning_examples_corpus
+                      WHERE  source_msg_id IS NOT NULL
+                  )
+            )
+            SELECT source_msg_id, text, intent, tone_mode, reply_delay_seconds, depth
+            FROM   ranked
+            WHERE  rk <= %s
+            ORDER  BY intent, tone_mode, rk
+            """,
+            (
+                _MAX_REPLY_SECONDS,
+                tuple(_SELL_INTENTS),
+                this_start,
+                this_end,
+                _MAX_PER_COMBO,
+            ),
+        )
+        rows = cur.fetchall()
+
+    return [dict(r) for r in rows]
+
+
+def auto_promote_winners(
+    conn,
+    week_start: "date",
+    winners: list[dict],
+    dry_run: bool = False,
+    creator_slug: str = "zarna",
+) -> int:
+    """
+    Insert winners into winning_examples_corpus under a dated snapshot tag,
+    then deactivate old auto-snapshot batches beyond the rolling window.
+
+    Returns the number of rows inserted (0 on dry-run).
+    """
+    if not winners:
+        log.info("auto_promote_winners: no winners to promote this week")
+        return 0
+
+    snapshot_tag = f"auto-{week_start}"
+    log.info(
+        "auto_promote_winners: promoting %d winners → snapshot '%s'",
+        len(winners), snapshot_tag,
+    )
+
+    if dry_run:
+        for w in winners:
+            log.info(
+                "  [DRY RUN] would promote: intent=%s tone=%s depth=%s delay=%ss  \"%s\"",
+                w["intent"], w["tone_mode"], w["depth"], w["reply_delay_seconds"],
+                w["text"][:80],
+            )
+        return 0
+
+    with conn:
+        with conn.cursor() as cur:
+            # Insert new winners
+            inserted = 0
+            for w in winners:
+                cur.execute(
+                    """
+                    INSERT INTO winning_examples_corpus
+                        (creator_slug, intent, tone_mode, text, snapshot_tag,
+                         is_active, source_msg_id)
+                    VALUES (%s, %s, %s, %s, %s, TRUE, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (
+                        creator_slug,
+                        w["intent"],
+                        w["tone_mode"],
+                        w["text"],
+                        snapshot_tag,
+                        w["source_msg_id"],
+                    ),
+                )
+                inserted += cur.rowcount
+
+            # Record the snapshot
+            cur.execute(
+                """
+                INSERT INTO winning_examples_snapshots (tag, notes, example_count)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (tag) DO UPDATE
+                    SET example_count = EXCLUDED.example_count
+                """,
+                (
+                    snapshot_tag,
+                    f"Auto-promoted from digest run for week of {week_start}",
+                    inserted,
+                ),
+            )
+
+            # Deactivate auto-snapshots outside the rolling window.
+            # Find all auto-* snapshot tags ordered by creation date, keep the
+            # most recent _AUTO_SNAPSHOTS_TO_KEEP active.
+            cur.execute(
+                """
+                UPDATE winning_examples_corpus
+                SET    is_active = FALSE
+                WHERE  creator_slug  = %s
+                  AND  snapshot_tag  LIKE 'auto-%%'
+                  AND  snapshot_tag NOT IN (
+                      SELECT tag
+                      FROM   winning_examples_snapshots
+                      WHERE  tag LIKE 'auto-%%'
+                        AND  rolled_back_at IS NULL
+                      ORDER  BY created_at DESC
+                      LIMIT  %s
+                  )
+                """,
+                (creator_slug, _AUTO_SNAPSHOTS_TO_KEEP),
+            )
+            deactivated = cur.rowcount
+
+    log.info(
+        "auto_promote_winners: inserted=%d deactivated_old=%d snapshot='%s'",
+        inserted, deactivated, snapshot_tag,
+    )
+    return inserted
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -691,11 +883,21 @@ def main():
     for p in findings.get("problems", []):
         log.info("  [%s] %s — %s", p.get("severity","?"), p.get("title",""), p.get("proposed_change",""))
 
+    # Auto-promote this week's winners into the corpus (runs before dry-run print
+    # so the dry-run output shows what would be promoted).
+    log.info("Fetching winners for corpus promotion …")
+    winners = fetch_winners_for_corpus(conn, this_start, this_end)
+    log.info("Found %d winner candidates for corpus", len(winners))
+    promoted = auto_promote_winners(conn, week_start, winners, dry_run=args.dry_run)
+
     if args.dry_run:
         print("\n=== DRY RUN — NOT SAVED ===")
         print(json.dumps({"headline": data["headline"], "findings": findings}, indent=2, default=_json_serial))
+        print(f"\n[Auto-promote] Would have promoted {len(winners)} winners (dry-run, nothing inserted)")
         conn.close()
         return
+
+    log.info("Auto-promoted %d winners into corpus", promoted)
 
     # Create Notion page
     notion_page_id = None
@@ -707,7 +909,7 @@ def main():
     # Save to DB
     report_id = save_report(conn, week_start, data["headline"], findings, notion_page_id)
     conn.close()
-    log.info("Saved quality report id=%s notion_page=%s", report_id, notion_page_id)
+    log.info("Saved quality report id=%s notion_page=%s promoted_winners=%d", report_id, notion_page_id, promoted)
 
 
 if __name__ == "__main__":
