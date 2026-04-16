@@ -33,7 +33,30 @@ from app.live_shows.quiz import get_active_quiz_for_fan, record_quiz_response, b
 from app.live_shows.blast_context import get_active_blast_context, build_blast_context_prompt
 from app.ops_metrics import ai_reply_enter, ai_reply_leave, bump as ops_bump
 
-logging.basicConfig(level=logging.INFO)
+class _ServiceFormatter(logging.Formatter):
+    """Prepend a [SERVICE] tag based on logger name so Railway logs are filterable."""
+    _PREFIXES = (
+        ("app.smb",       "[SMB]   "),
+        ("app.brain",     "[ZARNA] "),
+        ("app.admin",     "[ADMIN] "),
+        ("app.analytics", "[STATS] "),
+        ("app.live_shows","[ZARNA] "),
+        ("app.messaging", "[ZARNA] "),
+        ("app.storage",   "[DB]    "),
+    )
+    def format(self, record: logging.LogRecord) -> str:
+        tag = "[WEB]   "
+        for prefix, label in self._PREFIXES:
+            if record.name.startswith(prefix):
+                tag = label
+                break
+        return tag + super().format(record)
+
+_log_handler = logging.StreamHandler()
+_log_handler.setFormatter(_ServiceFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+logging.root.setLevel(logging.INFO)
+logging.root.addHandler(_log_handler)
+logging.root.handlers = [_log_handler]  # replace any handlers basicConfig may have added
 
 
 def _record_blast_optout() -> None:
