@@ -29,26 +29,33 @@ Pillar 5 (Smart Blast Engine) is being built first. This doc tracks the remainin
 
 ## Pillar 3 — Context-Aware Selling
 
-**Step 4:** Merch intent.
-- Add `merch` as a first-class intent label in `app/brain/intent.py`.
-- Route merch intent to a reply that surfaces the correct merch link.
-- **Test:** Send a merch-related message ("where can I buy your shirt?") → verify `intent = merch` in the DB and the reply includes a merch link.
+**Step 4:** Merch intent. ✅ SHIPPED
+- `MERCH` added as a first-class intent in `app/brain/intent.py`.
+- Conservative two-signal keyword detection: requires both a merch item word (shirt, hoodie, merch, etc.) AND a purchase/query word (buy, shop, where, etc.). "Your shirt is hilarious" → FEEDBACK; "where can I buy your shirt?" → MERCH.
+- Extra phrase list catches "do you have merch?"-style questions.
+- MERCH prompt in `app/brain/generator.py` outputs 1 sentence + `https://shopmy.us/shop/zarnagarg` link.
+- MERCH added to `_STRUCTURED_INTENTS` (Gemini-only, link fidelity) and `_STRUCTURED_ROUTE_INTENTS` (no complexity router call).
+- **Test:** `tests/test_context_aware_selling.py` — 26 tests cover positives, false-positive guards, prompt link injection, handler routing flags. All pass.
 
-**Step 5:** Per-show / per-city sell copy.
-- When the bot decides to sell, check if the fan has a show check-in (`smb_show_checkins` or `live_show_signups`) or a `fan_location` tag.
-- Reference that context in the sell copy ("you were at the Chicago show…").
-- **Test:** Simulate a fan with a show check-in → trigger a sell reply → verify the city/show name appears in the response.
+**Step 5:** Per-show / per-city sell copy. ✅ SHIPPED
+- `get_fan_location(phone_number)` added to `BaseStorage`, `PostgresStorage`, `InMemoryStorage`.
+- `get_fan_show_context(phone_number)` added to `BaseStorage` and `PostgresStorage` — queries `smb_show_checkins` (door check-in) then `live_show_signups` (pre-signup); returns human-readable string.
+- Handler (`app/brain/handler.py`) assembles `sell_context` for SHOW and MERCH intents and passes it to the generator.
+- Generator injects context into the prompt: "Fan attended 'Chicago Laugh Factory' on 2025-03-15." → bot can say "You're a true Chicago fan — here's where to grab tickets."
+- **Test:** `TestSellContextStorage` in `tests/test_context_aware_selling.py` — location storage and context assembly verified.
 
 **Step 6:** More winning examples with rollback.
 - Expand the winning-examples corpus systematically (new material added quarterly).
 - Version each corpus snapshot with a date. Keep the prior snapshot available for one-command rollback.
 - **Test:** Run quality digest before and after. If scores drop, roll back and verify recovery.
 
-**Step 7:** A/B testing on sell copy.
-- When the bot routes to a sell reply (show, book, merch), randomly assign the fan to variant A or B.
-- Log which variant was used on the message row.
-- Track reply rate and link click rate per variant in the admin quality tab.
-- **Test:** Run 20 test messages → verify ~50/50 split in DB → verify variant label is logged.
+**Step 7:** A/B testing on sell copy. ✅ SHIPPED
+- Handler randomly assigns `sell_variant = "A"` or `"B"` for every SHOW or MERCH reply.
+- Variant B gets a different tone instruction (warm + personal) in the generator prompt.
+- `sell_variant` column added to `messages` table via migration.
+- `sell_variant` stored via `save_reply_context` and logged to DB asynchronously.
+- **Test:** `TestSellVariantAssignment` in `tests/test_context_aware_selling.py` — distribution, storage, and non-sell intent (None) all verified.
+- **Next:** expose variant vs. reply rate in admin quality tab.
 
 ---
 

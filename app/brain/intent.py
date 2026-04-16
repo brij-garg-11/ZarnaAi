@@ -12,6 +12,7 @@ class Intent(str, Enum):
     SHOW     = "show"
     BOOK     = "book"
     PODCAST  = "podcast"
+    MERCH    = "merch"
     GREETING = "greeting"
     PERSONAL = "personal"
     FEEDBACK = "feedback"
@@ -30,6 +31,18 @@ _SHOW_KEYWORDS = {
     "performing", "performance", "come see",
     "where are you", "when are you", "tour dates", "venue",
 }
+# Fan statements about already having tickets — must NOT trigger a SHOW sell reply.
+# "I already have my tickets!" should stay PERSONAL/FEEDBACK, not get a ticket link.
+_SHOW_POSSESSION_PHRASES = (
+    "already have",
+    "i have my ticket",
+    "i got my ticket",
+    "i got ticket",
+    "already bought ticket",
+    "already got my ticket",
+    "got my ticket",
+    "have my ticket",
+)
 _JOKE_KEYWORDS = {
     "joke", "jokes", "laughter", "comedy", "comic",
     "make me laugh", "tell me something funny", "tell me a joke",
@@ -38,11 +51,16 @@ _JOKE_KEYWORDS = {
     "make me smile",
 }
 _CLIP_KEYWORDS = {
-    "video", "videos", "clip", "clips", "youtube", "watch",
-    "special", "stand up", "standup", "stand-up", "reel", "reels",
+    # Unambiguous request words only.
+    # "watch", "video", "videos", "stand-up/standup/stand up" are NOT here — they fire
+    # on fan statements ("I watch all your videos", "how long have you done stand-up?")
+    # which are NOT clip requests. Gemini handles the ambiguous cases.
+    "clip", "clips", "youtube", "special", "reel", "reels",
 }
 _PODCAST_KEYWORDS = {
-    "podcast", "episode", "listen", "audio show",
+    # "listen" removed — "I listen to everything you put out" is a fan statement, not
+    # a podcast request. Gemini handles "I listen to your podcast" correctly.
+    "podcast", "episode",
 }
 _BOOK_PHRASES = (
     "this american woman",
@@ -61,6 +79,36 @@ _BOOK_PHRASES = (
     "amazon.com/dp",
 )
 _BOOK_EXTRA_WORDS = frozenset({"kindle", "hardcover", "paperback"})
+
+# ── Merch — physical merchandise (shirts, hoodies, hats, etc.) ───────────────
+# Two-signal check (item word + purchase word) catches most cases.
+# "your shirt is hilarious" → item word but no purchase word → not MERCH.
+# "where can I buy tickets" → purchase words but no merch item → not MERCH (→ SHOW).
+# Explicit "do you have merch?" phrases are caught by _MERCH_QUERY_PHRASES.
+_MERCH_ITEM_WORDS = frozenset({
+    "merch", "merchandise", "shirt", "shirts", "tshirt", "tshirts",
+    "hoodie", "hoodies", "hat", "hats", "mug", "mugs",
+    "sweatshirt", "sweatshirts", "gear", "apparel", "clothing",
+    "tee", "tees",
+})
+_MERCH_PURCHASE_WORDS = frozenset({
+    "buy", "buying", "purchase", "order", "ordering", "get",
+    "shop", "shopping", "find", "sell", "selling", "sold",
+    "available", "store", "where",
+})
+# Explicit "do you have merch?" patterns that lack a purchase word
+_MERCH_QUERY_PHRASES = (
+    "do you have merch",
+    "do you have merchandise",
+    "do you have a merch",
+    "do you have any merch",
+    "is there a merch",
+    "is there merch",
+    "do you sell merch",
+    "do you sell merchandise",
+    "do you have a shop",
+    "do you have an online store",
+)
 
 # ── Greeting ────────────────────────────────────────────────────────────────
 _GREETING_EXACT = frozenset({
@@ -301,7 +349,14 @@ def _fast_classify(message: str) -> Intent | None:
         return Intent.QUESTION
 
     # Structured intents
-    if words & _SHOW_KEYWORDS or any(k in lower for k in _SHOW_KEYWORDS if " " in k):
+    # SHOW: guard against fan *statements* about already having tickets.
+    # "I already have my tickets for Saturday!" must return FEEDBACK (fan sharing),
+    # not SHOW (which would send a redundant ticket link). Force FEEDBACK so the
+    # Gemini fallback is never consulted for this pattern.
+    _show_hit = words & _SHOW_KEYWORDS or any(k in lower for k in _SHOW_KEYWORDS if " " in k)
+    if _show_hit:
+        if any(p in lower for p in _SHOW_POSSESSION_PHRASES):
+            return Intent.FEEDBACK  # fan statement about having tickets → acknowledge, don't sell
         return Intent.SHOW
     if words & _JOKE_KEYWORDS or any(k in lower for k in _JOKE_KEYWORDS if " " in k):
         return Intent.JOKE
@@ -309,6 +364,16 @@ def _fast_classify(message: str) -> Intent | None:
         return Intent.CLIP
     if words & _PODCAST_KEYWORDS or any(k in lower for k in _PODCAST_KEYWORDS if " " in k):
         return Intent.PODCAST
+    # Merch: checked before BOOK so "where to buy your shirt" doesn't match the
+    # "where to buy" book phrase. Book is safe because "book" is not in
+    # _MERCH_ITEM_WORDS, so book questions won't trigger this branch.
+    # Two signals required: item word + purchase/query word — keeps false-positive
+    # rate near zero. "your shirt is amazing" has item word but no purchase word → skipped.
+    if any(p in lower for p in _MERCH_QUERY_PHRASES):
+        return Intent.MERCH
+    if words & _MERCH_ITEM_WORDS and words & _MERCH_PURCHASE_WORDS:
+        return Intent.MERCH
+
     if _fast_book_intent(lower, words):
         return Intent.BOOK
 
@@ -373,6 +438,13 @@ clip — wants a video or clip
 podcast — asking about Zarna's podcast
   examples: "do you have a podcast?", "where can I listen to your podcast?"
 
+merch — asking about buying Zarna's physical merchandise (shirts, hoodies, hats, etc.)
+  ONLY use when the fan explicitly wants to buy or find merch items — not for compliments about her style.
+  examples: "do you have merch?", "where can I buy your shirt?", "is there a merch store?",
+            "how do I order a hoodie?", "do you sell merchandise?"
+  DO NOT use for: "your shirt is so funny" (→ feedback), "where can I buy tickets?" (→ show),
+                  "where can I buy your book?" (→ book)
+
 general — ONLY use this if the message truly fits none of the above:
   random non-Zarna topics, spam, or deeply context-dependent messages that make no sense alone.
   DO NOT use general for: laughs, reactions, affirmations (yes/no/thanks/congrats),
@@ -380,7 +452,7 @@ general — ONLY use this if the message truly fits none of the above:
 
 Message: "{message}"
 
-Reply with only one word: greeting, joke, clip, show, book, podcast, personal, feedback, question, or general"""
+Reply with only one word: greeting, joke, clip, show, book, podcast, merch, personal, feedback, question, or general"""
 
     try:
         response = _client.models.generate_content(

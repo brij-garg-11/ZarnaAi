@@ -63,6 +63,9 @@ class InMemoryStorage(BaseStorage):
                 })
         return results
 
+    def get_fan_location(self, phone_number: str) -> str:
+        return self._location.get(phone_number, "")
+
     def get_fans_by_location(self, location: str) -> list:
         results = []
         for phone, loc in self._location.items():
@@ -89,6 +92,7 @@ class InMemoryStorage(BaseStorage):
         has_link: bool = False,
         conversation_turn: Optional[int] = None,
         gen_ms: Optional[float] = None,
+        sell_variant: Optional[str] = None,
     ) -> None:
         if message_id is None:
             return
@@ -100,6 +104,7 @@ class InMemoryStorage(BaseStorage):
             "has_link": has_link,
             "conversation_turn": conversation_turn,
             "gen_ms": gen_ms,
+            "sell_variant": sell_variant,
             "did_user_reply": None,
             "reply_delay_seconds": None,
             "went_silent_after": None,

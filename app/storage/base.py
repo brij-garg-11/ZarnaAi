@@ -38,6 +38,18 @@ class BaseStorage(ABC):
     def get_fans_by_location(self, location: str) -> list:
         return []
 
+    def get_fan_location(self, phone_number: str) -> str:
+        """Return the stored location string for this fan, or empty string."""
+        return ""
+
+    def get_fan_show_context(self, phone_number: str) -> Optional[str]:
+        """
+        Return a human-readable string describing the fan's most recent show
+        attendance, e.g. "Fan attended 'Chicago Laugh Factory' on 2025-03-15."
+        Returns None when no show history exists.
+        """
+        return None
+
     # ------------------------------------------------------------------
     # Engagement analytics
     # ------------------------------------------------------------------
@@ -52,6 +64,7 @@ class BaseStorage(ABC):
         has_link: bool = False,
         conversation_turn: Optional[int] = None,
         gen_ms: Optional[float] = None,
+        sell_variant: Optional[str] = None,
     ) -> None:
         """
         Persist context metadata for an assistant message so engagement

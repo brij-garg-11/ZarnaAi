@@ -120,6 +120,8 @@ _ENGAGEMENT_ANALYTICS_MIGRATIONS = (
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS msgs_after_this     INT",
     # Source tag so blast messages can be excluded from bot conversation history
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS msg_source          TEXT DEFAULT 'bot'",
+    # A/B variant for sell-intent replies (Pillar 3, Step 7)
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS sell_variant        TEXT",
     # Index for fast analytics queries (filter to scored assistant rows)
     """
     CREATE INDEX IF NOT EXISTS idx_messages_analytics
@@ -613,6 +615,66 @@ class PostgresStorage(BaseStorage):
         finally:
             self._release(conn)
 
+    def get_fan_location(self, phone_number: str) -> str:
+        conn = self._acquire()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT fan_location FROM contacts WHERE phone_number = %s",
+                    (phone_number,),
+                )
+                row = cur.fetchone()
+                return (row[0] or "") if row else ""
+        finally:
+            self._release(conn)
+
+    def get_fan_show_context(self, phone_number: str) -> str | None:
+        """
+        Returns a short string describing the fan's most recent show attendance,
+        drawn from smb_show_checkins (keyword check-ins at door) or
+        live_show_signups (pre-show signups). Returns None if no history found.
+        """
+        conn = self._acquire()
+        try:
+            with conn.cursor() as cur:
+                # Most recent SMB show check-in
+                cur.execute(
+                    """
+                    SELECT s.name, s.show_date
+                    FROM smb_show_checkins c
+                    JOIN smb_shows s ON s.id = c.show_id
+                    WHERE c.phone_number = %s
+                    ORDER BY c.checked_in_at DESC
+                    LIMIT 1
+                    """,
+                    (phone_number,),
+                )
+                row = cur.fetchone()
+                if row:
+                    return f"Fan attended '{row[0]}' on {row[1]}."
+
+                # Most recent live show signup
+                cur.execute(
+                    """
+                    SELECT ls.name, ls.show_date
+                    FROM live_show_signups lss
+                    JOIN live_shows ls ON ls.id = lss.show_id
+                    WHERE lss.phone_number = %s
+                    ORDER BY lss.signed_up_at DESC
+                    LIMIT 1
+                    """,
+                    (phone_number,),
+                )
+                row = cur.fetchone()
+                if row:
+                    return f"Fan signed up for '{row[0]}' on {row[1]}."
+
+                return None
+        except Exception:
+            return None
+        finally:
+            self._release(conn)
+
     # ------------------------------------------------------------------
     # Engagement analytics
     # ------------------------------------------------------------------
@@ -627,6 +689,7 @@ class PostgresStorage(BaseStorage):
         has_link=False,
         conversation_turn=None,
         gen_ms=None,
+        sell_variant=None,
     ) -> None:
         """Write bot-reply context columns onto an existing message row."""
         if message_id is None:
@@ -644,7 +707,8 @@ class PostgresStorage(BaseStorage):
                             reply_length_chars = %s,
                             has_link           = %s,
                             conversation_turn  = %s,
-                            gen_ms             = %s
+                            gen_ms             = %s,
+                            sell_variant       = %s
                         WHERE id = %s
                         """,
                         (
@@ -655,6 +719,7 @@ class PostgresStorage(BaseStorage):
                             has_link,
                             conversation_turn,
                             gen_ms,
+                            sell_variant,
                             message_id,
                         ),
                     )

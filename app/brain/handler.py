@@ -1,5 +1,6 @@
 import logging
 import os
+import random
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -29,8 +30,11 @@ _logger = logging.getLogger(__name__)
 
 # Routing uses Gemini-only for these; parallel router work is skipped when fast intent matches.
 _STRUCTURED_ROUTE_INTENTS = frozenset(
-    {Intent.CLIP, Intent.SHOW, Intent.BOOK, Intent.PODCAST},
+    {Intent.CLIP, Intent.SHOW, Intent.BOOK, Intent.PODCAST, Intent.MERCH},
 )
+
+# Intents that involve selling — eligible for per-fan sell context + A/B variant.
+_SELL_INTENTS = frozenset({Intent.SHOW, Intent.MERCH})
 
 _ROAST_FAMILY_HINTS = re.compile(
     r"\b(shalabh|husband|mother[- ]in[- ]law|mil|baba\s*ramdev)\b",
@@ -142,7 +146,7 @@ class ZarnaBrain:
         tone_mode = classify_tone_mode(message_text, intent, history)
 
         # Fetch high-engagement examples for this intent+tone combo (cached, never blocks).
-        # Only used for conversational intents — structured ones (show/clip/book/podcast) skip.
+        # Only used for conversational intents — structured ones (show/clip/book/podcast/merch) skip.
         winning_examples = None
         _LEARNING_INTENTS = frozenset({
             "greeting", "feedback", "question", "personal", "general", "joke",
@@ -154,6 +158,25 @@ class ZarnaBrain:
                 ) or None
             except Exception:
                 pass  # learning is best-effort, never block a reply
+
+        # Per-fan sell context (Step 5) and A/B variant (Step 7) — sell intents only.
+        # sell_context: fan's most recent show attendance + their stored location.
+        # sell_variant: randomly assigned "A" or "B" so copy variations can be tracked.
+        sell_context: Optional[str] = None
+        sell_variant: Optional[str] = None
+        if intent in _SELL_INTENTS:
+            sell_variant = random.choice(["A", "B"])
+            try:
+                show_ctx = self.storage.get_fan_show_context(phone_number)
+                location = self.storage.get_fan_location(phone_number)
+                parts = []
+                if show_ctx:
+                    parts.append(show_ctx)
+                if location:
+                    parts.append(f"Fan is from {location}.")
+                sell_context = " ".join(parts) if parts else None
+            except Exception:
+                pass  # context enrichment is best-effort
 
         reply = generate_zarna_reply(
             intent=intent,
@@ -167,6 +190,8 @@ class ZarnaBrain:
             quiz_context=quiz_context,
             blast_context=blast_context,
             winning_examples=winning_examples,
+            sell_context=sell_context,
+            sell_variant=sell_variant,
         )
         gen_ms = (time.perf_counter() - t_gen) * 1000
 
@@ -211,6 +236,7 @@ class ZarnaBrain:
             routing_tier=routing_tier,
             gen_ms=gen_ms,
             conversation_turn=len(history) // 2 + 1,
+            sell_variant=sell_variant,
         )
 
         # 9. Update fan memory in the background — no latency impact on reply

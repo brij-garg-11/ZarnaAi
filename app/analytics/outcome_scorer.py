@@ -53,6 +53,7 @@ def save_reply_context_async(
     routing_tier: Optional[str],
     gen_ms: float,
     conversation_turn: int,
+    sell_variant: Optional[str] = None,
 ) -> None:
     """Submit background task to write context metadata onto the saved reply row."""
     if message_id is None:
@@ -72,6 +73,7 @@ def save_reply_context_async(
                 has_link=has_link,
                 conversation_turn=conversation_turn,
                 gen_ms=gen_ms,
+                sell_variant=sell_variant,
             )
         except Exception:
             _logger.exception(

@@ -22,7 +22,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # Links / strict formats — keep on Gemini only to reduce broken URLs.
 _STRUCTURED_INTENTS = frozenset(
-    {Intent.CLIP, Intent.SHOW, Intent.BOOK, Intent.PODCAST},
+    {Intent.CLIP, Intent.SHOW, Intent.BOOK, Intent.PODCAST, Intent.MERCH},
 )
 
 
@@ -319,6 +319,8 @@ def _build_prompt(
     quiz_context: Optional[str] = None,
     blast_context: Optional[str] = None,
     winning_examples: Optional[list] = None,
+    sell_context: Optional[str] = None,
+    sell_variant: Optional[str] = None,
 ) -> str:
     context = "\n\n".join(_filter_chunks(chunks, intent, user_message)) if chunks else ""
     history_text = _format_history(history)
@@ -383,14 +385,36 @@ Respond in Zarna's sharp, high-energy voice. Mention a specific topic or theme f
 Do not make up video titles. Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
     if intent == Intent.SHOW:
+        sell_ctx_block = f"\nFan context: {sell_context}\n" if sell_context else ""
+        variant_note = ""
+        if sell_variant == "B":
+            variant_note = "\nVariant B: open with a warm, personal reference to their city or show history if available, then land the ticket link naturally.\n"
         return f"""You are Zarna Garg's AI assistant.
 
 The user is asking about shows or tour dates: {user_message}
-
+{sell_ctx_block}{variant_note}
 {_HARD_FACT_GUARDRAILS}
 {_VOICE_LOCK_RULES}
 {tone_guidance}
-Respond in Zarna's voice — sharp, funny, 1 sentence max. Then on a new line, include EXACTLY this link with no changes: https://zarnagarg.com/tickets/
+Respond in Zarna's voice — sharp, funny, 1 sentence max.
+If fan context above mentions a city or a past show they attended, naturally weave it in (e.g. "You're a true Chicago fan — here's where to grab tickets"). If there is no context, keep it general.
+Then on a new line, include EXACTLY this link with no changes: https://zarnagarg.com/tickets/
+Never use the word "honey" or "darling". No profanity. No homophobic language."""
+
+    if intent == Intent.MERCH:
+        sell_ctx_block = f"\nFan context: {sell_context}\n" if sell_context else ""
+        variant_note = ""
+        if sell_variant == "B":
+            variant_note = "\nVariant B: open with a warm, personal line referencing their city or show history if available, then pitch the merch naturally.\n"
+        return f"""You are Zarna Garg's AI assistant.
+
+The fan is asking about Zarna's merch (shirts, hoodies, hats, etc.): {user_message}
+{sell_ctx_block}{variant_note}
+{_HARD_FACT_GUARDRAILS}
+{_VOICE_LOCK_RULES}
+{tone_guidance}
+Respond in Zarna's voice — excited, sharp, 1 sentence max. If fan context mentions a city or show they attended, weave it in warmly. If no context, keep it general.
+Then on a new line, include EXACTLY this link with no changes: https://shopmy.us/shop/zarnagarg
 Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
     if intent == Intent.BOOK:
@@ -758,13 +782,17 @@ def generate_zarna_reply(
     quiz_context: Optional[str] = None,
     blast_context: Optional[str] = None,
     winning_examples: Optional[list] = None,
+    sell_context: Optional[str] = None,
+    sell_variant: Optional[str] = None,
 ) -> str:
     """
     Generate reply. For GENERAL/JOKE with multi-model enabled, pass routing_tier
-    from classify_routing_tier(). Structured intents (clip/show/book/podcast) always use Gemini.
+    from classify_routing_tier(). Structured intents (clip/show/book/podcast/merch) always use Gemini.
     quiz_context, when set, injects pop-quiz framing so the AI reacts to the fan's answer.
     blast_context, when set, injects soft background context about the last blast sent.
     winning_examples, when set, injects high-engagement past replies as dynamic few-shot examples.
+    sell_context, when set, provides per-fan show/location context for SHOW and MERCH replies.
+    sell_variant, when set ("A" or "B"), selects the A/B copy variation for sell intents.
     """
     # Redirect coding/homework requests before they reach the AI
     if _CODE_REQUEST_RE.search(user_message or ""):
@@ -781,14 +809,16 @@ def generate_zarna_reply(
         quiz_context=quiz_context,
         blast_context=blast_context,
         winning_examples=winning_examples,
+        sell_context=sell_context,
+        sell_variant=sell_variant,
     )
 
     raw = _produce_raw_text(intent, prompt, routing_tier)
     if not (raw or "").strip():
         return _get_fallback()
 
-    # SHOW, BOOK, PODCAST, and CLIP replies include a link on its own line — preserve both lines but still cap
-    if intent in (Intent.SHOW, Intent.BOOK, Intent.PODCAST, Intent.CLIP):
+    # SHOW, BOOK, PODCAST, CLIP, and MERCH replies include a link on its own line — preserve both lines but still cap
+    if intent in (Intent.SHOW, Intent.BOOK, Intent.PODCAST, Intent.CLIP, Intent.MERCH):
         lines = raw.splitlines()
         if len(lines) >= 2:
             first = _apply_emphasis_policy(_trim_reply(lines[0]), emphasis_suppress_all)
