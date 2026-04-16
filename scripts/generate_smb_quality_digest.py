@@ -1,0 +1,414 @@
+#!/usr/bin/env python3
+"""
+Weekly SMB AI Quality Digest — per-tenant engagement analysis, auto-improvement, and opt-out alerts.
+
+Runs every Monday.  For each registered SMB tenant it:
+
+  1. Ensures engagement-tracking schema exists (idempotent).
+  2. Scores recent smb_messages (did subscriber reply? how fast? went silent?).
+  3. Fetches analytics: reply rate, silence rate, recent opt-outs + their last conversation.
+  4. Calls Gemini to identify problems and propose fixes (adapted for business SMS, not fan messaging).
+  5. Auto-promotes the week's top-performing bot replies into smb_winning_examples so
+     future bot replies get better automatically.
+  6. Texts a concise digest to the tenant owner (via Twilio).
+  7. Saves the full report to smb_quality_reports for the operator portal.
+
+Env (required):
+  DATABASE_URL         Production Postgres (same as web service)
+  GEMINI_API_KEY       For analysis
+
+Env (optional):
+  TWILIO_ACCOUNT_SID  }  Required to send SMS digest to tenant owners
+  TWILIO_AUTH_TOKEN   }
+  SMB_DIGEST_DAYS        Analysis window in days (default 7)
+  SMB_DIGEST_TENANT      Run for one tenant only (slug), default = all
+
+Run:
+  python scripts/generate_smb_quality_digest.py
+  python scripts/generate_smb_quality_digest.py --dry-run
+  python scripts/generate_smb_quality_digest.py --tenant west_side_comedy
+  python scripts/generate_smb_quality_digest.py --days 14
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import sys
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    stream=sys.stdout,
+)
+log = logging.getLogger("smb_quality_digest")
+
+# Add project root to path so app imports work
+_ROOT = Path(__file__).parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+
+# ---------------------------------------------------------------------------
+# DB connection
+# ---------------------------------------------------------------------------
+
+def _conn():
+    url = os.getenv("DATABASE_URL", "")
+    if not url:
+        return None
+    import psycopg2
+    c = psycopg2.connect(url)
+    c.autocommit = False
+    return c
+
+
+# ---------------------------------------------------------------------------
+# Tenant loader (from creator_config/)
+# ---------------------------------------------------------------------------
+
+def _load_all_tenants() -> list:
+    """Load all SMB tenants from creator_config/*.json."""
+    from app.smb.tenants import TenantRegistry, _CONFIG_DIR
+    reg = TenantRegistry()
+    return reg.all_tenants()
+
+
+# ---------------------------------------------------------------------------
+# Gemini analysis — business-voice variant
+# ---------------------------------------------------------------------------
+
+def build_smb_analysis_prompt(tenant_slug: str, display_name: str, business_type: str, data: dict, week_start: date) -> str:
+    h = data["headline"]
+    scored = h.get("scored") or 0
+    rr = h.get("reply_rate")
+    base_rr = h.get("baseline_reply_rate")
+    silence = h.get("silence_rate")
+    avg_len = h.get("avg_len")
+
+    rr_str = f"{rr}%" if rr is not None else "—"
+    base_str = f"{base_rr}%" if base_rr is not None else "—"
+    delta_str = ""
+    if rr is not None and base_rr is not None:
+        d = float(rr) - float(base_rr)
+        arrow = "↑" if d >= 0 else "↓"
+        delta_str = f" ({arrow}{abs(d):.1f}pp vs baseline)"
+
+    silenced_text = "\n".join(
+        f"{i+1}. [{r.get('chars','?')}ch] \"{(r.get('preview') or '').strip()}\""
+        for i, r in enumerate(data.get("silenced", []))
+    ) or "None this week"
+
+    opt_outs_text = ""
+    for o in data.get("opt_outs", []):
+        opt_outs_text += f"\n  Subscriber ...{o['phone_suffix']} stopped at {o['stopped_at']}\n"
+        for m in o.get("last_messages", []):
+            role_label = "Bot" if m["role"] == "assistant" else "Subscriber"
+            opt_outs_text += f"    {role_label}: {m['body']}\n"
+    if not opt_outs_text.strip():
+        opt_outs_text = "  None this week — great!"
+
+    return f"""You are analyzing the SMS AI quality for {display_name}, a {business_type}.
+The AI assistant texts their subscribers on their behalf to answer questions, share updates, and drive engagement.
+Your job: identify the top problems hurting subscriber engagement and propose specific, actionable fixes.
+
+=== Week of {week_start} ({display_name}) ===
+Scored bot replies this week  : {scored:,}
+Overall subscriber reply rate : {rr_str}{delta_str}
+4-week baseline reply rate    : {base_str}
+Silence rate (subscriber gone): {silence if silence is not None else '—'}%
+Avg bot reply length          : {avg_len if avg_len is not None else '—'} chars
+
+--- Top 8 bot replies that caused subscriber silence ---
+{silenced_text}
+
+--- Recent opt-outs (STOP) + their last conversation ---
+{opt_outs_text}
+
+--- TASK ---
+1. Identify exactly 3 concrete problems hurting subscriber engagement.
+   If there were opt-outs, identify what likely triggered them.
+2. For each problem, propose a SPECIFIC change to how the AI should write replies.
+   (e.g. "too long — cap at 2 sentences", "too formal — use casual contractions",
+   "asks questions back too often", "doesn't offer next steps").
+3. Name 2 things that are working well (or note if there is not enough data yet).
+
+Return ONLY a valid JSON object — no markdown, no preamble — with this exact structure:
+{{
+  "one_line_summary": "string (≤20 words)",
+  "overall_trend": "improving|declining|stable|insufficient_data",
+  "problems": [
+    {{
+      "title": "short problem name",
+      "evidence": "specific quotes or numbers from the data",
+      "proposed_change": "concrete, actionable instruction for the AI prompt or tone config",
+      "severity": "high|medium|low"
+    }}
+  ],
+  "whats_working": ["string", "string"]
+}}"""
+
+
+def call_gemini(prompt: str) -> dict:
+    from google import genai as _genai
+    model = os.getenv("DIGEST_MODEL", os.getenv("GENERATION_MODEL", "gemini-2.5-flash"))
+    key = os.getenv("GEMINI_API_KEY", "")
+    if not key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    client = _genai.Client(api_key=key)
+    response = client.models.generate_content(model=model, contents=prompt)
+    raw = (response.text or "").strip()
+
+    if "```" in raw:
+        parts = raw.split("```")
+        if len(parts) >= 3:
+            raw = parts[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+
+    if not raw.startswith("{"):
+        import re
+        m = re.search(r"\{[\s\S]+\}", raw)
+        if m:
+            raw = m.group(0)
+
+    return json.loads(raw)
+
+
+# ---------------------------------------------------------------------------
+# SMS delivery — send digest to tenant owner
+# ---------------------------------------------------------------------------
+
+def _send_owner_digest_sms(tenant, digest_text: str) -> bool:
+    """Send a short digest SMS to the business owner. Returns True on success."""
+    if not tenant.owner_phone:
+        log.info("SMB digest: no owner_phone for %s — skipping SMS", tenant.slug)
+        return False
+    if not tenant.sms_number:
+        log.info("SMB digest: no sms_number for %s — skipping SMS", tenant.slug)
+        return False
+
+    sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+    token = os.getenv("TWILIO_AUTH_TOKEN", "")
+    if not sid or not token:
+        log.warning("SMB digest: TWILIO_ACCOUNT_SID/AUTH_TOKEN not set — skipping owner SMS")
+        return False
+
+    try:
+        from twilio.rest import Client
+        Client(sid, token).messages.create(
+            to=tenant.owner_phone,
+            from_=tenant.sms_number,
+            body=digest_text,
+        )
+        log.info("SMB digest SMS sent to owner (tenant=%s)", tenant.slug)
+        return True
+    except Exception:
+        log.exception("SMB digest: failed to send owner SMS (tenant=%s)", tenant.slug)
+        return False
+
+
+def _format_owner_sms(tenant_name: str, week_start: date, headline: dict, findings: dict, opt_outs: list) -> str:
+    """
+    Format a brief SMS digest for the tenant owner.
+    Keeps it tight — max ~3 sentences so it's readable as a text.
+    """
+    scored = headline.get("scored") or 0
+    rr = headline.get("reply_rate")
+    base = headline.get("baseline_reply_rate")
+    trend = findings.get("overall_trend", "stable")
+    summary = findings.get("one_line_summary", "")
+
+    rr_str = f"{rr}%" if rr is not None else "—"
+    base_str = f" (baseline {base}%)" if base is not None else ""
+
+    trend_emoji = {"improving": "📈", "declining": "📉", "stable": "➡️"}.get(trend, "📊")
+    opt_out_note = f" {len(opt_outs)} opted out this week." if opt_outs else ""
+
+    # Top problem
+    problems = findings.get("problems", [])
+    problem_note = ""
+    if problems:
+        top = problems[0]
+        problem_note = f" Top issue: {top.get('title','')}."
+
+    lines = [
+        f"{trend_emoji} {tenant_name} Weekly AI Digest — week of {week_start}",
+        f"Reply rate: {rr_str}{base_str}. {scored} bot replies scored.{opt_out_note}",
+        summary + problem_note if (summary or problem_note) else "",
+        "Full report at your operator portal. Reply STOP to unsubscribe from digests.",
+    ]
+    return "\n".join(l for l in lines if l.strip())
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant digest run
+# ---------------------------------------------------------------------------
+
+def run_tenant_digest(
+    conn,
+    tenant,
+    this_start: datetime,
+    this_end: datetime,
+    baseline_start: datetime,
+    week_start: date,
+    dry_run: bool = False,
+) -> dict:
+    """
+    Run the full digest pipeline for a single tenant. Returns findings dict.
+    """
+    from app.smb import storage as smb_storage
+
+    log.info("=== SMB Digest: %s (slug=%s) ===", tenant.display_name, tenant.slug)
+
+    # 1. Score recent messages
+    log.info("[%s] Scoring recent messages ...", tenant.slug)
+    scored_count = smb_storage.score_smb_messages(conn, tenant.slug, silence_cutoff_hours=4)
+    log.info("[%s] Scored %d message(s)", tenant.slug, scored_count)
+
+    # 2. Fetch analytics
+    data = smb_storage.fetch_smb_analytics(
+        conn, tenant.slug, this_start, this_end, baseline_start
+    )
+    h = data["headline"]
+    log.info(
+        "[%s] Analytics: scored=%s reply_rate=%s%% silence=%s%% opt_outs=%d",
+        tenant.slug,
+        h.get("scored", 0),
+        h.get("reply_rate", "—"),
+        h.get("silence_rate", "—"),
+        len(data.get("opt_outs", [])),
+    )
+
+    if data.get("opt_outs"):
+        log.warning(
+            "[%s] OPT-OUTS THIS WEEK (%d):",
+            tenant.slug, len(data["opt_outs"]),
+        )
+        for o in data["opt_outs"]:
+            log.warning(
+                "  ...%s stopped at %s. Last messages:",
+                o["phone_suffix"], o["stopped_at"],
+            )
+            for m in o.get("last_messages", []):
+                role_label = "Bot" if m["role"] == "assistant" else "Sub"
+                log.warning("    %s: %s", role_label, m["body"][:100])
+
+    # 3. Gemini analysis
+    if (h.get("scored") or 0) < 3 and not data.get("opt_outs"):
+        log.info("[%s] Not enough data for analysis (%d scored) — skipping Gemini", tenant.slug, h.get("scored", 0))
+        findings = {
+            "one_line_summary": "Insufficient data this week",
+            "overall_trend": "insufficient_data",
+            "problems": [],
+            "whats_working": [],
+        }
+    else:
+        log.info("[%s] Calling Gemini for analysis ...", tenant.slug)
+        prompt = build_smb_analysis_prompt(
+            tenant.slug, tenant.display_name, tenant.business_type, data, week_start
+        )
+        try:
+            findings = call_gemini(prompt)
+            log.info("[%s] Findings: %s", tenant.slug, findings.get("one_line_summary"))
+            for p in findings.get("problems", []):
+                log.info(
+                    "  [%s] %s — %s",
+                    p.get("severity", "?"), p.get("title", ""), p.get("proposed_change", ""),
+                )
+        except Exception as e:
+            log.error("[%s] Gemini call failed: %s", tenant.slug, e)
+            findings = {
+                "one_line_summary": "Analysis unavailable (Gemini error)",
+                "overall_trend": "stable",
+                "problems": [],
+                "whats_working": [],
+            }
+
+    # 4. Auto-promote winners
+    log.info("[%s] Fetching winning examples ...", tenant.slug)
+    winners = smb_storage.fetch_smb_winners(conn, tenant.slug, this_start, this_end)
+    log.info("[%s] Found %d winner candidate(s)", tenant.slug, len(winners))
+    promoted = smb_storage.save_smb_winners(conn, tenant.slug, week_start, winners, dry_run=dry_run)
+    if not dry_run:
+        log.info("[%s] Auto-promoted %d winner(s)", tenant.slug, promoted)
+
+    if dry_run:
+        print(f"\n=== DRY RUN [{tenant.slug}] ===")
+        print(json.dumps({"headline": h, "findings": findings, "winners_found": len(winners)}, indent=2, default=str))
+        return findings
+
+    # 5. Save report
+    smb_storage.save_smb_quality_report(conn, tenant.slug, week_start, h, findings)
+    log.info("[%s] Report saved", tenant.slug)
+
+    # 6. Send SMS digest to owner
+    sms_text = _format_owner_sms(tenant.display_name, week_start, h, findings, data.get("opt_outs", []))
+    _send_owner_digest_sms(tenant, sms_text)
+
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    ap = argparse.ArgumentParser(description="SMB weekly AI quality digest")
+    ap.add_argument("--days",     type=int, default=int(os.getenv("SMB_DIGEST_DAYS", "7")))
+    ap.add_argument("--tenant",   default=os.getenv("SMB_DIGEST_TENANT", ""),
+                    help="Slug of a single tenant to run (default: all)")
+    ap.add_argument("--dry-run",  action="store_true", help="Print report without saving or SMS")
+    args = ap.parse_args()
+
+    now          = datetime.now(tz=timezone.utc)
+    this_end     = now
+    this_start   = now - timedelta(days=args.days)
+    baseline_start = now - timedelta(days=args.days + 28)
+    week_start   = this_start.date()
+
+    log.info("SMB digest run: %s → %s (baseline from %s)",
+             this_start.date(), this_end.date(), baseline_start.date())
+
+    conn = _conn()
+    if not conn:
+        log.error("DATABASE_URL not set — aborting")
+        sys.exit(1)
+
+    # Ensure schema
+    from app.smb import storage as smb_storage
+    smb_storage.ensure_smb_engagement_schema(conn)
+    log.info("Schema ensured")
+
+    # Load tenants
+    tenants = _load_all_tenants()
+    if args.tenant:
+        tenants = [t for t in tenants if t.slug == args.tenant]
+        if not tenants:
+            log.error("No tenant found with slug=%r", args.tenant)
+            sys.exit(1)
+
+    log.info("Running digest for %d tenant(s): %s",
+             len(tenants), ", ".join(t.slug for t in tenants))
+
+    for tenant in tenants:
+        try:
+            run_tenant_digest(
+                conn, tenant,
+                this_start, this_end, baseline_start, week_start,
+                dry_run=args.dry_run,
+            )
+        except Exception:
+            log.exception("SMB digest failed for tenant=%s — continuing with next tenant", tenant.slug)
+
+    conn.close()
+    log.info("SMB digest complete")
+
+
+if __name__ == "__main__":
+    main()

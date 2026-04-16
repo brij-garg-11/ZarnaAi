@@ -60,6 +60,17 @@ class SMBBrain:
             )
             return None
 
+        # --- STOP / opt-out ---
+        # Twilio handles STOP natively (suppresses future sends) but we also
+        # record it in our DB so the digest can surface recent opt-outs.
+        if _is_stop_message(message_text):
+            _record_opt_out(from_number, tenant)
+            logger.info(
+                "SMB brain: STOP received — subscriber marked stopped (tenant=%s phone=...%s)",
+                tenant.slug, from_number[-4:] if from_number else "?",
+            )
+            return None  # Twilio sends its own STOP confirmation; we stay silent
+
         # --- Owner commands ---
         if registry.is_owner(from_number, tenant):
             logger.info("SMB brain: owner message → blast handler (tenant=%s)", tenant.slug)
@@ -159,6 +170,24 @@ def _signup_nudge(tenant: BusinessTenant) -> str:
     )
 
 
+def _load_winning_examples(tenant_slug: str) -> list[str]:
+    """
+    Load active winning examples for this tenant from smb_winning_examples.
+    Returns empty list if the table doesn't exist yet or on any DB error.
+    """
+    from app.smb import storage as smb_storage
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        return smb_storage.load_winning_examples(conn, tenant_slug, limit=3)
+    except Exception:
+        logger.debug("SMB brain: could not load winning examples for %s (table may not exist yet)", tenant_slug)
+        return []
+    finally:
+        conn.close()
+
+
 def _conversational_reply(
     message_text: str,
     tenant: BusinessTenant,
@@ -166,7 +195,7 @@ def _conversational_reply(
 ) -> Optional[str]:
     """
     Short friendly AI reply in the business's voice.
-    Injects relevant club knowledge and recent conversation history.
+    Injects relevant knowledge, conversation history, and winning few-shot examples.
     Falls back across Gemini → OpenAI → Anthropic automatically.
     """
     from datetime import datetime
@@ -201,6 +230,18 @@ def _conversational_reply(
             f"Only include what is relevant to the question.\n"
             f"{context}\n\n"
         )
+
+    # Inject winning few-shot examples (auto-populated weekly by the digest)
+    examples = _load_winning_examples(tenant.slug)
+    if examples:
+        prompt += (
+            "Examples of great replies that got fast, positive follow-up responses — "
+            "match this energy and brevity:\n"
+        )
+        for ex in examples:
+            prompt += f'- "{ex}"\n'
+        prompt += "\n"
+
     # Add recent conversation so the AI can follow the thread
     if history:
         convo_lines = "\n".join(
@@ -293,6 +334,38 @@ def _try_show_checkin(
             "Thanks for coming — enjoy the event! 🎉"
         )
     return f"You're already checked in for {show['name']} — see you there! 🎉"
+
+
+def _is_stop_message(text: str) -> bool:
+    """Return True if the message is an opt-out command (STOP / UNSUBSCRIBE / QUIT / CANCEL / END)."""
+    import re
+    return bool(re.fullmatch(
+        r"\s*(stop|unsubscribe|quit|cancel|end)\s*",
+        text.strip(),
+        re.IGNORECASE,
+    ))
+
+
+def _record_opt_out(phone_number: str, tenant: "BusinessTenant") -> None:
+    """Mark subscriber as stopped and log the last message so the digest can surface it."""
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE smb_subscribers
+                    SET status = 'stopped', updated_at = NOW()
+                    WHERE phone_number = %s AND tenant_slug = %s
+                    """,
+                    (phone_number, tenant.slug),
+                )
+    except Exception:
+        logger.exception("SMB brain: failed to record opt-out for tenant=%s", tenant.slug)
+    finally:
+        conn.close()
 
 
 def create_smb_brain() -> SMBBrain:

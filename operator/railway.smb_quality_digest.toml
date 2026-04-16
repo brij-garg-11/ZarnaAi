@@ -1,0 +1,43 @@
+# Weekly SMB AI Quality Digest — runs per-tenant, scores engagement, auto-promotes winners,
+# texts a digest to each business owner, and saves the report to smb_quality_reports.
+#
+# Setup steps:
+#
+# 1) Railway project → + New Service → GitHub Repo → same repo.
+#
+# 2) Service → Settings → Config-as-code → set path:
+#      operator/railway.smb_quality_digest.toml
+#
+# 3) Variables (reference existing vars — do NOT create a new database):
+#      DATABASE_URL        → Variable Reference → same Postgres as the web service
+#      GEMINI_API_KEY      → Variable Reference → same as web service
+#      TWILIO_ACCOUNT_SID  → Variable Reference → same as web service (for owner SMS)
+#      TWILIO_AUTH_TOKEN   → Variable Reference → same as web service
+#
+#    Optional:
+#      SMB_DIGEST_DAYS     → days to analyse (default 7)
+#      SMB_DIGEST_TENANT   → run for one slug only (leave blank for all tenants)
+#      GENERATION_MODEL    → default gemini-2.5-flash
+#
+# 4) Cron schedule — Railway service Settings → "Run on Schedule":
+#      0 10 * * 1   = every Monday 10:00 UTC (6:00 AM Eastern during DST)
+#
+# 5) One-off run (local or via Railway deploy button):
+#      python scripts/generate_smb_quality_digest.py
+#      python scripts/generate_smb_quality_digest.py --dry-run
+#      python scripts/generate_smb_quality_digest.py --tenant west_side_comedy
+#
+# The first run will apply schema migrations (ALTER TABLE smb_messages, CREATE TABLE
+# smb_winning_examples, CREATE TABLE smb_quality_reports) automatically.
+#
+# After a few weeks of data the digest will:
+#  • Text each owner a ~4-line weekly performance summary
+#  • Surface which bot replies drove opt-outs and why
+#  • Automatically inject the week's top-performing replies as few-shot examples
+#    so the bot gets a little better every Monday — zero manual intervention needed
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python -u scripts/generate_smb_quality_digest.py"

@@ -380,6 +380,445 @@ def get_recent_shows_for_blast(conn, tenant_slug: str, limit: int = 10) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Schema migrations — called from the quality digest script on each run
+# ---------------------------------------------------------------------------
+
+def ensure_smb_engagement_schema(conn) -> None:
+    """
+    Idempotently add engagement-tracking columns to smb_messages and create
+    the smb_winning_examples table. Safe to run multiple times.
+    """
+    with conn:
+        with conn.cursor() as cur:
+            # Engagement columns on smb_messages
+            for col, typedef in [
+                ("did_subscriber_reply",  "BOOLEAN"),
+                ("went_silent_after",     "BOOLEAN"),
+                ("reply_delay_seconds",   "INTEGER"),
+                ("body_length_chars",     "INTEGER"),
+            ]:
+                cur.execute(f"""
+                    ALTER TABLE smb_messages
+                    ADD COLUMN IF NOT EXISTS {col} {typedef}
+                """)
+
+            # Backfill body_length_chars where it's null
+            cur.execute("""
+                UPDATE smb_messages
+                SET body_length_chars = LENGTH(body)
+                WHERE body_length_chars IS NULL
+            """)
+
+            # Per-tenant winning examples table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS smb_winning_examples (
+                    id            SERIAL PRIMARY KEY,
+                    tenant_slug   TEXT        NOT NULL,
+                    example_text  TEXT        NOT NULL,
+                    snapshot_tag  TEXT,
+                    is_active     BOOLEAN     NOT NULL DEFAULT TRUE,
+                    source_msg_id INTEGER,
+                    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (tenant_slug, source_msg_id)
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_smb_winning_active
+                ON smb_winning_examples (tenant_slug, is_active)
+            """)
+
+            # Quality reports table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS smb_quality_reports (
+                    id           SERIAL PRIMARY KEY,
+                    tenant_slug  TEXT        NOT NULL,
+                    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    week_start   DATE        NOT NULL,
+                    headline_json TEXT       NOT NULL DEFAULT '{}',
+                    findings_json TEXT       NOT NULL DEFAULT '[]',
+                    notion_page_id TEXT
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_smb_quality_reports_week
+                ON smb_quality_reports (tenant_slug, week_start DESC)
+            """)
+
+
+# ---------------------------------------------------------------------------
+# Engagement scoring
+# ---------------------------------------------------------------------------
+
+def score_smb_messages(conn, tenant_slug: str, silence_cutoff_hours: int = 4) -> int:
+    """
+    For each unscored assistant message in smb_messages:
+      - Look for the next user message from the same subscriber after the bot reply.
+      - If found within 24h  → did_subscriber_reply=TRUE, reply_delay_seconds=<seconds>
+      - If none and >silence_cutoff_hours old → went_silent_after=TRUE
+
+    Returns the number of rows updated.
+    """
+    from datetime import datetime, timedelta, timezone
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=silence_cutoff_hours)
+    updated = 0
+
+    with conn.cursor() as cur:
+        # Fetch unscored assistant messages older than silence_cutoff_hours
+        cur.execute(
+            """
+            SELECT id, phone_number, created_at
+            FROM smb_messages
+            WHERE tenant_slug = %s
+              AND role = 'assistant'
+              AND did_subscriber_reply IS NULL
+              AND went_silent_after IS NULL
+              AND created_at < %s
+            ORDER BY created_at
+            LIMIT 2000
+            """,
+            (tenant_slug, cutoff),
+        )
+        rows = cur.fetchall()
+
+    for msg_id, phone, sent_at in rows:
+        # Look for next user message from same phone/tenant within 24h
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, created_at
+                FROM smb_messages
+                WHERE tenant_slug = %s
+                  AND phone_number = %s
+                  AND role = 'user'
+                  AND created_at > %s
+                  AND created_at <= %s + INTERVAL '24 hours'
+                ORDER BY created_at
+                LIMIT 1
+                """,
+                (tenant_slug, phone, sent_at, sent_at),
+            )
+            reply_row = cur.fetchone()
+
+        if reply_row:
+            delay = int((reply_row[1] - sent_at).total_seconds())
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE smb_messages
+                    SET did_subscriber_reply = TRUE,
+                        went_silent_after    = FALSE,
+                        reply_delay_seconds  = %s,
+                        body_length_chars    = COALESCE(body_length_chars, LENGTH(body))
+                    WHERE id = %s
+                    """,
+                    (max(0, delay), msg_id),
+                )
+                updated += cur.rowcount
+        else:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE smb_messages
+                    SET did_subscriber_reply = FALSE,
+                        went_silent_after    = TRUE,
+                        body_length_chars    = COALESCE(body_length_chars, LENGTH(body))
+                    WHERE id = %s
+                    """,
+                    (msg_id,),
+                )
+                updated += cur.rowcount
+
+    conn.commit()
+    return updated
+
+
+# ---------------------------------------------------------------------------
+# SMB analytics queries
+# ---------------------------------------------------------------------------
+
+def fetch_smb_analytics(conn, tenant_slug: str, this_start, this_end, baseline_start) -> dict:
+    """
+    Fetch per-tenant engagement metrics from smb_messages.
+    Returns headline stats, recent silenced replies, best performers, and opt-outs.
+    """
+    with conn.cursor() as cur:
+        # Headline
+        cur.execute(
+            """
+            SELECT
+              COUNT(*)                                                  AS scored,
+              ROUND(AVG(did_subscriber_reply::int) * 100, 1)           AS reply_rate,
+              ROUND(
+                100.0 * COUNT(*) FILTER (WHERE went_silent_after = TRUE)::numeric
+                / NULLIF(COUNT(*), 0), 1
+              )                                                         AS silence_rate,
+              ROUND(AVG(body_length_chars))                            AS avg_len
+            FROM smb_messages
+            WHERE tenant_slug = %s
+              AND role = 'assistant'
+              AND did_subscriber_reply IS NOT NULL
+              AND created_at >= %s AND created_at < %s
+            """,
+            (tenant_slug, this_start, this_end),
+        )
+        headline = dict(zip(
+            ["scored", "reply_rate", "silence_rate", "avg_len"],
+            cur.fetchone() or (0, None, None, None),
+        ))
+
+        # Baseline reply rate
+        cur.execute(
+            """
+            SELECT ROUND(AVG(did_subscriber_reply::int) * 100, 1) AS baseline_reply_rate
+            FROM smb_messages
+            WHERE tenant_slug = %s
+              AND role = 'assistant'
+              AND did_subscriber_reply IS NOT NULL
+              AND created_at >= %s AND created_at < %s
+            """,
+            (tenant_slug, baseline_start, this_start),
+        )
+        row = cur.fetchone()
+        headline["baseline_reply_rate"] = row[0] if row else None
+
+        # Top silenced replies
+        cur.execute(
+            """
+            SELECT
+              LEFT(body, 220)        AS preview,
+              body_length_chars      AS chars,
+              created_at
+            FROM smb_messages
+            WHERE tenant_slug = %s
+              AND role = 'assistant'
+              AND went_silent_after = TRUE
+              AND created_at >= %s AND created_at < %s
+            ORDER BY created_at DESC
+            LIMIT 8
+            """,
+            (tenant_slug, this_start, this_end),
+        )
+        cols = ["preview", "chars", "created_at"]
+        silenced = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+        # Best performers (fast replies)
+        cur.execute(
+            """
+            SELECT
+              LEFT(body, 180)         AS preview,
+              reply_delay_seconds     AS reply_s,
+              body_length_chars       AS chars
+            FROM smb_messages
+            WHERE tenant_slug = %s
+              AND role = 'assistant'
+              AND did_subscriber_reply = TRUE
+              AND reply_delay_seconds IS NOT NULL
+              AND reply_delay_seconds BETWEEN 5 AND 600
+              AND created_at >= %s AND created_at < %s
+            ORDER BY reply_delay_seconds
+            LIMIT 5
+            """,
+            (tenant_slug, this_start, this_end),
+        )
+        cols = ["preview", "reply_s", "chars"]
+        winners = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+        # Recent opt-outs (stopped subscribers with their last conversation)
+        cur.execute(
+            """
+            SELECT phone_number, updated_at
+            FROM smb_subscribers
+            WHERE tenant_slug = %s
+              AND status = 'stopped'
+              AND updated_at >= %s
+            ORDER BY updated_at DESC
+            LIMIT 5
+            """,
+            (tenant_slug, this_start),
+        )
+        opt_outs_raw = cur.fetchall()
+        opt_outs = []
+        for phone, stopped_at in opt_outs_raw:
+            # Fetch last 3 messages before they stopped
+            cur.execute(
+                """
+                SELECT role, LEFT(body, 120) AS body
+                FROM smb_messages
+                WHERE tenant_slug = %s AND phone_number = %s
+                ORDER BY created_at DESC
+                LIMIT 3
+                """,
+                (tenant_slug, phone),
+            )
+            last_msgs = [{"role": r[0], "body": r[1]} for r in cur.fetchall()]
+            opt_outs.append({
+                "phone_suffix": phone[-4:] if phone else "?",
+                "stopped_at": stopped_at.isoformat() if stopped_at else None,
+                "last_messages": list(reversed(last_msgs)),
+            })
+
+    return dict(
+        headline=headline,
+        silenced=silenced,
+        winners=winners,
+        opt_outs=opt_outs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Winning examples — corpus for few-shot injection
+# ---------------------------------------------------------------------------
+
+_AUTO_SNAPSHOTS_TO_KEEP = 3
+_MAX_REPLY_SECONDS = 300
+
+
+def fetch_smb_winners(conn, tenant_slug: str, this_start, this_end) -> list:
+    """
+    Return top-performing bot replies from smb_messages that are candidates
+    for the winning examples corpus.
+
+    Criteria: fan replied within _MAX_REPLY_SECONDS, bot reply 30-200 chars,
+    not already in smb_winning_examples.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH ranked AS (
+                SELECT
+                    id                          AS source_msg_id,
+                    body                        AS text,
+                    reply_delay_seconds,
+                    body_length_chars,
+                    RANK() OVER (
+                        ORDER BY reply_delay_seconds ASC
+                    )                           AS rk
+                FROM smb_messages
+                WHERE tenant_slug           = %s
+                  AND role                  = 'assistant'
+                  AND did_subscriber_reply  = TRUE
+                  AND went_silent_after     IS DISTINCT FROM TRUE
+                  AND reply_delay_seconds   BETWEEN 5 AND %s
+                  AND body_length_chars     BETWEEN 30 AND 200
+                  AND created_at            >= %s
+                  AND created_at            <  %s
+                  AND id NOT IN (
+                      SELECT source_msg_id
+                      FROM smb_winning_examples
+                      WHERE tenant_slug = %s
+                        AND source_msg_id IS NOT NULL
+                  )
+            )
+            SELECT source_msg_id, text, reply_delay_seconds, body_length_chars
+            FROM ranked
+            WHERE rk <= 5
+            ORDER BY rk
+            """,
+            (tenant_slug, _MAX_REPLY_SECONDS, this_start, this_end, tenant_slug),
+        )
+        rows = cur.fetchall()
+    return [
+        {"source_msg_id": r[0], "text": r[1],
+         "reply_delay_seconds": r[2], "body_length_chars": r[3]}
+        for r in rows
+    ]
+
+
+def save_smb_winners(conn, tenant_slug: str, week_start, winners: list, dry_run: bool = False) -> int:
+    """
+    Insert winners into smb_winning_examples under a dated snapshot tag,
+    then deactivate old auto-snapshot batches beyond the rolling window.
+    Returns the number of rows inserted.
+    """
+    if not winners:
+        return 0
+
+    snapshot_tag = f"auto-{week_start}"
+    if dry_run:
+        for w in winners:
+            logger.info(
+                "[DRY RUN] SMB winner: tenant=%s delay=%ss  \"%s\"",
+                tenant_slug, w["reply_delay_seconds"], w["text"][:80],
+            )
+        return 0
+
+    inserted = 0
+    with conn:
+        with conn.cursor() as cur:
+            for w in winners:
+                cur.execute(
+                    """
+                    INSERT INTO smb_winning_examples
+                        (tenant_slug, example_text, snapshot_tag, is_active, source_msg_id)
+                    VALUES (%s, %s, %s, TRUE, %s)
+                    ON CONFLICT (tenant_slug, source_msg_id) DO NOTHING
+                    """,
+                    (tenant_slug, w["text"], snapshot_tag, w["source_msg_id"]),
+                )
+                inserted += cur.rowcount
+
+            # Deactivate old auto-snapshots beyond rolling window
+            cur.execute(
+                """
+                UPDATE smb_winning_examples
+                SET is_active = FALSE
+                WHERE tenant_slug = %s
+                  AND snapshot_tag LIKE 'auto-%%'
+                  AND snapshot_tag NOT IN (
+                      SELECT DISTINCT snapshot_tag
+                      FROM smb_winning_examples
+                      WHERE tenant_slug = %s
+                        AND snapshot_tag LIKE 'auto-%%'
+                      ORDER BY snapshot_tag DESC
+                      LIMIT %s
+                  )
+                """,
+                (tenant_slug, tenant_slug, _AUTO_SNAPSHOTS_TO_KEEP),
+            )
+
+    logger.info("SMB winners: inserted=%d tenant=%s snapshot=%s", inserted, tenant_slug, snapshot_tag)
+    return inserted
+
+
+def load_winning_examples(conn, tenant_slug: str, limit: int = 4) -> list[str]:
+    """
+    Return active winning example texts for a tenant.
+    Used by brain.py to inject few-shot examples into the conversational prompt.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT example_text
+            FROM smb_winning_examples
+            WHERE tenant_slug = %s AND is_active = TRUE
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (tenant_slug, limit),
+        )
+        return [r[0] for r in cur.fetchall()]
+
+
+def save_smb_quality_report(conn, tenant_slug: str, week_start, headline: dict, findings: dict) -> None:
+    """Save the quality digest report to smb_quality_reports."""
+    import json
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO smb_quality_reports (tenant_slug, week_start, headline_json, findings_json)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (
+                    tenant_slug,
+                    week_start,
+                    json.dumps(headline, default=str),
+                    json.dumps(findings, default=str),
+                ),
+            )
+
+
+# ---------------------------------------------------------------------------
 # Conversation history
 # ---------------------------------------------------------------------------
 
