@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from google import genai
 
@@ -17,8 +17,20 @@ from app.config import (
     OPENAI_API_KEY,
 )
 
+if TYPE_CHECKING:
+    from app.brain.creator_config import CreatorConfig
+
 _CLIENT = genai.Client(api_key=GEMINI_API_KEY)
 _LOGGER = logging.getLogger(__name__)
+
+# Hardcoded fallback links — used when no CreatorConfig is provided or the
+# config is missing a field.  DO NOT change these; update zarna.json instead.
+_ZARNA_TICKETS = "https://zarnagarg.com/tickets/"
+_ZARNA_MERCH = "https://shopmy.us/shop/zarnagarg"
+_ZARNA_BOOK = "https://www.amazon.com/dp/0593975022"
+_ZARNA_YOUTUBE = "https://www.youtube.com/@ZarnaGarg"
+_ZARNA_BOOK_TITLE = "This American Woman"
+_ZARNA_NAME = "Zarna Garg"
 
 # Links / strict formats — keep on Gemini only to reduce broken URLs.
 _STRUCTURED_INTENTS = frozenset(
@@ -321,7 +333,54 @@ def _build_prompt(
     winning_examples: Optional[list] = None,
     sell_context: Optional[str] = None,
     sell_variant: Optional[str] = None,
+    creator_config: "Optional[CreatorConfig]" = None,
 ) -> str:
+    # Resolve creator-specific values — config wins, hardcoded fallback otherwise.
+    _slug = creator_config.slug if creator_config else "zarna"
+    _creator_name = (creator_config.name if creator_config and creator_config.name else _ZARNA_NAME)
+    _tickets = (creator_config.links.tickets if creator_config and creator_config.links.tickets else _ZARNA_TICKETS)
+    _merch = (creator_config.links.merch if creator_config and creator_config.links.merch else _ZARNA_MERCH)
+    _book_url = (creator_config.links.book if creator_config and creator_config.links.book else _ZARNA_BOOK)
+    _youtube = (creator_config.links.youtube if creator_config and creator_config.links.youtube else _ZARNA_YOUTUBE)
+    _book_title = (creator_config.links.book_title if creator_config and creator_config.links.book_title else _ZARNA_BOOK_TITLE)
+
+    # Prompt text blocks — use config version when non-empty, otherwise the Python constant.
+    _guardrails = (
+        creator_config.hard_fact_guardrails_text
+        if creator_config and creator_config.hard_fact_guardrails_text
+        else _HARD_FACT_GUARDRAILS
+    )
+    _voice_lock = (
+        creator_config.voice_lock_rules_text
+        if creator_config and creator_config.voice_lock_rules_text
+        else _VOICE_LOCK_RULES
+    )
+    _style = (
+        creator_config.style_rules_text
+        if creator_config and creator_config.style_rules_text
+        else _STYLE_RULES
+    )
+    _examples = (
+        creator_config.tone_examples_text
+        if creator_config and creator_config.tone_examples_text
+        else _TONE_EXAMPLES
+    )
+
+    _LOGGER.debug(
+        "generator._build_prompt: creator=%s intent=%s tickets=%r merch=%r book=%r youtube=%r "
+        "guardrails=%s voice_lock=%s style=%s examples=%s",
+        _slug,
+        intent.value if intent else "None",
+        _tickets,
+        _merch,
+        _book_url,
+        _youtube,
+        "config" if (creator_config and creator_config.hard_fact_guardrails_text) else "fallback",
+        "config" if (creator_config and creator_config.voice_lock_rules_text) else "fallback",
+        "config" if (creator_config and creator_config.style_rules_text) else "fallback",
+        "config" if (creator_config and creator_config.tone_examples_text) else "fallback",
+    )
+
     context = "\n\n".join(_filter_chunks(chunks, intent, user_message)) if chunks else ""
     history_text = _format_history(history)
     memory_text = _format_memory(fan_memory)
@@ -351,11 +410,11 @@ def _build_prompt(
 Background knowledge about Zarna (use to make responses richer and more specific — never recite this as facts, always find the funny angle):
 {context}
 
-{_HARD_FACT_GUARDRAILS}
-{_VOICE_LOCK_RULES}
-{_TONE_EXAMPLES}
+{_guardrails}
+{_voice_lock}
+{_examples}
 {memory_text}{history_text}{quiz_block}Message: {user_message}
-{_STYLE_RULES}"""
+{_style}"""
 
     if intent == Intent.JOKE:
         return f"""You are writing as an AI comedy assistant inspired by Zarna Garg's public comedic voice.
@@ -363,25 +422,25 @@ Background knowledge about Zarna (use to make responses richer and more specific
 Background knowledge about Zarna (use to make jokes richer and more specific — never recite this as facts):
 {context}
 
-{_HARD_FACT_GUARDRAILS}
-{_VOICE_LOCK_RULES}
+{_guardrails}
+{_voice_lock}
 {tone_guidance}
 {memory_text}{history_text}{blast_ctx_block}Request: {user_message}
-{_STYLE_RULES}
+{_style}
 If the user asks for a joke, deliver one punchy one-liner or a two-line bit. That's it."""
 
     if intent == Intent.CLIP:
-        return f"""You are Zarna Garg's AI assistant helping fans find the right video.
+        return f"""You are {_creator_name}'s AI assistant helping fans find the right video.
 
 Use these transcript excerpts to identify a relevant topic:
 {context}
 
 Request: {user_message}
 
-{_HARD_FACT_GUARDRAILS}
-{_VOICE_LOCK_RULES}
+{_guardrails}
+{_voice_lock}
 {tone_guidance}
-Respond in Zarna's sharp, high-energy voice. Mention a specific topic or theme from her YouTube channel that matches what they're looking for, in 1 sentence. Then on a new line include EXACTLY this link with no changes: https://www.youtube.com/@ZarnaGarg
+Respond in {_creator_name}'s sharp, high-energy voice. Mention a specific topic or theme from their YouTube channel that matches what they're looking for, in 1 sentence. Then on a new line include EXACTLY this link with no changes: {_youtube}
 Do not make up video titles. Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
     if intent == Intent.SHOW:
@@ -389,16 +448,16 @@ Do not make up video titles. Never use the word "honey" or "darling". No profani
         variant_note = ""
         if sell_variant == "B":
             variant_note = "\nVariant B: open with a warm, personal reference to their city or show history if available, then land the ticket link naturally.\n"
-        return f"""You are Zarna Garg's AI assistant.
+        return f"""You are {_creator_name}'s AI assistant.
 
 The user is asking about shows or tour dates: {user_message}
 {sell_ctx_block}{variant_note}
-{_HARD_FACT_GUARDRAILS}
-{_VOICE_LOCK_RULES}
+{_guardrails}
+{_voice_lock}
 {tone_guidance}
-Respond in Zarna's voice — sharp, funny, 1 sentence max.
+Respond in {_creator_name}'s voice — sharp, funny, 1 sentence max.
 If fan context above mentions a city or a past show they attended, naturally weave it in (e.g. "You're a true Chicago fan — here's where to grab tickets"). If there is no context, keep it general.
-Then on a new line, include EXACTLY this link with no changes: https://zarnagarg.com/tickets/
+Then on a new line, include EXACTLY this link with no changes: {_tickets}
 Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
     if intent == Intent.MERCH:
@@ -406,41 +465,41 @@ Never use the word "honey" or "darling". No profanity. No homophobic language.""
         variant_note = ""
         if sell_variant == "B":
             variant_note = "\nVariant B: open with a warm, personal line referencing their city or show history if available, then pitch the merch naturally.\n"
-        return f"""You are Zarna Garg's AI assistant.
+        return f"""You are {_creator_name}'s AI assistant.
 
-The fan is asking about Zarna's merch (shirts, hoodies, hats, etc.): {user_message}
+The fan is asking about {_creator_name}'s merch (shirts, hoodies, hats, etc.): {user_message}
 {sell_ctx_block}{variant_note}
-{_HARD_FACT_GUARDRAILS}
-{_VOICE_LOCK_RULES}
+{_guardrails}
+{_voice_lock}
 {tone_guidance}
-Respond in Zarna's voice — excited, sharp, 1 sentence max. If fan context mentions a city or show they attended, weave it in warmly. If no context, keep it general.
-Then on a new line, include EXACTLY this link with no changes: https://shopmy.us/shop/zarnagarg
+Respond in {_creator_name}'s voice — excited, sharp, 1 sentence max. If fan context mentions a city or show they attended, weave it in warmly. If no context, keep it general.
+Then on a new line, include EXACTLY this link with no changes: {_merch}
 Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
     if intent == Intent.BOOK:
-        return f"""You are Zarna Garg's AI assistant.
+        return f"""You are {_creator_name}'s AI assistant.
 
-The user is asking about Zarna's book "This American Woman": {user_message}
+The user is asking about {_creator_name}'s book "{_book_title}": {user_message}
 
-{_HARD_FACT_GUARDRAILS}
-{_VOICE_LOCK_RULES}
+{_guardrails}
+{_voice_lock}
 {tone_guidance}
-Respond in Zarna's voice — sharp, warm, excited about the book, 1 sentence max. Then on a new line, include EXACTLY this link with no changes: https://www.amazon.com/dp/0593975022
+Respond in {_creator_name}'s voice — sharp, warm, excited about the book, 1 sentence max. Then on a new line, include EXACTLY this link with no changes: {_book_url}
 Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
     if intent == Intent.PODCAST:
-        return f"""You are Zarna Garg's AI assistant helping a fan find a relevant podcast episode.
+        return f"""You are {_creator_name}'s AI assistant helping a fan find a relevant podcast episode.
 
-Here are the most relevant episodes from The Zarna Garg Family Podcast:
+Here are the most relevant episodes from {_creator_name}'s podcast:
 {context}
 
 The fan asked: {user_message}
 
-{_HARD_FACT_GUARDRAILS}
-{_VOICE_LOCK_RULES}
+{_guardrails}
+{_voice_lock}
 {tone_guidance}
-Respond in Zarna's warm, sharp voice. If one of the episodes above is a strong match, recommend it by name in one excited sentence — like you're telling a friend "oh we literally talked about this!" Then on a new line include the "Watch/listen at:" link exactly as it appears in the episode context above.
-If no episode above is a strong match, tell them to check out the podcast in one short sentence, then include this link on a new line: https://www.youtube.com/@ZarnaGarg
+Respond in {_creator_name}'s warm, sharp voice. If one of the episodes above is a strong match, recommend it by name in one excited sentence — like you're telling a friend "oh we literally talked about this!" Then on a new line include the "Watch/listen at:" link exactly as it appears in the episode context above.
+If no episode above is a strong match, tell them to check out the podcast in one short sentence, then include this link on a new line: {_youtube}
 Never use the word "honey" or "darling". No profanity. No homophobic language. Keep the text to 1-2 sentences max before the link."""
 
     # GREETING — fan is saying hi or opening the conversation
@@ -450,12 +509,12 @@ Never use the word "honey" or "darling". No profanity. No homophobic language. K
 Background knowledge about Zarna (use to make responses richer — never recite as facts):
 {context}
 
-{_HARD_FACT_GUARDRAILS}
-{_VOICE_LOCK_RULES}
+{_guardrails}
+{_voice_lock}
 {tone_guidance}
-{_TONE_EXAMPLES}
+{_examples}
 {examples_text}{memory_text}{history_text}Fan greeting: {user_message}
-{_STYLE_RULES}
+{_style}
 Critical for this message: welcome them warmly in Zarna's voice — sharp, high-energy, never generic.
 Max 2 sentences. If this is clearly their very first message and you have nothing to riff on yet, a
 short curious question is fine. If they've already shared something or the conversation has context,
@@ -468,12 +527,12 @@ just land a sharp welcoming line and let it breathe — don't force a question."
 Background knowledge about Zarna (use to make responses richer — never recite as facts):
 {context}
 
-{_HARD_FACT_GUARDRAILS}
-{_VOICE_LOCK_RULES}
+{_guardrails}
+{_voice_lock}
 {tone_guidance}
-{_TONE_EXAMPLES}
+{_examples}
 {examples_text}{memory_text}{history_text}Fan reaction: {user_message}
-{_STYLE_RULES}
+{_style}
 Critical for this message: the fan is reacting — laughing, agreeing, or answering one of Zarna's bits.
 Acknowledge it in ONE punchy line (sharp, in-character, not generic "You got it!").
 Then either drop a sharp second line that lands the moment, OR — if you haven't asked a question
@@ -492,12 +551,12 @@ Keep it to 2 sentences max."""
 Background knowledge about Zarna (use to make responses richer and more specific — never recite this as facts, always find the funny angle):
 {context}
 
-{_HARD_FACT_GUARDRAILS}
-{_VOICE_LOCK_RULES}
+{_guardrails}
+{_voice_lock}
 {tone_guidance}
-{_TONE_EXAMPLES}
+{_examples}
 {examples_text}{memory_text}{history_text}{blast_ctx_block}Question from fan: {user_message}
-{_STYLE_RULES}
+{_style}
 Critical for this message: answer the question directly in plain language first — no echo-mock, no keyword+? dodge. A follow-up question back is optional — only add one if it genuinely flows and you haven't asked one recently. Often the best reply to a question is just a great answer that ends on a period."""
 
     # PERSONAL — fan shared something about themselves; roast it, then invite more
@@ -507,12 +566,12 @@ Critical for this message: answer the question directly in plain language first 
 Background knowledge about Zarna (use to make responses richer and more specific — never recite this as facts, always find the funny angle):
 {context}
 
-{_HARD_FACT_GUARDRAILS}
-{_VOICE_LOCK_RULES}
+{_guardrails}
+{_voice_lock}
 {tone_guidance}
-{_TONE_EXAMPLES}
+{_examples}
 {examples_text}{memory_text}{history_text}{blast_ctx_block}Fan shares: {user_message}
-{_STYLE_RULES}
+{_style}
 Critical for this message: riff on what they shared — find the funny or warm angle in their specific detail. A follow-up question is optional — only if it genuinely earns its place and you haven't asked one recently. Often just landing the joke or observation is the better move. Default to ending on a period. Do not pivot to Zarna's life unless they asked."""
 
     # GENERAL
@@ -522,12 +581,12 @@ Critical for this message: riff on what they shared — find the funny or warm a
 Background knowledge about Zarna (use to make responses richer and more specific — never recite this as facts, always find the funny angle):
 {context}
 
-{_HARD_FACT_GUARDRAILS}
-{_VOICE_LOCK_RULES}
+{_guardrails}
+{_voice_lock}
 {tone_guidance}
-{_TONE_EXAMPLES}
+{_examples}
 {examples_text}{memory_text}{history_text}{blast_ctx_block}{quiz_block}Message: {user_message}
-{_STYLE_RULES}"""
+{_style}"""
 
 
 _MAX_CHARS = 380  # Safe for 6-segment Unicode SMS (Unicode forces 67 chars/segment;
@@ -784,6 +843,7 @@ def generate_zarna_reply(
     winning_examples: Optional[list] = None,
     sell_context: Optional[str] = None,
     sell_variant: Optional[str] = None,
+    creator_config: "Optional[CreatorConfig]" = None,
 ) -> str:
     """
     Generate reply. For GENERAL/JOKE with multi-model enabled, pass routing_tier
@@ -793,6 +853,7 @@ def generate_zarna_reply(
     winning_examples, when set, injects high-engagement past replies as dynamic few-shot examples.
     sell_context, when set, provides per-fan show/location context for SHOW and MERCH replies.
     sell_variant, when set ("A" or "B"), selects the A/B copy variation for sell intents.
+    creator_config, when set, supplies creator-specific links and voice — falls back to Zarna defaults.
     """
     # Redirect coding/homework requests before they reach the AI
     if _CODE_REQUEST_RE.search(user_message or ""):
@@ -811,6 +872,7 @@ def generate_zarna_reply(
         winning_examples=winning_examples,
         sell_context=sell_context,
         sell_variant=sell_variant,
+        creator_config=creator_config,
     )
 
     raw = _produce_raw_text(intent, prompt, routing_tier)

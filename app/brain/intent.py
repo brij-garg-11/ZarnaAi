@@ -1,9 +1,16 @@
+import logging
 from enum import Enum
+from typing import TYPE_CHECKING, Optional
 import re
 
 from google import genai
 
 from app.config import GEMINI_API_KEY, INTENT_MODEL
+
+if TYPE_CHECKING:
+    from app.brain.creator_config import CreatorConfig
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class Intent(str, Enum):
@@ -384,12 +391,23 @@ def _fast_classify(message: str) -> Intent | None:
     return None
 
 
-def classify_intent(message: str) -> Intent:
+def classify_intent(message: str, creator_config: "Optional[CreatorConfig]" = None) -> Intent:
     fast = _fast_classify(message)
     if fast is not None:
         return fast
 
-    prompt = f"""Classify this fan message to Zarna Garg (Indian-American comedian) into exactly one intent.
+    # Build a creator-aware classification prompt.
+    # Falls back to hardcoded Zarna identity when no config is provided.
+    if creator_config and creator_config.name:
+        _creator_label = f"{creator_config.name}"
+        if creator_config.description:
+            _creator_label += f" ({creator_config.description})"
+    else:
+        _creator_label = "Zarna Garg (Indian-American comedian)"
+
+    _LOGGER.debug("classify_intent: using creator=%s for Gemini prompt", _creator_label)
+
+    prompt = f"""Classify this fan message to {_creator_label} into exactly one intent.
 
 INTENTS with examples:
 

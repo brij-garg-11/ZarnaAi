@@ -12,13 +12,14 @@ from app.analytics.outcome_scorer import (
 )
 from app.analytics.session_manager import get_or_create_session
 from app.brain.conversation_end import is_conversation_ender
+from app.brain.creator_config import CreatorConfig, load_creator
 from app.brain.emphasis import should_suppress_all_emphasis
 from app.brain.generator import generate_zarna_reply, infer_reply_provider
 from app.brain.intent import Intent, _fast_classify, classify_intent
 from app.brain.memory import extract_memory
 from app.brain.routing import classify_routing_tier, try_router_skip_safe
 from app.brain.tone import classify_tone_mode
-from app.config import CONVERSATION_HISTORY_LIMIT, LOG_REPLY_METRICS
+from app.config import CONVERSATION_HISTORY_LIMIT, CREATOR_SLUG, LOG_REPLY_METRICS
 from app.retrieval.base import BaseRetriever
 from app.storage.base import BaseStorage
 
@@ -57,6 +58,20 @@ class ZarnaBrain:
     def __init__(self, storage: BaseStorage, retriever: BaseRetriever):
         self.storage = storage
         self.retriever = retriever
+        # Load creator config once at startup — None means all callers use their
+        # hardcoded Zarna defaults, so behaviour is unchanged on failure.
+        self.creator_config: CreatorConfig | None = load_creator(CREATOR_SLUG)
+        if self.creator_config:
+            _logger.info(
+                "ZarnaBrain: loaded CreatorConfig slug=%s name=%r",
+                self.creator_config.slug,
+                self.creator_config.name,
+            )
+        else:
+            _logger.info(
+                "ZarnaBrain: no CreatorConfig loaded for slug=%r — using all hardcoded defaults",
+                CREATOR_SLUG,
+            )
 
     def handle_incoming_message(self, phone_number: str, message_text: str, quiz_context: Optional[str] = None, blast_context: Optional[str] = None) -> str:
         # 1. Ensure contact exists
@@ -93,7 +108,7 @@ class ZarnaBrain:
         start_route_parallel = not skip_router_api and not structured_fast
 
         t_parallel = time.perf_counter()
-        future_intent = _executor.submit(classify_intent, message_text)
+        future_intent = _executor.submit(classify_intent, message_text, self.creator_config)
         future_chunks = _executor.submit(self.retriever.get_relevant_chunks, message_text)
         future_route = None
         if start_route_parallel:
@@ -143,7 +158,7 @@ class ZarnaBrain:
             route_ms = (time.perf_counter() - t_route) * 1000
 
         t_gen = time.perf_counter()
-        tone_mode = classify_tone_mode(message_text, intent, history)
+        tone_mode = classify_tone_mode(message_text, intent, history, self.creator_config)
 
         # Fetch high-engagement examples for this intent+tone combo (cached, never blocks).
         # Only used for conversational intents — structured ones (show/clip/book/podcast/merch) skip.
@@ -192,6 +207,7 @@ class ZarnaBrain:
             winning_examples=winning_examples,
             sell_context=sell_context,
             sell_variant=sell_variant,
+            creator_config=self.creator_config,
         )
         gen_ms = (time.perf_counter() - t_gen) * 1000
 

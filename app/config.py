@@ -17,12 +17,23 @@ HIGH_MODEL = os.getenv("HIGH_MODEL", "claude-sonnet-4-20250514")
 # auto | on | off — off forces all replies through Gemini even if keys are set
 MULTI_MODEL_REPLY = os.getenv("MULTI_MODEL_REPLY", "auto").strip().lower()
 
+# --- Creator ---
+# Set CREATOR_SLUG to the slug of the creator whose config should be loaded.
+# The value must match a file in creator_config/<slug>.json.
+# Defaults to "zarna" so existing deployments are unchanged.
+CREATOR_SLUG = os.getenv("CREATOR_SLUG", "zarna").strip().lower()
+
 # --- Data ---
 # Use absolute paths relative to this file so the app works regardless of
 # the working directory Railway (or any other host) launches the process from.
+# Paths are creator-scoped: training_data/<slug>_chunks.json etc.
+# Falls back to "zarna" filenames if no matching file exists for the slug.
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CHUNKS_PATH = os.path.join(_BASE_DIR, "training_data", "zarna_chunks.json")
-EMBEDDINGS_PATH = os.path.join(_BASE_DIR, "training_data", "zarna_embeddings.json.gz")
+_chunks_candidate = os.path.join(_BASE_DIR, "training_data", f"{CREATOR_SLUG}_chunks.json")
+_embeddings_candidate = os.path.join(_BASE_DIR, "training_data", f"{CREATOR_SLUG}_embeddings.json.gz")
+# Keep backward-compat: if slug-specific file doesn't exist, fall back to zarna files
+CHUNKS_PATH = _chunks_candidate if os.path.exists(_chunks_candidate) else os.path.join(_BASE_DIR, "training_data", "zarna_chunks.json")
+EMBEDDINGS_PATH = _embeddings_candidate if os.path.exists(_embeddings_candidate) else os.path.join(_BASE_DIR, "training_data", "zarna_embeddings.json.gz")
 
 # --- Retrieval / Generation ---
 TOP_K_CHUNKS = int(os.getenv("TOP_K_CHUNKS", "7"))

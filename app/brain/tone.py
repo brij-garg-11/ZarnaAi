@@ -7,10 +7,16 @@ giving generation a clear primary mode for the current message.
 
 from __future__ import annotations
 
+import logging
 import re
-from typing import List, Literal
+from typing import TYPE_CHECKING, List, Literal, Optional
 
 from app.brain.intent import Intent
+
+if TYPE_CHECKING:
+    from app.brain.creator_config import CreatorConfig
+
+_LOGGER = logging.getLogger(__name__)
 
 ToneMode = Literal[
     "roast_playful",
@@ -41,14 +47,37 @@ _DIRECT_Q_RE = re.compile(
 _THANKS_RE = re.compile(r"\b(thanks|thank you|appreciate)\b", re.IGNORECASE)
 
 
+def _build_roast_family_re(creator_config: "Optional[CreatorConfig]") -> re.Pattern:
+    """
+    Build the family-roast regex from config when available; fall back to the
+    hardcoded Zarna-specific pattern otherwise.
+    Debug-logged so it's easy to verify which terms are active at runtime.
+    """
+    if creator_config and creator_config.family_roast_names:
+        terms = creator_config.family_roast_names
+        _LOGGER.debug(
+            "tone._build_roast_family_re: using config family_roast_names for creator=%s: %s",
+            creator_config.slug,
+            terms,
+        )
+        # Escape each term and join with | — same pattern as the hardcoded version
+        pattern = r"\b(" + "|".join(re.escape(t) for t in terms) + r")\b"
+        return re.compile(pattern, re.IGNORECASE)
+    return _ROAST_FAMILY_RE
+
+
 def classify_tone_mode(
     user_message: str,
     intent: Intent,
     history: List[dict] | None = None,
+    creator_config: "Optional[CreatorConfig]" = None,
 ) -> ToneMode:
     text = (user_message or "").strip()
     if not text:
         return "direct_answer"
+
+    # Use config-aware regex when available; hardcoded fallback otherwise.
+    roast_family_re = _build_roast_family_re(creator_config)
 
     if _VULNERABLE_RE.search(text):
         return "sensitive_care"
@@ -57,7 +86,7 @@ def classify_tone_mode(
         return "roast_playful"
     if intent == Intent.FEEDBACK or _CELEBRATORY_RE.search(text):
         return "celebratory"
-    if intent == Intent.JOKE or _ROAST_FAMILY_RE.search(text):
+    if intent == Intent.JOKE or roast_family_re.search(text):
         return "roast_playful"
     if intent == Intent.QUESTION or _DIRECT_Q_RE.search(text):
         return "direct_answer"
