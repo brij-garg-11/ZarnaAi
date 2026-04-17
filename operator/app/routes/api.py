@@ -134,6 +134,60 @@ def blasts_list():
     )
 
 
+# ── Audience ──────────────────────────────────────────────────────────────────
+
+@api_bp.route("/api/audience")
+@login_required
+def audience():
+    """Audience tags, area codes, and fan tier breakdown."""
+    try:
+        stats = get_overview_stats()
+    except Exception:
+        logger.exception("api: failed to fetch audience stats")
+        stats = {}
+
+    # Fan tier counts from contacts table
+    tier_counts = {}
+    try:
+        conn = get_conn()
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("""
+                SELECT fan_tier, COUNT(*) as count
+                FROM contacts
+                WHERE fan_tier IS NOT NULL
+                GROUP BY fan_tier
+                ORDER BY count DESC
+            """)
+            tier_counts = {row["fan_tier"]: row["count"] for row in cur.fetchall()}
+        conn.close()
+    except Exception:
+        logger.exception("api: failed to fetch tier counts")
+
+    tier_order = ["superfan", "engaged", "casual", "dormant"]
+    tier_icons = {"superfan": "⭐", "engaged": "✅", "casual": "💬", "dormant": "😴"}
+
+    return jsonify(
+        tag_breakdown=[
+            {"tag": t, "count": c}
+            for t, c in stats.get("tag_breakdown", [])
+        ],
+        top_area_codes=[
+            {"area_code": a, "count": c}
+            for a, c in stats.get("top_area_codes", [])
+        ],
+        fan_tiers=[
+            {
+                "tier": tier,
+                "count": tier_counts.get(tier, 0),
+                "icon": tier_icons.get(tier, ""),
+            }
+            for tier in tier_order
+        ],
+        total_profiled=stats.get("profiled_fans", 0),
+    )
+
+
 # ── User ──────────────────────────────────────────────────────────────────────
 
 @api_bp.route("/api/user")
