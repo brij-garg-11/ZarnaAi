@@ -5,7 +5,7 @@ All routes require an active session (login via /api/auth/login first).
 All routes return JSON — no HTML rendering.
 """
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 from ..routes.auth import login_required, current_user
 from ..queries import get_overview_stats, list_shows, list_blast_drafts, get_all_tags
 from ..db import get_conn
@@ -186,6 +186,149 @@ def audience():
         ],
         total_profiled=stats.get("profiled_fans", 0),
     )
+
+
+# ── Inbox ─────────────────────────────────────────────────────────────────────
+
+@api_bp.route("/api/inbox")
+@login_required
+def inbox():
+    """
+    Paginated list of recent conversations (25 per page), newest first.
+    Each row = one fan thread: last message, timestamp, message count, fan tier.
+    Phone numbers are masked to last-4 only.
+    Query params: ?page=1
+    """
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = 25
+    offset = (page - 1) * per_page
+
+    try:
+        conn = get_conn()
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # Total conversation count for pagination
+            cur.execute("""
+                SELECT COUNT(DISTINCT phone_number) AS total
+                FROM messages
+                WHERE role = 'user'
+            """)
+            total = cur.fetchone()["total"]
+
+            # One row per fan: most recent message, message counts, fan info
+            cur.execute("""
+                SELECT
+                    m.phone_number,
+                    RIGHT(m.phone_number, 4) AS phone_last4,
+                    MAX(m.created_at) AS last_message_at,
+                    COUNT(*) FILTER (WHERE m.role = 'user') AS fan_messages,
+                    COUNT(*) FILTER (WHERE m.role = 'assistant') AS bot_messages,
+                    (
+                        SELECT body FROM messages m2
+                        WHERE m2.phone_number = m.phone_number
+                        ORDER BY m2.created_at DESC LIMIT 1
+                    ) AS last_body,
+                    (
+                        SELECT role FROM messages m2
+                        WHERE m2.phone_number = m.phone_number
+                        ORDER BY m2.created_at DESC LIMIT 1
+                    ) AS last_role,
+                    c.fan_tier,
+                    c.fan_tags
+                FROM messages m
+                LEFT JOIN contacts c ON c.phone_number = m.phone_number
+                GROUP BY m.phone_number, c.fan_tier, c.fan_tags
+                ORDER BY last_message_at DESC
+                LIMIT %s OFFSET %s
+            """, (per_page, offset))
+            rows = cur.fetchall()
+        conn.close()
+    except Exception:
+        logger.exception("api: failed to fetch inbox")
+        return jsonify(conversations=[], total=0, page=page, pages=0), 500
+
+    conversations = []
+    for r in rows:
+        tags = r["fan_tags"] or []
+        conversations.append({
+            "phone_last4": r["phone_last4"],
+            "last_message_at": r["last_message_at"].isoformat() if r["last_message_at"] else None,
+            "last_body": (r["last_body"] or "")[:120],
+            "last_role": r["last_role"],
+            "fan_messages": r["fan_messages"],
+            "bot_messages": r["bot_messages"],
+            "fan_tier": r["fan_tier"],
+            "fan_tags": tags[:5],
+        })
+
+    return jsonify(
+        conversations=conversations,
+        total=total,
+        page=page,
+        pages=-(-total // per_page),
+    )
+
+
+@api_bp.route("/api/inbox/<phone_last4>/thread")
+@login_required
+def inbox_thread(phone_last4):
+    """
+    Full message thread for a fan identified by their last-4 phone digits.
+    If multiple fans share the same last-4, returns the most recently active one.
+    """
+    try:
+        conn = get_conn()
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # Find the full phone number (most recent match)
+            cur.execute("""
+                SELECT phone_number FROM messages
+                WHERE RIGHT(phone_number, 4) = %s
+                GROUP BY phone_number
+                ORDER BY MAX(created_at) DESC
+                LIMIT 1
+            """, (phone_last4,))
+            row = cur.fetchone()
+            if not row:
+                return jsonify(messages=[], fan={}), 404
+
+            phone = row["phone_number"]
+
+            cur.execute("""
+                SELECT role, body, created_at, intent
+                FROM messages
+                WHERE phone_number = %s
+                ORDER BY created_at ASC
+            """, (phone,))
+            messages = [
+                {
+                    "role": r["role"],
+                    "body": r["body"],
+                    "created_at": r["created_at"].isoformat(),
+                    "intent": r.get("intent"),
+                }
+                for r in cur.fetchall()
+            ]
+
+            cur.execute("""
+                SELECT fan_tier, fan_tags, fan_memory, created_at
+                FROM contacts WHERE phone_number = %s
+            """, (phone,))
+            fan_row = cur.fetchone()
+            fan = {}
+            if fan_row:
+                fan = {
+                    "fan_tier": fan_row["fan_tier"],
+                    "fan_tags": fan_row["fan_tags"] or [],
+                    "fan_memory": fan_row["fan_memory"],
+                    "joined_at": fan_row["created_at"].isoformat() if fan_row["created_at"] else None,
+                }
+        conn.close()
+    except Exception:
+        logger.exception("api: failed to fetch thread for %s", phone_last4)
+        return jsonify(messages=[], fan={}), 500
+
+    return jsonify(messages=messages, fan=fan, phone_last4=phone_last4)
 
 
 # ── User ──────────────────────────────────────────────────────────────────────
