@@ -1,0 +1,18 @@
+# Web service config (main Flask app).
+# Only rebuilds when app code or root-level files change — not when operator/ changes.
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+watchPatterns = [
+  "app/**",
+  "scripts/**",
+  "training_data/**",
+  "creator_config/**",
+  "main.py",
+  "requirements.txt",
+  "Dockerfile",
+]

@@ -12,3 +12,4 @@ builder = "nixpacks"
 
 [deploy]
 startCommand = "python -u scripts/score_silence.py"
+watchPatterns = ["scripts/score_silence.py", "requirements.txt", "app/storage/**"]

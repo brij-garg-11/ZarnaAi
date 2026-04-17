@@ -85,3 +85,4 @@ builder = "nixpacks"
 
 [deploy]
 startCommand = "python -u scripts/generate_smb_quality_digest.py"
+watchPatterns = ["scripts/generate_smb_quality_digest.py", "requirements.txt", "app/smb/**"]

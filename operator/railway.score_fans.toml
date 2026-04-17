@@ -9,6 +9,6 @@
 builder = "nixpacks"
 
 [deploy]
-# -u = unbuffered stdout/stderr so Railway shows logs line-by-line before exit
 startCommand = "python -u scripts/score_fans.py"
 cronSchedule = "0 3 * * *"
+watchPatterns = ["scripts/score_fans.py", "requirements.txt", "app/storage/**"]

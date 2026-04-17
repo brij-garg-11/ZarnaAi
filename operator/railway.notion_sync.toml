@@ -19,3 +19,4 @@ builder = "nixpacks"
 
 [deploy]
 startCommand = "python -u scripts/sync_live_shows_to_notion.py"
+watchPatterns = ["scripts/sync_live_shows_to_notion.py", "requirements.txt"]
