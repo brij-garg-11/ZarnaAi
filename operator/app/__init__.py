@@ -12,7 +12,7 @@ _CORS_ORIGINS = [
     o.strip()
     for o in os.getenv(
         "CORS_ALLOWED_ORIGINS",
-        "http://localhost:3000,http://localhost:5173,https://zar.com,https://www.zar.com,https://zar-fan-connect.lovable.app,https://zarnaai-production.up.railway.app",
+        "http://localhost:3000,http://localhost:5173,https://zar.com,https://www.zar.com,https://zar-fan-connect.lovable.app,https://zarnaai-production.up.railway.app,https://lovable.dev,https://gptengineer.app",
     ).split(",")
     if o.strip()
 ]
@@ -24,9 +24,17 @@ def create_app() -> Flask:
 
     # Allow cross-origin requests to /api/* from the marketing site.
     # supports_credentials=True is required for the session cookie to be sent.
+    # Lovable preview URLs come from *.lovable.app and lovable.dev so we use
+    # a regex to match all of them alongside our explicit production origins.
+    import re
+    _lovable_pattern = re.compile(r"https://.*\.lovable\.app$|https://lovable\.dev$|https://.*\.gptengineer\.app$")
+
+    def _origin_allowed(origin: str) -> bool:
+        return origin in _CORS_ORIGINS or bool(_lovable_pattern.match(origin))
+
     CORS(
         app,
-        resources={r"/api/*": {"origins": _CORS_ORIGINS}},
+        resources={r"/api/*": {"origins": _origin_allowed}},
         supports_credentials=True,
     )
 
