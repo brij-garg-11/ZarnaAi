@@ -36,13 +36,16 @@ def create_app() -> Flask:
         supports_credentials=True,
     )
 
-    # In production the session cookie must be shared across zar.com subdomains.
-    # Set SESSION_COOKIE_DOMAIN=.zar.com in Railway env vars when going live.
+    # The React frontend (Lovable) and this Flask backend are on different domains,
+    # so the session cookie must be SameSite=None; Secure to be sent cross-origin.
+    # Without this, /api/auth/me always returns 401 even after a successful login.
+    app.config["SESSION_COOKIE_SAMESITE"] = "None"
+    app.config["SESSION_COOKIE_SECURE"] = True
+
+    # Optionally scope the cookie to a shared domain (e.g. .zar.com) when going live.
     cookie_domain = os.getenv("SESSION_COOKIE_DOMAIN")
     if cookie_domain:
         app.config["SESSION_COOKIE_DOMAIN"] = cookie_domain
-        app.config["SESSION_COOKIE_SAMESITE"] = "None"
-        app.config["SESSION_COOKIE_SECURE"] = True
 
     # Railway terminates TLS at its proxy and forwards requests as plain HTTP.
     # ProxyFix makes request.scheme, request.host, and url_for() reflect the
