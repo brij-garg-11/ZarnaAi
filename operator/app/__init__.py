@@ -24,17 +24,15 @@ def create_app() -> Flask:
 
     # Allow cross-origin requests to /api/* from the marketing site.
     # supports_credentials=True is required for the session cookie to be sent.
-    # Lovable preview URLs come from *.lovable.app and lovable.dev so we use
-    # a regex to match all of them alongside our explicit production origins.
-    import re
-    _lovable_pattern = re.compile(r"https://.*\.lovable\.app$|https://lovable\.dev$|https://.*\.gptengineer\.app$")
-
-    def _origin_allowed(origin: str) -> bool:
-        return origin in _CORS_ORIGINS or bool(_lovable_pattern.match(origin))
-
+    # flask-cors treats strings containing regex special chars as regex patterns,
+    # so r"https://.*\.lovable\.app" matches all Lovable preview subdomains.
     CORS(
         app,
-        resources={r"/api/*": {"origins": _origin_allowed}},
+        resources={r"/api/*": {"origins": _CORS_ORIGINS + [
+            r"https://.*\.lovable\.app",
+            r"https://lovable\.dev",
+            r"https://.*\.gptengineer\.app",
+        ]}},
         supports_credentials=True,
     )
 
