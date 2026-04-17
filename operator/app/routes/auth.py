@@ -13,6 +13,7 @@ from functools import wraps
 from flask import (
     Blueprint,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -188,3 +189,82 @@ def root():
 @auth_bp.route("/")
 def index_root():
     return redirect(url_for("auth.root"))
+
+
+# ── JSON API endpoints (for React / Lovable frontend) ──────────────────────
+
+@auth_bp.route("/api/auth/login", methods=["POST"])
+def api_login():
+    """
+    JSON login endpoint consumed by the Zar marketing site.
+    Accepts: {"email": "...", "password": "..."}
+    Returns: {"success": true, "user": {...}, "redirect_to": "/operator/dashboard"}
+          or {"success": false, "error": "..."}
+    """
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+
+    if not email or not password:
+        return jsonify(success=False, error="Email and password are required."), 400
+
+    try:
+        conn = get_conn()
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM operator_users WHERE email=%s AND is_active=TRUE",
+                (email,),
+            )
+            user = cur.fetchone()
+
+        if user and check_password_hash(user["password_hash"], password):
+            session["operator_user_id"] = user["id"]
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE operator_users SET last_login_at=NOW() WHERE id=%s",
+                        (user["id"],),
+                    )
+            conn.close()
+            return jsonify(
+                success=True,
+                redirect_to="/operator/dashboard",
+                user={
+                    "email": user["email"],
+                    "name": user["name"],
+                    "is_owner": user["is_owner"],
+                },
+            )
+
+        conn.close()
+        return jsonify(success=False, error="Incorrect email or password."), 401
+
+    except Exception:
+        return jsonify(success=False, error="Login error — please try again."), 500
+
+
+@auth_bp.route("/api/auth/logout", methods=["POST"])
+def api_logout():
+    """JSON logout — clears session."""
+    session.pop("operator_user_id", None)
+    return jsonify(success=True)
+
+
+@auth_bp.route("/api/auth/me", methods=["GET"])
+def api_me():
+    """
+    Returns the currently authenticated user, or 401 if not logged in.
+    The React frontend can call this on load to check session state.
+    """
+    user = current_user()
+    if not user:
+        return jsonify(authenticated=False), 401
+    return jsonify(
+        authenticated=True,
+        user={
+            "email": user["email"],
+            "name": user["name"],
+            "is_owner": user["is_owner"],
+        },
+    )
