@@ -397,6 +397,117 @@ def api_end_show(show_id):
         return jsonify(success=False, error=str(e)), 500
 
 
+# ── Blasts (read helpers) ──────────────────────────────────────────────────────
+
+CADENCE_DAYS = {"superfan": 5, "engaged": 7, "lurker": 14, "dormant": 30}
+TIER_LABELS  = {"superfan": "Superfan ⭐", "engaged": "Engaged ✅", "lurker": "Lurker 💬", "dormant": "Dormant 😴"}
+
+
+@api_bp.route("/api/blasts/tier-counts")
+@login_required
+def api_blast_tier_counts():
+    """
+    Returns per-tier fan counts and Smart Send cadence rules so the
+    Blast Composer can display subscriber counts under each tier option.
+
+    Response:
+      {
+        "tiers": [
+          {"tier": "superfan", "label": "Superfan ⭐", "count": 42, "cadence_days": 5},
+          ...
+        ]
+      }
+    """
+    counts = {}
+    try:
+        conn = get_conn()
+        import psycopg2.extras
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT fan_tier, COUNT(*) FROM contacts "
+                "WHERE fan_tier IS NOT NULL AND phone_number NOT LIKE 'whatsapp:%%' "
+                "GROUP BY fan_tier"
+            )
+            counts = {row[0]: row[1] for row in cur.fetchall()}
+        conn.close()
+    except Exception:
+        logger.exception("api_blast_tier_counts: db error")
+
+    tiers = [
+        {
+            "tier": tier,
+            "label": TIER_LABELS.get(tier, tier.title()),
+            "count": counts.get(tier, 0),
+            "cadence_days": cadence,
+        }
+        for tier, cadence in CADENCE_DAYS.items()
+    ]
+    return jsonify(success=True, tiers=tiers)
+
+
+@api_bp.route("/api/blasts/smart-send-preview", methods=["POST"])
+@login_required
+def api_smart_send_preview():
+    """
+    Returns how many fans per tier would receive the blast today vs be
+    suppressed by Smart Send cadence rules.
+
+    Response:
+      {
+        "tiers": {
+          "superfan": {"total": N, "suppressed": N, "sending": N, "cadence_days": 5},
+          ...
+        },
+        "total_sending": N,
+        "total_suppressed": N
+      }
+    """
+    result = {"tiers": {}, "total_sending": 0, "total_suppressed": 0}
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT phone_number FROM broadcast_optouts")
+            optouts = {r[0] for r in cur.fetchall()}
+
+            for tier, cadence in CADENCE_DAYS.items():
+                cur.execute(
+                    "SELECT DISTINCT phone_number FROM contacts "
+                    "WHERE fan_tier = %s AND phone_number NOT LIKE 'whatsapp:%%'",
+                    (tier,),
+                )
+                all_phones = {r[0] for r in cur.fetchall()} - optouts
+
+                cur.execute(
+                    """
+                    SELECT DISTINCT br.phone_number
+                    FROM   blast_recipients br
+                    JOIN   blast_drafts bd ON bd.id = br.blast_id
+                    JOIN   contacts c ON c.phone_number = br.phone_number
+                    WHERE  c.fan_tier = %s
+                      AND  br.sent_at >= NOW() - (%s || ' days')::INTERVAL
+                    """,
+                    (tier, str(cadence)),
+                )
+                recently_blasted = {r[0] for r in cur.fetchall()}
+
+                suppressed = len(all_phones & recently_blasted)
+                sending    = len(all_phones - recently_blasted)
+                result["tiers"][tier] = {
+                    "total":        len(all_phones),
+                    "suppressed":   suppressed,
+                    "sending":      sending,
+                    "cadence_days": cadence,
+                }
+                result["total_sending"]    += sending
+                result["total_suppressed"] += suppressed
+        conn.close()
+    except Exception:
+        logger.exception("api_smart_send_preview: db error")
+        return jsonify(success=False, error="Failed to compute smart send preview"), 500
+
+    return jsonify(success=True, **result)
+
+
 # ── Blasts (write) ─────────────────────────────────────────────────────────────
 
 @api_bp.route("/api/blasts/create", methods=["POST"])
