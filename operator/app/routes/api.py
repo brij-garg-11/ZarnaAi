@@ -1331,7 +1331,7 @@ def business_inbox_send(phone_last4):
 @api_bp.route("/api/business/promos")
 @login_required
 def business_promos():
-    """List past promotional blasts for this business tenant."""
+    """List past promotional blasts and outreach invite campaigns for this business tenant."""
     slug = _get_tenant_slug()
     if not slug:
         return jsonify(error="No tenant slug configured for this account"), 400
@@ -1340,6 +1340,7 @@ def business_promos():
     try:
         import psycopg2.extras
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # Regular blasts
             cur.execute(
                 """SELECT id, owner_message, body, attempted, succeeded, sent_at, segment
                    FROM smb_blasts
@@ -1349,7 +1350,8 @@ def business_promos():
             )
             promos = [
                 {
-                    "id": r["id"],
+                    "id": f"blast-{r['id']}",
+                    "type": "blast",
                     "message": r["owner_message"] or r["body"],
                     "sent_body": r["body"],
                     "attempted": r["attempted"],
@@ -1359,6 +1361,36 @@ def business_promos():
                 }
                 for r in cur.fetchall()
             ]
+
+            # Outreach invite batches (grouped by batch_name)
+            cur.execute(
+                """SELECT
+                       batch_name,
+                       offer,
+                       COUNT(*) AS attempted,
+                       COUNT(claimed_at) AS claimed,
+                       MIN(sent_at) AS sent_at
+                   FROM smb_outreach_invites
+                   WHERE tenant_slug=%s
+                   GROUP BY batch_name, offer
+                   ORDER BY sent_at DESC""",
+                (slug,),
+            )
+            for r in cur.fetchall():
+                promos.append({
+                    "id": f"invite-{r['batch_name']}",
+                    "type": "outreach_invite",
+                    "message": f"Free ticket outreach invite ({r['offer'].replace('_', ' ')})",
+                    "sent_body": None,
+                    "attempted": r["attempted"],
+                    "succeeded": r["claimed"],
+                    "sent_at": r["sent_at"].isoformat() if r["sent_at"] else None,
+                    "segment": r["batch_name"],
+                })
+
+            # Sort combined list by sent_at descending
+            promos.sort(key=lambda x: x["sent_at"] or "", reverse=True)
+
         return jsonify(promos=promos)
     finally:
         conn.close()
