@@ -122,6 +122,16 @@ def execute_blast(draft_id: int):
         # Write progress every 50 sends so the UI can poll live counts
         if (i + 1) % 50 == 0:
             mark_blast_progress(draft_id, sent, failed)
+            # Check for cancellation — operator may have cancelled mid-send
+            try:
+                current = get_blast_draft(draft_id)
+                if current and current.get("status") == "cancelled":
+                    logger.warning("=== BLAST %s CANCELLED mid-send at %s/%s — stopping ===",
+                                   draft_id, sent, total)
+                    mark_blast_sent(draft_id, sent, failed, total)
+                    return
+            except Exception as _ce:
+                logger.warning("Cancellation check failed (non-fatal): %s", _ce)
 
     mark_blast_sent(draft_id, sent, failed, total)
     logger.info("=== BLAST %s DONE: %s sent, %s failed of %s ===", draft_id, sent, failed, len(phones))
