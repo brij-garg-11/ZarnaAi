@@ -340,6 +340,90 @@ def inbox_thread(phone_last4):
     return jsonify(messages=messages, fan=fan, phone_last4=phone_last4)
 
 
+@api_bp.route("/api/inbox/<phone_last4>/send", methods=["POST"])
+@login_required
+def api_inbox_send(phone_last4):
+    """
+    Send a manual message from the operator to a specific fan.
+    Delivers via Twilio, then logs it to the messages table as role='assistant'
+    so it appears inline in the thread history.
+
+    Body: { "text": "Hey, great to hear from you!" }
+    Returns: { success, message_id, sent_at }
+    """
+    import os
+    from datetime import datetime, timezone
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+
+    if not text:
+        return jsonify(success=False, error="Message text is required."), 400
+    if len(text) > 1600:
+        return jsonify(success=False, error="Message too long (max 1600 chars)."), 400
+
+    # Resolve the full phone number from last-4
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT phone_number FROM messages
+                WHERE RIGHT(phone_number, 4) = %s
+                GROUP BY phone_number
+                ORDER BY MAX(created_at) DESC
+                LIMIT 1
+            """, (phone_last4,))
+            row = cur.fetchone()
+        conn.close()
+    except Exception as e:
+        logger.exception("api_inbox_send: phone lookup failed")
+        return jsonify(success=False, error="Could not resolve phone number."), 500
+
+    if not row:
+        return jsonify(success=False, error=f"No fan found with last-4 '{phone_last4}'."), 404
+
+    phone = row[0]
+
+    # Send via Twilio
+    try:
+        from twilio.rest import Client
+        account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+        auth_token  = os.getenv("TWILIO_AUTH_TOKEN", "")
+        from_number = os.getenv("TWILIO_PHONE_NUMBER") or os.getenv("TWILIO_FROM_NUMBER", "")
+        if not all([account_sid, auth_token, from_number]):
+            return jsonify(success=False, error="Twilio credentials not configured."), 500
+        client = Client(account_sid, auth_token)
+        msg = client.messages.create(body=text, from_=from_number, to=phone)
+        logger.info("api_inbox_send: sent to ***%s sid=%s", phone_last4, msg.sid)
+    except Exception as e:
+        logger.exception("api_inbox_send: Twilio send failed for ***%s", phone_last4)
+        return jsonify(success=False, error=f"Send failed: {e}"), 500
+
+    # Log to messages table so it shows in thread history
+    sent_at = datetime.now(timezone.utc)
+    message_id = None
+    try:
+        conn = get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO messages (phone_number, role, text, created_at, source)
+                    VALUES (%s, 'assistant', %s, %s, 'manual_operator')
+                    RETURNING id
+                """, (phone, text, sent_at))
+                message_id = cur.fetchone()[0]
+        conn.close()
+        logger.info("api_inbox_send: logged message id=%s for ***%s", message_id, phone_last4)
+    except Exception as e:
+        logger.warning("api_inbox_send: failed to log message (send already happened): %s", e)
+
+    return jsonify(
+        success=True,
+        message_id=message_id,
+        sent_at=sent_at.isoformat(),
+        phone_last4=phone_last4,
+    )
+
+
 # ── Shows (write) ─────────────────────────────────────────────────────────────
 
 @api_bp.route("/api/shows/create", methods=["POST"])
