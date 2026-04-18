@@ -1,0 +1,65 @@
+{
+  "slug": "west_side_comedy",
+  "display_name": "West Side Comedy Club",
+  "business_type": "comedy_club",
+  "location": "New York, NY",
+  "address": "201 West 75th Street, New York, NY (Upper West Side)",
+  "hours": "Tue–Fri 4pm–midnight, Sat 1pm–midnight, Sun 2pm–11pm, Mon closed",
+  "website": "https://www.westsidecomedyclub.com",
+  "logo_url": "https://imagedelivery.net/7Ze32-hXUdrEDVtqvlbDMQ/2fa2cff3-e63c-4d6d-c193-0cbd39e86d00/public",
+  "tone": "fun, casual, hype — like a friend telling you about a great show in NYC",
+  "welcome_message": "Thanks for joining West Side Comedy Club! Really glad you're here. You can text me anytime — show times, tickets, directions, what's on this weekend, whatever you need.",
+  "signup_question": "Who's a comedian you love, or what kind of comedy are you into? (standup, improv, dark humor, crowd work, etc.)",
+  "outreach_invite_message": "West Side Comedy Club here 🎤\nGet first dibs on shows, surprise drops & exclusive deals when you join our VIP Text Club. \nJoin today and your first ticket's on us 🎟️ Don't miss out. Reply YES to join.",
+  "sms_number_env_key": "SMB_WEST_SIDE_COMEDY_SMS_NUMBER",
+  "tracked_links": {
+    "tickets": "https://www.westsidecomedyclub.com",
+    "calendar": "https://www.westsidecomedyclub.com/calendar",
+    "menu": "https://www.westsidecomedyclub.com/menu",
+    "map": "https://maps.google.com/?q=201+West+75th+Street+New+York+NY"
+  },
+  "segments": [
+    {
+      "name": "LOCAL",
+      "description": "NYC/NJ area subscribers — best for same-day and last-minute blasts",
+      "question_key": "geo",
+      "answers": ["LOCAL"]
+    },
+    {
+      "name": "OUT_OF_TOWN",
+      "description": "Out-of-town subscribers — best for plan-ahead weekend content",
+      "question_key": "geo",
+      "answers": ["OUT_OF_TOWN"]
+    },
+    {
+      "name": "ENGAGED",
+      "description": "High-engagement subscribers — most likely to act on any blast",
+      "question_key": "engagement",
+      "answers": ["HIGH"]
+    },
+    {
+      "name": "STANDUP",
+      "description": "Standup comedy fans",
+      "question_key": "0",
+      "answers": ["STANDUP", "BOTH"]
+    },
+    {
+      "name": "IMPROV",
+      "description": "Improv fans",
+      "question_key": "0",
+      "answers": ["IMPROV", "BOTH"]
+    },
+    {
+      "name": "TICKET_BUYERS",
+      "description": "Has shown ticket purchase intent",
+      "question_key": "intent_tickets",
+      "answers": ["YES"]
+    },
+    {
+      "name": "DEAL_SEEKERS",
+      "description": "Has asked about deals or discounts",
+      "question_key": "intent_deals",
+      "answers": ["YES"]
+    }
+  ]
+}

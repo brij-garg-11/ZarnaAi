@@ -5,16 +5,12 @@ All routes require an active session (login via /api/auth/login first).
 All routes return JSON — no HTML rendering.
 """
 
-import sys, os
 from pathlib import Path
 
 from flask import Blueprint, jsonify, request
 from ..routes.auth import login_required, current_user
 
-# Make the top-level app package importable from within the operator sub-package
-_repo_root = str(Path(__file__).parents[4])
-if _repo_root not in sys.path:
-    sys.path.insert(0, _repo_root)
+_BUSINESS_CONFIGS_DIR = Path(__file__).parent.parent / "business_configs"
 from ..queries import get_overview_stats, list_shows, list_blast_drafts, get_all_tags
 from ..db import get_conn
 import logging
@@ -986,11 +982,17 @@ def bot_data():
     Future: will read from DB per user's creator_slug.
     """
     import json
-    from pathlib import Path
 
     user = current_user()
     slug = (user.get("creator_slug") or "zarna") if user else "zarna"
-    config_path = Path(__file__).parents[4] / "creator_config" / f"{slug}.json"
+    account_type = (user.get("account_type") or "performer") if user else "performer"
+
+    # Business configs live in operator/app/business_configs/
+    # Performer configs live in creator_config/ at repo root (not available in Railway container)
+    if account_type == "business":
+        config_path = _BUSINESS_CONFIGS_DIR / f"{slug}.json"
+    else:
+        config_path = Path(__file__).parents[3] / "creator_config" / f"{slug}.json"
 
     try:
         with open(config_path) as f:
@@ -998,8 +1000,6 @@ def bot_data():
     except Exception:
         logger.exception("api: failed to load creator config for slug=%s", slug)
         return jsonify(error="Config not found"), 404
-
-    account_type = (user.get("account_type") or "performer") if user else "performer"
 
     if account_type == "business":
         # Business bot config — fields relevant to a venue/club
@@ -1385,10 +1385,8 @@ def business_customers():
             total_active = cur.fetchone()[0]
 
             # Load segment definitions from creator config
-            config_path = Path(__file__).parents[4] / "creator_config" / f"{slug}.json"
             try:
-                with open(config_path) as f:
-                    cfg = json.load(f)
+                cfg = json.loads((_BUSINESS_CONFIGS_DIR / f"{slug}.json").read_text())
                 segments_def = cfg.get("segments", [])
             except Exception:
                 segments_def = []
@@ -1493,7 +1491,7 @@ def business_blast_send():
     """
     Fire a promo blast for the business tenant.
     Body: { "message": "...", "audience": "all|segment:LOCAL|segment:ENGAGED|..." }
-    The message is AI-enhanced before sending (fixes typos, keeps all facts intact).
+    Sends in a background thread; returns immediately.
     """
     slug = _get_tenant_slug()
     if not slug:
@@ -1506,23 +1504,93 @@ def business_blast_send():
     if not message:
         return jsonify(error="Message is required"), 400
 
+    import os, threading, time as _time, json
+    from twilio.rest import Client as TwilioClient
+
+    slug_upper = slug.upper()
+    from_number = os.getenv(f"SMB_{slug_upper}_SMS_NUMBER")
+    if not from_number:
+        return jsonify(error="SMS number not configured for this account"), 500
+
+    # Load segment definitions from local business config
     try:
-        from app.smb.tenants import get_registry
-        from app.smb.blast import send_blast_from_portal
-
-        tenant = get_registry().get_by_slug(slug)
-        if not tenant:
-            return jsonify(error=f"Tenant config not found for slug: {slug}"), 500
-
-        status = send_blast_from_portal(
-            message_text=message,
-            tenant=tenant,
-            audience_type=audience,
-        )
-        return jsonify(success=True, status=status)
+        cfg = json.loads((_BUSINESS_CONFIGS_DIR / f"{slug}.json").read_text())
+        segments_def = cfg.get("segments", [])
     except Exception:
-        logger.exception("business_blast_send: failed for tenant=%s", slug)
-        return jsonify(error="Failed to queue blast"), 500
+        segments_def = []
+
+    def _run():
+        conn = get_conn()
+        try:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                if audience.lower() == "all":
+                    cur.execute(
+                        "SELECT phone_number FROM smb_subscribers WHERE tenant_slug=%s AND status='active'",
+                        (slug,),
+                    )
+                elif audience.lower().startswith("segment:"):
+                    seg_name = audience[8:].strip().upper()
+                    seg = next((s for s in segments_def if s["name"].upper() == seg_name), None)
+                    if not seg:
+                        logger.error("business_blast: unknown segment %s for tenant %s", seg_name, slug)
+                        return
+                    ph = ",".join(["%s"] * len(seg["answers"]))
+                    cur.execute(
+                        f"""SELECT DISTINCT s.phone_number
+                            FROM smb_subscribers s
+                            JOIN smb_preferences p ON p.subscriber_id = s.id
+                            WHERE s.tenant_slug=%s AND s.status='active'
+                              AND p.question_key=%s AND p.answer IN ({ph})""",
+                        (slug, seg["question_key"], *seg["answers"]),
+                    )
+                else:
+                    logger.error("business_blast: invalid audience=%s", audience)
+                    return
+
+                phones = [r["phone_number"] for r in cur.fetchall()]
+
+            if not phones:
+                logger.info("business_blast: no subscribers for audience=%s tenant=%s", audience, slug)
+                return
+
+            twilio = TwilioClient(
+                os.getenv("TWILIO_ACCOUNT_SID"),
+                os.getenv("TWILIO_AUTH_TOKEN"),
+            )
+            attempted = succeeded = 0
+            for phone in phones:
+                attempted += 1
+                try:
+                    twilio.messages.create(body=message, from_=from_number, to=phone)
+                    succeeded += 1
+                except Exception as e:
+                    logger.warning("business_blast: send to %s failed: %s", phone[-4:], e)
+                if len(phones) > 1:
+                    _time.sleep(0.35)
+
+            seg_label = audience if audience != "all" else None
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """INSERT INTO smb_blasts
+                               (tenant_slug, owner_message, body, attempted, succeeded, segment)
+                           VALUES (%s, %s, %s, %s, %s, %s)""",
+                        (slug, message[:500], message[:500], attempted, succeeded, seg_label),
+                    )
+            logger.info(
+                "business_blast done: tenant=%s audience=%s attempted=%d succeeded=%d",
+                slug, audience, attempted, succeeded,
+            )
+        except Exception:
+            logger.exception("business_blast: thread failed for tenant=%s", slug)
+        finally:
+            conn.close()
+
+    threading.Thread(target=_run, daemon=True).start()
+
+    audience_label = audience.replace("segment:", "").replace("all", "all subscribers").lower()
+    return jsonify(success=True, status=f"Blast queued for {audience_label}. You'll see it in Promos when it completes.")
 
 
 @api_bp.route("/api/business/blast/preview-count", methods=["POST"])
@@ -1553,8 +1621,7 @@ def business_blast_preview_count():
                 count = cur.fetchone()[0]
             elif audience.startswith("segment:"):
                 seg_name = audience[8:].strip().upper()
-                config_path = Path(__file__).parents[4] / "creator_config" / f"{slug}.json"
-                cfg = json.load(open(config_path))
+                cfg = json.loads((_BUSINESS_CONFIGS_DIR / f"{slug}.json").read_text())
                 seg = next((s for s in cfg.get("segments", []) if s["name"].upper() == seg_name), None)
                 if not seg:
                     return jsonify(error=f"Unknown segment: {seg_name}"), 400
