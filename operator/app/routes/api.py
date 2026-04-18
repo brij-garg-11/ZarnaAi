@@ -1688,3 +1688,85 @@ def change_password():
         return jsonify(error="Password change failed"), 500
     finally:
         conn.close()
+
+
+# ── Delete endpoints ───────────────────────────────────────────────────────────
+
+@api_bp.route("/api/blasts/<int:blast_id>", methods=["DELETE"])
+@login_required
+def delete_blast(blast_id):
+    """Delete a blast draft. Refuses to delete blasts that are currently sending."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status FROM blast_drafts WHERE id=%s", (blast_id,))
+            row = cur.fetchone()
+            if not row:
+                return jsonify(error="Blast not found"), 404
+            if row[0] == "sending":
+                return jsonify(error="Cannot delete a blast that is currently sending. Cancel it first."), 409
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM blast_recipients WHERE blast_draft_id=%s", (blast_id,))
+                cur.execute("DELETE FROM blast_drafts WHERE id=%s", (blast_id,))
+        return jsonify(success=True)
+    except Exception:
+        logger.exception("delete_blast: failed for id=%s", blast_id)
+        return jsonify(error="Failed to delete blast"), 500
+    finally:
+        conn.close()
+
+
+@api_bp.route("/api/shows/<int:show_id>", methods=["DELETE"])
+@login_required
+def delete_show(show_id):
+    """Delete a live show. Refuses to delete shows that are currently live."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status FROM live_shows WHERE id=%s", (show_id,))
+            row = cur.fetchone()
+            if not row:
+                return jsonify(error="Show not found"), 404
+            if row[0] == "live":
+                return jsonify(error="Cannot delete a show that is currently live. End it first."), 409
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM live_show_signups WHERE show_id=%s", (show_id,))
+                cur.execute("DELETE FROM live_shows WHERE id=%s", (show_id,))
+        return jsonify(success=True)
+    except Exception:
+        logger.exception("delete_show: failed for id=%s", show_id)
+        return jsonify(error="Failed to delete show"), 500
+    finally:
+        conn.close()
+
+
+@api_bp.route("/api/business/promos/<int:promo_id>", methods=["DELETE"])
+@login_required
+def delete_business_promo(promo_id):
+    """Delete a business promo blast, scoped to the logged-in tenant."""
+    slug = _get_tenant_slug()
+    if not slug:
+        return jsonify(error="No tenant slug configured for this account"), 400
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM smb_blasts WHERE id=%s AND tenant_slug=%s",
+                (promo_id, slug),
+            )
+            if not cur.fetchone():
+                return jsonify(error="Promo not found"), 404
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM smb_blasts WHERE id=%s AND tenant_slug=%s",
+                    (promo_id, slug),
+                )
+        return jsonify(success=True)
+    except Exception:
+        logger.exception("delete_business_promo: failed for id=%s tenant=%s", promo_id, slug)
+        return jsonify(error="Failed to delete promo"), 500
+    finally:
+        conn.close()
