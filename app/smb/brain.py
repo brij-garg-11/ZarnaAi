@@ -128,7 +128,7 @@ class SMBBrain:
             daemon=True,
         ).start()
 
-        reply = _conversational_reply(message_text, tenant, history=history)
+        reply = _conversational_reply(message_text, tenant, history=history, from_number=from_number)
 
         # Persist the bot's reply
         if reply:
@@ -188,10 +188,62 @@ def _load_winning_examples(tenant_slug: str) -> list[str]:
         conn.close()
 
 
+def _get_recent_blast_context(from_number: str, tenant) -> str:
+    """
+    Returns a prompt block describing any blasts or outreach invites sent to this
+    subscriber (or to the full list) in the last 48 hours, so the AI can connect
+    a reply like 'what time?' or 'tell me more' to the right promo.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return ""
+    lines = []
+    try:
+        with conn.cursor() as cur:
+            # Recent tenant-wide blasts (last 48 h) — all subscribers received these
+            cur.execute(
+                """SELECT body, sent_at FROM smb_blasts
+                   WHERE tenant_slug=%s AND sent_at >= NOW() - INTERVAL '48 hours'
+                   ORDER BY sent_at DESC LIMIT 3""",
+                (tenant.slug,),
+            )
+            for row in cur.fetchall():
+                body, sent_at = row[0], row[1]
+                lines.append(f'- Blast sent {sent_at.strftime("%a %-I:%M %p")}: "{body}"')
+
+            # Outreach invite sent directly to this subscriber (last 7 days)
+            cur.execute(
+                """SELECT offer, sent_at, claimed_at FROM smb_outreach_invites
+                   WHERE tenant_slug=%s AND phone_number=%s
+                     AND sent_at >= NOW() - INTERVAL '7 days'
+                   ORDER BY sent_at DESC LIMIT 1""",
+                (tenant.slug, from_number),
+            )
+            invite = cur.fetchone()
+            if invite:
+                claimed = "— they have NOT claimed it yet" if not invite[2] else "— they already claimed it"
+                lines.append(
+                    f'- Outreach invite ({invite[0].replace("_", " ")}) sent {invite[1].strftime("%a %-I:%M %p")} {claimed}'
+                )
+    except Exception:
+        logger.debug("SMB brain: could not load recent blast context for tenant=%s", tenant.slug)
+    finally:
+        conn.close()
+
+    if not lines:
+        return ""
+    block = "\n".join(lines)
+    return (
+        f"Recent messages WE sent to subscribers (use this to understand context "
+        f"if they're replying to one of these):\n{block}\n"
+    )
+
+
 def _conversational_reply(
     message_text: str,
     tenant: BusinessTenant,
     history: Optional[list] = None,
+    from_number: Optional[str] = None,
 ) -> Optional[str]:
     """
     Short friendly AI reply in the business's voice.
@@ -241,6 +293,12 @@ def _conversational_reply(
         for ex in examples:
             prompt += f'- "{ex}"\n'
         prompt += "\n"
+
+    # Inject recently sent blasts/invites so the AI can connect follow-up replies
+    if from_number:
+        blast_context = _get_recent_blast_context(from_number, tenant)
+        if blast_context:
+            prompt += blast_context + "\n"
 
     # Add recent conversation so the AI can follow the thread
     if history:
