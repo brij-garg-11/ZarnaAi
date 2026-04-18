@@ -1380,10 +1380,11 @@ def business_promos():
                 promos.append({
                     "id": f"invite-{r['batch_name']}",
                     "type": "outreach_invite",
-                    "message": f"Free ticket outreach invite ({r['offer'].replace('_', ' ')})",
+                    "message": f"Outreach invite — {r['offer'].replace('_', ' ')} offer",
                     "sent_body": None,
                     "attempted": r["attempted"],
-                    "succeeded": r["claimed"],
+                    "succeeded": r["attempted"],   # all were sent; claimed is tracked separately
+                    "claimed": r["claimed"],
                     "sent_at": r["sent_at"].isoformat() if r["sent_at"] else None,
                     "segment": r["batch_name"],
                 })
