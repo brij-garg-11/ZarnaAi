@@ -489,6 +489,49 @@ def api_end_show(show_id):
         return jsonify(success=False, error=str(e)), 500
 
 
+@api_bp.route("/api/shows/<int:show_id>/blast-init", methods=["POST"])
+@login_required
+def api_show_blast_init(show_id):
+    """
+    Create a fresh blast draft pre-targeted to a specific live show's signup list.
+    Returns { success, draft_id, show_name, signup_count } so the frontend can
+    navigate directly to the Blast Composer with the draft pre-loaded.
+    """
+    from ..queries import save_blast_draft, list_shows
+    user = current_user()
+    try:
+        shows = list_shows()
+        show = next((s for s in shows if s["id"] == show_id), None)
+        if not show:
+            return jsonify(success=False, error="Show not found."), 404
+
+        show_name    = show.get("name") or f"Show {show_id}"
+        signup_count = show.get("signup_count", 0)
+
+        draft_id = save_blast_draft(
+            name=f"Blast – {show_name}",
+            body="",
+            channel="slicktext",
+            audience_type="show",
+            audience_filter=str(show_id),
+            sample_pct=100,
+            media_url="",
+            link_url="",
+            tracked_link_slug="",
+            created_by=user["email"] if user else "",
+            draft_id=None,
+        )
+        return jsonify(
+            success=True,
+            draft_id=draft_id,
+            show_name=show_name,
+            signup_count=signup_count,
+        )
+    except Exception as e:
+        logger.exception("api_show_blast_init error show_id=%s", show_id)
+        return jsonify(success=False, error=str(e)), 500
+
+
 # ── Blasts (read helpers) ──────────────────────────────────────────────────────
 
 CADENCE_DAYS = {"superfan": 5, "engaged": 7, "lurker": 14, "dormant": 30}
