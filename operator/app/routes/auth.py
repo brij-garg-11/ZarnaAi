@@ -310,8 +310,45 @@ def google_callback():
             user = cur.fetchone()
 
         if not user:
+            # Check for a pending invite — auto-provision the account
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                cur.execute(
+                    """SELECT * FROM operator_invites
+                       WHERE email=%s AND accepted_at IS NULL
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (email,),
+                )
+                invite = cur.fetchone()
+
+            if not invite:
+                conn.close()
+                return redirect(f"{frontend_url}/login?error=not_authorized")
+
+            # Create the operator_users row from the invite
+            name = userinfo.get("name") or email.split("@")[0].title()
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """INSERT INTO operator_users
+                               (email, name, password_hash, is_owner, is_active,
+                                account_type, creator_slug, last_login_at)
+                           VALUES (%s, %s, '', FALSE, TRUE, %s, %s, NOW())
+                           ON CONFLICT (email) DO UPDATE
+                           SET is_active=TRUE, account_type=%s, creator_slug=%s,
+                               name=%s, last_login_at=NOW()
+                           RETURNING id""",
+                        (email, name, invite["account_type"], invite["creator_slug"],
+                         invite["account_type"], invite["creator_slug"], name),
+                    )
+                    new_id = cur.fetchone()[0]
+                    # Mark invite as accepted
+                    cur.execute(
+                        "UPDATE operator_invites SET accepted_at=NOW() WHERE id=%s",
+                        (invite["id"],),
+                    )
+            session["operator_user_id"] = new_id
             conn.close()
-            return redirect(f"{frontend_url}/login?error=not_authorized")
+            return redirect(f"{frontend_url}/dashboard")
 
         session["operator_user_id"] = user["id"]
         with conn:

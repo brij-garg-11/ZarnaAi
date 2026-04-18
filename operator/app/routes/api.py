@@ -2161,3 +2161,180 @@ def admin_current_project():
         viewing_as_account_type=account_type,
         is_super_admin=True,
     )
+
+
+# ── Team management ────────────────────────────────────────────────────────────
+
+@api_bp.route("/api/team/members")
+@login_required
+def team_members():
+    """
+    List all members and pending invites for the current project.
+    Super-admins see the project they're currently viewing.
+    Regular users see their own project.
+    """
+    user = current_user()
+    from flask import session
+    if user.get("is_super_admin"):
+        slug = session.get("viewing_as") or user.get("creator_slug")
+    else:
+        slug = user.get("creator_slug")
+
+    if not slug:
+        return jsonify(error="No project context"), 400
+
+    conn = get_conn()
+    try:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # Active members
+            cur.execute(
+                """SELECT id, email, name, account_type, is_super_admin,
+                          last_login_at, created_at
+                   FROM operator_users
+                   WHERE creator_slug=%s AND is_active=TRUE
+                   ORDER BY created_at""",
+                (slug,),
+            )
+            members = [
+                {
+                    "id": r["id"],
+                    "email": r["email"],
+                    "name": r["name"] or "",
+                    "account_type": r["account_type"],
+                    "is_super_admin": bool(r["is_super_admin"]),
+                    "last_login_at": r["last_login_at"].isoformat() if r["last_login_at"] else None,
+                    "status": "active",
+                }
+                for r in cur.fetchall()
+            ]
+
+            # Pending invites (not yet accepted)
+            cur.execute(
+                """SELECT id, email, account_type, created_at
+                   FROM operator_invites
+                   WHERE creator_slug=%s AND accepted_at IS NULL
+                   ORDER BY created_at""",
+                (slug,),
+            )
+            invites = [
+                {
+                    "id": f"invite-{r['id']}",
+                    "email": r["email"],
+                    "name": "",
+                    "account_type": r["account_type"],
+                    "is_super_admin": False,
+                    "last_login_at": None,
+                    "status": "pending",
+                }
+                for r in cur.fetchall()
+            ]
+
+        return jsonify(members=members + invites, slug=slug)
+    finally:
+        conn.close()
+
+
+@api_bp.route("/api/team/invite", methods=["POST"])
+@login_required
+def team_invite():
+    """
+    Invite someone to the current project by email.
+    On their first Google login the account is auto-provisioned.
+    """
+    user = current_user()
+    from flask import session
+    if user.get("is_super_admin"):
+        slug = session.get("viewing_as") or user.get("creator_slug")
+        account_type_for_project = session.get("viewing_as_account_type") or user.get("account_type") or "performer"
+    else:
+        slug = user.get("creator_slug")
+        account_type_for_project = user.get("account_type") or "performer"
+
+    if not slug:
+        return jsonify(error="No project context"), 400
+
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        return jsonify(error="Valid email is required"), 400
+
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                # Check if already an active member
+                cur.execute(
+                    "SELECT id FROM operator_users WHERE email=%s AND creator_slug=%s AND is_active=TRUE",
+                    (email, slug),
+                )
+                if cur.fetchone():
+                    return jsonify(error="This person is already a team member"), 409
+
+                # Upsert invite
+                cur.execute(
+                    """INSERT INTO operator_invites (email, creator_slug, account_type, invited_by)
+                       VALUES (%s, %s, %s, %s)
+                       ON CONFLICT (email, creator_slug) DO UPDATE
+                       SET accepted_at=NULL, invited_by=%s, created_at=NOW()
+                       RETURNING id""",
+                    (email, slug, account_type_for_project, user["id"], user["id"]),
+                )
+                invite_id = cur.fetchone()[0]
+
+        return jsonify(success=True, invite_id=invite_id, email=email)
+    except Exception:
+        logger.exception("team_invite: failed for slug=%s email=%s", slug, email)
+        return jsonify(error="Failed to create invite"), 500
+    finally:
+        conn.close()
+
+
+@api_bp.route("/api/team/invite/<int:invite_id>", methods=["DELETE"])
+@login_required
+def team_revoke_invite(invite_id):
+    """Revoke a pending invite."""
+    user = current_user()
+    from flask import session
+    slug = session.get("viewing_as") if user.get("is_super_admin") else user.get("creator_slug")
+
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM operator_invites WHERE id=%s AND creator_slug=%s",
+                    (invite_id, slug),
+                )
+                if cur.rowcount == 0:
+                    return jsonify(error="Invite not found"), 404
+        return jsonify(success=True)
+    finally:
+        conn.close()
+
+
+@api_bp.route("/api/team/members/<int:member_id>", methods=["DELETE"])
+@login_required
+def team_remove_member(member_id):
+    """Remove an active team member (deactivate their account)."""
+    user = current_user()
+    from flask import session
+    slug = session.get("viewing_as") if user.get("is_super_admin") else user.get("creator_slug")
+
+    if member_id == user["id"]:
+        return jsonify(error="You cannot remove yourself"), 400
+
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE operator_users SET is_active=FALSE
+                       WHERE id=%s AND creator_slug=%s AND is_super_admin=FALSE""",
+                    (member_id, slug),
+                )
+                if cur.rowcount == 0:
+                    return jsonify(error="Member not found or cannot be removed"), 404
+        return jsonify(success=True)
+    finally:
+        conn.close()
