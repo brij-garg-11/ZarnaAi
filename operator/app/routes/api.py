@@ -688,10 +688,14 @@ def api_blast_test(draft_id):
 @api_bp.route("/api/blasts/<int:draft_id>/send", methods=["POST"])
 @login_required
 def api_blast_send(draft_id):
-    """Send a blast immediately to its full audience."""
+    """
+    Send a blast immediately. Accepts optional fields in the JSON body to
+    auto-save the latest UI state (channel, body, audience, etc.) before
+    firing, so toggles like channel are never stale.
+    """
     from ..queries import get_blast_draft, save_blast_draft
     from ..blast_sender import execute_blast_async
-    from ..db import get_conn
+    user = current_user()
 
     draft = get_blast_draft(draft_id)
     if not draft:
@@ -699,9 +703,40 @@ def api_blast_send(draft_id):
     if draft["status"] in ("sent", "cancelled"):
         return jsonify(success=False, error="This blast has already been sent or cancelled."), 400
 
-    body = (draft.get("body") or "").strip()
+    # Accept any UI-state overrides in the request body and auto-save before sending
+    data = request.get_json(silent=True) or {}
+    body          = (data.get("body")           or draft.get("body")           or "").strip()
+    channel       = (data.get("channel")        or draft.get("channel")        or "twilio")
+    name          = (data.get("name")           or draft.get("name")           or "Untitled draft").strip()[:120]
+    audience_type = (data.get("audience_type")  or draft.get("audience_type")  or "all")
+    audience_filter = (data.get("audience_filter") or draft.get("audience_filter") or "").strip()[:200]
+    sample_pct    = int(data.get("sample_pct")  or draft.get("audience_sample_pct") or 100)
+    media_url     = (data.get("media_url")      or draft.get("media_url")      or "").strip()
+    link_url      = (data.get("link_url")       or draft.get("link_url")       or "").strip()
+    tracked_link_slug = (data.get("tracked_link_slug") or draft.get("tracked_link_slug") or "").strip()
+
+    if channel not in ("twilio", "slicktext"):
+        channel = "twilio"
+    if audience_type not in ("all", "tag", "location", "random", "show", "tier"):
+        audience_type = "all"
+
     if not body:
         return jsonify(success=False, error="Message body is required before sending."), 400
+
+    # Persist latest UI state so execute_blast reads fresh values from DB
+    if data:
+        try:
+            save_blast_draft(
+                name=name, body=body, channel=channel,
+                audience_type=audience_type, audience_filter=audience_filter,
+                sample_pct=sample_pct, media_url=media_url,
+                link_url=link_url, tracked_link_slug=tracked_link_slug,
+                created_by=user["email"] if user else "",
+                draft_id=draft_id,
+            )
+            logger.info("api_blast_send: auto-saved draft %s channel=%s before send", draft_id, channel)
+        except Exception as e:
+            logger.warning("api_blast_send: auto-save failed (non-fatal): %s", e)
 
     conn = get_conn()
     try:
@@ -718,6 +753,7 @@ def api_blast_send(draft_id):
         conn.close()
 
     execute_blast_async(draft_id)
+    logger.info("api_blast_send: queued draft %s via channel=%s", draft_id, channel)
     return jsonify(success=True, message="Blast queued — sending in background.", draft_id=draft_id)
 
 
