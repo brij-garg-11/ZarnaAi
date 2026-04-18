@@ -221,10 +221,11 @@ def inbox():
                     m.phone_number,
                     RIGHT(m.phone_number, 4) AS phone_last4,
                     MAX(m.created_at) AS last_message_at,
+                    MIN(m.created_at) AS first_message_at,
                     COUNT(*) FILTER (WHERE m.role = 'user') AS fan_messages,
                     COUNT(*) FILTER (WHERE m.role = 'assistant') AS bot_messages,
                     (
-                        SELECT body FROM messages m2
+                        SELECT text FROM messages m2
                         WHERE m2.phone_number = m.phone_number
                         ORDER BY m2.created_at DESC LIMIT 1
                     ) AS last_body,
@@ -234,10 +235,12 @@ def inbox():
                         ORDER BY m2.created_at DESC LIMIT 1
                     ) AS last_role,
                     c.fan_tier,
-                    c.fan_tags
+                    c.fan_tags,
+                    c.fan_location,
+                    LEFT(c.fan_memory, 200) AS fan_memory_preview
                 FROM messages m
                 LEFT JOIN contacts c ON c.phone_number = m.phone_number
-                GROUP BY m.phone_number, c.fan_tier, c.fan_tags
+                GROUP BY m.phone_number, c.fan_tier, c.fan_tags, c.fan_location, c.fan_memory
                 ORDER BY last_message_at DESC
                 LIMIT %s OFFSET %s
             """, (per_page, offset))
@@ -253,12 +256,15 @@ def inbox():
         conversations.append({
             "phone_last4": r["phone_last4"],
             "last_message_at": r["last_message_at"].isoformat() if r["last_message_at"] else None,
+            "first_message_at": r["first_message_at"].isoformat() if r["first_message_at"] else None,
             "last_body": (r["last_body"] or "")[:120],
             "last_role": r["last_role"],
             "fan_messages": r["fan_messages"],
             "bot_messages": r["bot_messages"],
             "fan_tier": r["fan_tier"],
             "fan_tags": tags[:5],
+            "fan_location": r["fan_location"] or "",
+            "fan_memory_preview": (r["fan_memory_preview"] or "")[:200],
         })
 
     return jsonify(
@@ -295,7 +301,7 @@ def inbox_thread(phone_last4):
             phone = row["phone_number"]
 
             cur.execute("""
-                SELECT role, body, created_at, intent
+                SELECT role, text AS body, created_at, intent, tone_mode, sell_variant
                 FROM messages
                 WHERE phone_number = %s
                 ORDER BY created_at ASC
@@ -306,12 +312,13 @@ def inbox_thread(phone_last4):
                     "body": r["body"],
                     "created_at": r["created_at"].isoformat(),
                     "intent": r.get("intent"),
+                    "tone_mode": r.get("tone_mode"),
                 }
                 for r in cur.fetchall()
             ]
 
             cur.execute("""
-                SELECT fan_tier, fan_tags, fan_memory, created_at
+                SELECT fan_tier, fan_tags, fan_location, fan_memory, fan_score, created_at
                 FROM contacts WHERE phone_number = %s
             """, (phone,))
             fan_row = cur.fetchone()
@@ -320,7 +327,9 @@ def inbox_thread(phone_last4):
                 fan = {
                     "fan_tier": fan_row["fan_tier"],
                     "fan_tags": fan_row["fan_tags"] or [],
-                    "fan_memory": fan_row["fan_memory"],
+                    "fan_location": fan_row["fan_location"] or "",
+                    "fan_memory": fan_row["fan_memory"] or "",
+                    "fan_score": fan_row["fan_score"],
                     "joined_at": fan_row["created_at"].isoformat() if fan_row["created_at"] else None,
                 }
         conn.close()
@@ -833,24 +842,25 @@ def fan_of_the_week():
             for days_back in (7, 30, 90):
                 cur.execute("""
                     SELECT
-                        m.body,
+                        m.text  AS body,
                         m.created_at,
                         RIGHT(m.phone_number, 4) AS phone_last4,
                         c.fan_tier,
                         c.fan_tags,
+                        c.fan_location,
                         c.fan_memory
                     FROM messages m
                     LEFT JOIN contacts c ON c.phone_number = m.phone_number
                     WHERE
                         m.role = 'user'
                         AND m.created_at >= NOW() - INTERVAL '%s days'
-                        AND LENGTH(m.body) > 30
-                        AND m.body NOT ILIKE 'stop%%'
-                        AND m.body NOT ILIKE 'yes%%'
-                        AND m.body NOT ILIKE 'no%%'
-                        AND m.body NOT ILIKE 'ok%%'
-                        AND m.intent NOT IN ('STOP', 'OPTOUT')
-                    ORDER BY LENGTH(m.body) DESC, RANDOM()
+                        AND LENGTH(m.text) > 30
+                        AND m.text NOT ILIKE 'stop%%'
+                        AND m.text NOT ILIKE 'yes%%'
+                        AND m.text NOT ILIKE 'no%%'
+                        AND m.text NOT ILIKE 'ok%%'
+                        AND (m.intent IS NULL OR m.intent NOT IN ('STOP', 'OPTOUT'))
+                    ORDER BY LENGTH(m.text) DESC, RANDOM()
                     LIMIT 1
                 """, (days_back,))
                 row = cur.fetchone()
@@ -872,6 +882,9 @@ def fan_of_the_week():
         created_at=row["created_at"].isoformat(),
         fan_tier=row["fan_tier"],
         fan_tags=tags[:3],
+        fan_location=row["fan_location"] or "",
+        fan_memory=row["fan_memory"] or "",
+        days_back=days_back,
     )
 
 
