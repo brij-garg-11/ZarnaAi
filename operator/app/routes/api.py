@@ -1775,6 +1775,138 @@ def delete_show(show_id):
         conn.close()
 
 
+@api_bp.route("/api/business/promos/<promo_id>/stats")
+@login_required
+def business_promo_stats(promo_id):
+    """
+    Detailed stats for a single promo.
+    promo_id is a string: "blast-8" or "invite-wscc-blast-2"
+    """
+    slug = _get_tenant_slug()
+    if not slug:
+        return jsonify(error="No tenant slug configured for this account"), 400
+
+    conn = get_conn()
+    try:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+
+            if promo_id.startswith("blast-"):
+                blast_id = int(promo_id[6:])
+                cur.execute(
+                    """SELECT owner_message, body, attempted, succeeded, sent_at, segment
+                       FROM smb_blasts WHERE id=%s AND tenant_slug=%s""",
+                    (blast_id, slug),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return jsonify(error="Promo not found"), 404
+
+                attempted = row["attempted"] or 0
+                succeeded = row["succeeded"] or 0
+                failed = attempted - succeeded
+
+                # Replies from any subscriber after this blast was sent
+                cur.execute(
+                    """SELECT COUNT(DISTINCT phone_number) AS cnt
+                       FROM smb_messages
+                       WHERE tenant_slug=%s AND role='user' AND created_at > %s""",
+                    (slug, row["sent_at"]),
+                )
+                replies = cur.fetchone()["cnt"]
+                reply_rate = round(replies / succeeded * 100, 1) if succeeded else 0
+
+                # Sample reply messages
+                cur.execute(
+                    """SELECT body FROM smb_messages
+                       WHERE tenant_slug=%s AND role='user' AND created_at > %s
+                       ORDER BY created_at ASC LIMIT 5""",
+                    (slug, row["sent_at"]),
+                )
+                sample_replies = [r["body"] for r in cur.fetchall()]
+
+                return jsonify(
+                    type="blast",
+                    message=row["owner_message"] or row["body"],
+                    sent_at=row["sent_at"].isoformat() if row["sent_at"] else None,
+                    segment=row["segment"],
+                    attempted=attempted,
+                    succeeded=succeeded,
+                    failed=failed,
+                    delivery_rate=round(succeeded / attempted * 100, 1) if attempted else 0,
+                    replies=replies,
+                    reply_rate=reply_rate,
+                    sample_replies=sample_replies,
+                )
+
+            elif promo_id.startswith("invite-"):
+                batch_name = promo_id[7:]
+                cur.execute(
+                    """SELECT
+                           COUNT(*) AS total_sent,
+                           COUNT(claimed_at) AS claimed,
+                           MIN(sent_at) AS sent_at
+                       FROM smb_outreach_invites
+                       WHERE tenant_slug=%s AND batch_name=%s""",
+                    (slug, batch_name),
+                )
+                row = cur.fetchone()
+                if not row or not row["total_sent"]:
+                    return jsonify(error="Promo not found"), 404
+
+                total_sent = row["total_sent"]
+                claimed = row["claimed"]
+                sent_at = row["sent_at"]
+
+                # Replies from invite recipients after the campaign
+                cur.execute(
+                    """SELECT COUNT(DISTINCT m.phone_number) AS cnt
+                       FROM smb_outreach_invites oi
+                       JOIN smb_messages m
+                         ON m.phone_number = oi.phone_number
+                        AND m.tenant_slug = oi.tenant_slug
+                        AND m.created_at > oi.sent_at
+                        AND m.role = 'user'
+                       WHERE oi.tenant_slug=%s AND oi.batch_name=%s""",
+                    (slug, batch_name),
+                )
+                replies = cur.fetchone()["cnt"]
+
+                # Sample what the new subscribers said
+                cur.execute(
+                    """SELECT m.body FROM smb_outreach_invites oi
+                       JOIN smb_messages m
+                         ON m.phone_number = oi.phone_number
+                        AND m.tenant_slug = oi.tenant_slug
+                        AND m.created_at > oi.sent_at
+                        AND m.role = 'user'
+                       WHERE oi.tenant_slug=%s AND oi.batch_name=%s
+                       ORDER BY m.created_at ASC LIMIT 5""",
+                    (slug, batch_name),
+                )
+                sample_replies = [r["body"] for r in cur.fetchall()]
+
+                return jsonify(
+                    type="outreach_invite",
+                    message=f"Outreach invite campaign — {batch_name}",
+                    sent_at=sent_at.isoformat() if sent_at else None,
+                    segment=batch_name,
+                    attempted=total_sent,
+                    succeeded=total_sent,
+                    claimed=claimed,
+                    claim_rate=round(claimed / total_sent * 100, 1) if total_sent else 0,
+                    replies=replies,
+                    reply_rate=round(replies / total_sent * 100, 1) if total_sent else 0,
+                    sample_replies=sample_replies,
+                )
+
+            else:
+                return jsonify(error="Invalid promo ID format"), 400
+
+    finally:
+        conn.close()
+
+
 @api_bp.route("/api/business/promos/<int:promo_id>", methods=["DELETE"])
 @login_required
 def delete_business_promo(promo_id):
