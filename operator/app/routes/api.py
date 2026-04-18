@@ -1023,4 +1023,368 @@ def user_info():
         name=user["name"],
         is_owner=user["is_owner"],
         account_type=user.get("account_type") or "performer",
+        creator_slug=user.get("creator_slug") or "",
     )
+
+
+# ── Business (multi-tenant SMB) ────────────────────────────────────────────────
+
+def _get_tenant_slug() -> str | None:
+    """Returns the tenant_slug for the current logged-in business user."""
+    user = current_user()
+    return user.get("creator_slug") if user else None
+
+
+@api_bp.route("/api/business/stats")
+@login_required
+def business_stats():
+    """Dashboard stats for a business account from smb_* tables."""
+    slug = _get_tenant_slug()
+    if not slug:
+        return jsonify(error="No tenant slug configured for this account"), 400
+
+    conn = get_conn()
+    try:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("SELECT COUNT(*) FROM smb_subscribers WHERE tenant_slug=%s", (slug,))
+            total_subscribers = cur.fetchone()[0]
+
+            cur.execute(
+                "SELECT COUNT(*) FROM smb_subscribers WHERE tenant_slug=%s AND status='active'",
+                (slug,),
+            )
+            active_subscribers = cur.fetchone()[0]
+
+            cur.execute("SELECT COUNT(*) FROM smb_messages WHERE tenant_slug=%s", (slug,))
+            total_messages = cur.fetchone()[0]
+
+            cur.execute(
+                "SELECT COUNT(*) FROM smb_messages WHERE tenant_slug=%s AND role='user'",
+                (slug,),
+            )
+            inbound_messages = cur.fetchone()[0]
+
+            cur.execute(
+                """SELECT COUNT(*) FROM smb_messages
+                   WHERE tenant_slug=%s AND created_at >= NOW() - INTERVAL '7 days'""",
+                (slug,),
+            )
+            messages_week = cur.fetchone()[0]
+
+            cur.execute("SELECT COUNT(*) FROM smb_blasts WHERE tenant_slug=%s", (slug,))
+            total_blasts = cur.fetchone()[0]
+
+            cur.execute(
+                """SELECT DATE(created_at) AS day, COUNT(*) AS cnt
+                   FROM smb_messages
+                   WHERE tenant_slug=%s AND created_at >= NOW() - INTERVAL '7 days'
+                   GROUP BY day ORDER BY day""",
+                (slug,),
+            )
+            messages_by_day = [
+                {"date": str(r["day"]), "count": r["cnt"]} for r in cur.fetchall()
+            ]
+
+        return jsonify(
+            total_subscribers=total_subscribers,
+            active_subscribers=active_subscribers,
+            total_messages=total_messages,
+            inbound_messages=inbound_messages,
+            messages_week=messages_week,
+            total_blasts=total_blasts,
+            messages_by_day=messages_by_day,
+        )
+    finally:
+        conn.close()
+
+
+@api_bp.route("/api/business/inbox")
+@login_required
+def business_inbox():
+    """Latest conversations for the business tenant, grouped by subscriber."""
+    slug = _get_tenant_slug()
+    if not slug:
+        return jsonify(error="No tenant slug configured for this account"), 400
+
+    conn = get_conn()
+    try:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """SELECT DISTINCT ON (phone_number)
+                       phone_number, body AS last_message, role AS last_role, created_at
+                   FROM smb_messages
+                   WHERE tenant_slug=%s
+                   ORDER BY phone_number, created_at DESC""",
+                (slug,),
+            )
+            latest_rows = cur.fetchall()
+
+            threads = []
+            for r in latest_rows:
+                phone = r["phone_number"]
+
+                cur.execute(
+                    """SELECT status, created_at AS joined_at
+                       FROM smb_subscribers
+                       WHERE tenant_slug=%s AND phone_number=%s""",
+                    (slug, phone),
+                )
+                sub = cur.fetchone()
+
+                cur.execute(
+                    "SELECT COUNT(*) FROM smb_messages WHERE tenant_slug=%s AND phone_number=%s",
+                    (slug, phone),
+                )
+                msg_count = cur.fetchone()[0]
+
+                cur.execute(
+                    "SELECT MIN(created_at) FROM smb_messages WHERE tenant_slug=%s AND phone_number=%s",
+                    (slug, phone),
+                )
+                first_msg_at = cur.fetchone()[0]
+
+                threads.append({
+                    "phone_last4": phone[-4:],
+                    "phone_number": phone,
+                    "last_message": r["last_message"] or "",
+                    "last_role": r["last_role"],
+                    "last_message_at": r["created_at"].isoformat(),
+                    "message_count": msg_count,
+                    "first_message_at": first_msg_at.isoformat() if first_msg_at else None,
+                    "status": sub["status"] if sub else "unknown",
+                    "joined_at": sub["joined_at"].isoformat() if sub and sub["joined_at"] else None,
+                })
+
+            threads.sort(key=lambda x: x["last_message_at"], reverse=True)
+            return jsonify(threads=threads)
+    finally:
+        conn.close()
+
+
+@api_bp.route("/api/business/inbox/<phone_last4>/thread")
+@login_required
+def business_inbox_thread(phone_last4):
+    """Full conversation thread for a business subscriber."""
+    slug = _get_tenant_slug()
+    if not slug:
+        return jsonify(error="No tenant slug configured for this account"), 400
+
+    conn = get_conn()
+    try:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """SELECT phone_number FROM smb_subscribers
+                   WHERE tenant_slug=%s AND phone_number LIKE %s LIMIT 1""",
+                (slug, f"%{phone_last4}"),
+            )
+            row = cur.fetchone()
+            if not row:
+                cur.execute(
+                    """SELECT DISTINCT phone_number FROM smb_messages
+                       WHERE tenant_slug=%s AND phone_number LIKE %s LIMIT 1""",
+                    (slug, f"%{phone_last4}"),
+                )
+                row = cur.fetchone()
+            if not row:
+                return jsonify(error="Subscriber not found"), 404
+            phone = row["phone_number"]
+
+            cur.execute(
+                """SELECT body, role, created_at FROM smb_messages
+                   WHERE tenant_slug=%s AND phone_number=%s
+                   ORDER BY created_at ASC""",
+                (slug, phone),
+            )
+            messages = [
+                {"role": r["role"], "text": r["body"], "created_at": r["created_at"].isoformat()}
+                for r in cur.fetchall()
+            ]
+
+            cur.execute(
+                """SELECT status, onboarding_step, created_at AS joined_at
+                   FROM smb_subscribers
+                   WHERE tenant_slug=%s AND phone_number=%s""",
+                (slug, phone),
+            )
+            sub = cur.fetchone()
+
+            prefs = {}
+            if sub:
+                cur.execute(
+                    """SELECT p.question_key, p.answer
+                       FROM smb_preferences p
+                       JOIN smb_subscribers s ON s.id = p.subscriber_id
+                       WHERE s.tenant_slug=%s AND s.phone_number=%s""",
+                    (slug, phone),
+                )
+                prefs = {r["question_key"]: r["answer"] for r in cur.fetchall()}
+
+            profile = {
+                "phone_number": phone,
+                "phone_last4": phone[-4:],
+                "status": sub["status"] if sub else "unknown",
+                "joined_at": sub["joined_at"].isoformat() if sub and sub["joined_at"] else None,
+                "preferences": prefs,
+            }
+
+            return jsonify(messages=messages, profile=profile)
+    finally:
+        conn.close()
+
+
+@api_bp.route("/api/business/inbox/<phone_last4>/send", methods=["POST"])
+@login_required
+def business_inbox_send(phone_last4):
+    """Send a manual message to a business subscriber via the tenant's Twilio number."""
+    slug = _get_tenant_slug()
+    if not slug:
+        return jsonify(error="No tenant slug configured for this account"), 400
+
+    data = request.get_json(silent=True) or {}
+    text = (data.get("message") or "").strip()
+    if not text:
+        return jsonify(error="Message text is required"), 400
+
+    conn = get_conn()
+    try:
+        import os, psycopg2.extras
+        from twilio.rest import Client as TwilioClient
+
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """SELECT phone_number FROM smb_subscribers
+                   WHERE tenant_slug=%s AND phone_number LIKE %s LIMIT 1""",
+                (slug, f"%{phone_last4}"),
+            )
+            row = cur.fetchone()
+            if not row:
+                cur.execute(
+                    """SELECT DISTINCT phone_number FROM smb_messages
+                       WHERE tenant_slug=%s AND phone_number LIKE %s LIMIT 1""",
+                    (slug, f"%{phone_last4}"),
+                )
+                row = cur.fetchone()
+            if not row:
+                return jsonify(error="Subscriber not found"), 404
+            phone = row["phone_number"]
+
+        slug_upper = slug.upper()
+        from_number = os.getenv(f"SMB_{slug_upper}_SMS_NUMBER")
+        if not from_number:
+            return jsonify(error="SMS number not configured for this account"), 500
+
+        twilio_client = TwilioClient(
+            os.getenv("TWILIO_ACCOUNT_SID"),
+            os.getenv("TWILIO_AUTH_TOKEN"),
+        )
+        msg = twilio_client.messages.create(body=text, from_=from_number, to=phone)
+
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO smb_messages (tenant_slug, phone_number, role, body, created_at)
+                       VALUES (%s, %s, 'assistant', %s, NOW())""",
+                    (slug, phone, text),
+                )
+
+        return jsonify(success=True, sid=msg.sid)
+    except Exception:
+        logger.exception("business_inbox_send: failed tenant=%s phone=%s", slug, phone_last4)
+        return jsonify(error="Failed to send message"), 500
+    finally:
+        conn.close()
+
+
+@api_bp.route("/api/business/promos")
+@login_required
+def business_promos():
+    """List past promotional blasts for this business tenant."""
+    slug = _get_tenant_slug()
+    if not slug:
+        return jsonify(error="No tenant slug configured for this account"), 400
+
+    conn = get_conn()
+    try:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """SELECT id, owner_message, body, attempted, succeeded, sent_at, segment
+                   FROM smb_blasts
+                   WHERE tenant_slug=%s
+                   ORDER BY sent_at DESC LIMIT 50""",
+                (slug,),
+            )
+            promos = [
+                {
+                    "id": r["id"],
+                    "message": r["owner_message"] or r["body"],
+                    "sent_body": r["body"],
+                    "attempted": r["attempted"],
+                    "succeeded": r["succeeded"],
+                    "sent_at": r["sent_at"].isoformat() if r["sent_at"] else None,
+                    "segment": r["segment"],
+                }
+                for r in cur.fetchall()
+            ]
+        return jsonify(promos=promos)
+    finally:
+        conn.close()
+
+
+@api_bp.route("/api/business/customer-of-week")
+@login_required
+def business_customer_of_week():
+    """The most engaged subscriber in the last 30 days for this business tenant."""
+    slug = _get_tenant_slug()
+    if not slug:
+        return jsonify(error="No tenant slug configured for this account"), 400
+
+    conn = get_conn()
+    try:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """SELECT
+                       phone_number,
+                       COUNT(*) FILTER (WHERE role='user') AS inbound_count,
+                       MAX(created_at) AS last_seen,
+                       MIN(created_at) AS first_seen
+                   FROM smb_messages
+                   WHERE tenant_slug=%s AND created_at >= NOW() - INTERVAL '30 days'
+                   GROUP BY phone_number
+                   ORDER BY inbound_count DESC LIMIT 1""",
+                (slug,),
+            )
+            best = cur.fetchone()
+            if not best:
+                return jsonify(phone_last4=None, best_message=None, inbound_count=0)
+
+            phone = best["phone_number"]
+
+            cur.execute(
+                """SELECT body FROM smb_messages
+                   WHERE tenant_slug=%s AND phone_number=%s AND role='user'
+                   ORDER BY body_length_chars DESC NULLS LAST LIMIT 1""",
+                (slug, phone),
+            )
+            msg_row = cur.fetchone()
+
+            cur.execute(
+                "SELECT status, created_at FROM smb_subscribers WHERE tenant_slug=%s AND phone_number=%s",
+                (slug, phone),
+            )
+            sub = cur.fetchone()
+
+            return jsonify(
+                phone_last4=phone[-4:],
+                best_message=msg_row["body"] if msg_row else "",
+                inbound_count=best["inbound_count"],
+                first_seen=best["first_seen"].isoformat() if best["first_seen"] else None,
+                last_seen=best["last_seen"].isoformat() if best["last_seen"] else None,
+                status=sub["status"] if sub else "active",
+            )
+    finally:
+        conn.close()

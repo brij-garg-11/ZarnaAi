@@ -38,7 +38,7 @@ def current_user() -> dict | None:
         import psycopg2.extras
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute(
-                "SELECT id, email, name, is_owner, is_active, account_type FROM operator_users WHERE id=%s",
+                "SELECT id, email, name, is_owner, is_active, account_type, creator_slug FROM operator_users WHERE id=%s",
                 (uid,),
             )
             row = cur.fetchone()
@@ -267,5 +267,6 @@ def api_me():
             "name": user["name"],
             "is_owner": user["is_owner"],
             "account_type": user.get("account_type") or "performer",
+            "creator_slug": user.get("creator_slug") or "",
         },
     )
