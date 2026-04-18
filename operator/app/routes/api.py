@@ -351,7 +351,6 @@ def api_inbox_send(phone_last4):
     Body: { "text": "Hey, great to hear from you!" }
     Returns: { success, message_id, sent_at }
     """
-    import os
     from datetime import datetime, timezone
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
@@ -383,19 +382,15 @@ def api_inbox_send(phone_last4):
 
     phone = row[0]
 
-    # Send via Twilio
+    # Send via SlickText (all outbound messages use SlickText until Twilio inbound is live)
     try:
-        from twilio.rest import Client
-        account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
-        auth_token  = os.getenv("TWILIO_AUTH_TOKEN", "")
-        from_number = os.getenv("TWILIO_PHONE_NUMBER") or os.getenv("TWILIO_FROM_NUMBER", "")
-        if not all([account_sid, auth_token, from_number]):
-            return jsonify(success=False, error="Twilio credentials not configured."), 500
-        client = Client(account_sid, auth_token)
-        msg = client.messages.create(body=text, from_=from_number, to=phone)
-        logger.info("api_inbox_send: sent to ***%s sid=%s", phone_last4, msg.sid)
+        from ..blast_sender import _send_one
+        ok = _send_one(phone, text, channel="slicktext")
+        if not ok:
+            return jsonify(success=False, error="SlickText send failed — check credentials."), 500
+        logger.info("api_inbox_send: sent to ***%s via slicktext", phone_last4)
     except Exception as e:
-        logger.exception("api_inbox_send: Twilio send failed for ***%s", phone_last4)
+        logger.exception("api_inbox_send: send failed for ***%s", phone_last4)
         return jsonify(success=False, error=f"Send failed: {e}"), 500
 
     # Log to messages table so it shows in thread history
