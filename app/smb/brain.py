@@ -60,6 +60,9 @@ class SMBBrain:
             )
             return None
 
+        # Apply any DB overrides saved via the operator dashboard (editable bot config)
+        tenant = _apply_bot_config_overrides(tenant)
+
         # --- STOP / opt-out ---
         # Twilio handles STOP natively (suppresses future sends) but we also
         # record it in our DB so the digest can surface recent opt-outs.
@@ -184,6 +187,47 @@ def _load_winning_examples(tenant_slug: str) -> list[str]:
     except Exception:
         logger.debug("SMB brain: could not load winning examples for %s (table may not exist yet)", tenant_slug)
         return []
+    finally:
+        conn.close()
+
+
+def _apply_bot_config_overrides(tenant: BusinessTenant) -> BusinessTenant:
+    """
+    Fetch any DB-saved edits from smb_bot_config and apply them to the tenant
+    object so the bot uses the latest operator-configured values.
+    Falls back to the original tenant silently on any error.
+    """
+    import dataclasses
+    conn = get_db_connection()
+    if not conn:
+        return tenant
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT config_json FROM smb_bot_config WHERE tenant_slug=%s",
+                (tenant.slug,),
+            )
+            row = cur.fetchone()
+        if not row or not row[0]:
+            return tenant
+        overrides = row[0]
+        # Build a shallow copy with overridden fields
+        field_map = {
+            "tone": "tone",
+            "welcome_message": "welcome_message",
+            "signup_question": "signup_question",
+            "outreach_invite_message": "outreach_invite_message",
+        }
+        updates = {}
+        for db_key, tenant_attr in field_map.items():
+            if db_key in overrides and overrides[db_key]:
+                updates[tenant_attr] = overrides[db_key]
+        if updates:
+            return dataclasses.replace(tenant, **updates)
+        return tenant
+    except Exception:
+        logger.debug("SMB brain: could not apply bot config overrides for tenant=%s", tenant.slug)
+        return tenant
     finally:
         conn.close()
 

@@ -1002,27 +1002,47 @@ def bot_data():
         return jsonify(error="Config not found"), 404
 
     if account_type == "business":
-        # Business bot config — fields relevant to a venue/club
-        tracked_links = cfg.get("tracked_links", {})
+        # Merge DB overrides on top of file defaults so edits survive deploys
+        import psycopg2.extras
+        db_overrides = {}
+        try:
+            dbc = get_conn()
+            with dbc.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                cur.execute(
+                    "SELECT config_json FROM smb_bot_config WHERE tenant_slug=%s",
+                    (slug,),
+                )
+                row = cur.fetchone()
+                if row:
+                    db_overrides = row["config_json"] or {}
+            dbc.close()
+        except Exception:
+            logger.exception("api: failed to load smb_bot_config for slug=%s", slug)
+
+        def _get(key, default=""):
+            return db_overrides.get(key, cfg.get(key, default))
+
         knowledge = cfg.get("knowledge_base", {})
+        tracked_links = db_overrides.get("tracked_links", cfg.get("tracked_links", {}))
+
         return jsonify(
             display_name=cfg.get("display_name", ""),
             business_type=cfg.get("business_type", ""),
             location=cfg.get("location", ""),
-            tone=cfg.get("tone", ""),
-            welcome_message=cfg.get("welcome_message", ""),
-            signup_question=cfg.get("signup_question", ""),
-            outreach_invite_message=cfg.get("outreach_invite_message", ""),
+            tone=_get("tone"),
+            welcome_message=_get("welcome_message"),
+            signup_question=_get("signup_question"),
+            outreach_invite_message=_get("outreach_invite_message"),
             tracked_links=tracked_links,
-            address=knowledge.get("address", ""),
-            hours=knowledge.get("hours", ""),
-            website=cfg.get("website", ""),
+            address=db_overrides.get("address", knowledge.get("address", "")),
+            hours=db_overrides.get("hours", knowledge.get("hours", "")),
+            website=_get("website"),
             logo_url=cfg.get("logo_url", ""),
             edits_used=0,
             edits_limit=20,
         )
 
-    # Performer bot config
+    # ── Performer bot config ──
     links = cfg.get("links", {})
     return jsonify(
         name=cfg.get("name", ""),
@@ -1039,6 +1059,56 @@ def bot_data():
         edits_used=0,
         edits_limit=20,
     )
+
+
+@api_bp.route("/api/bot-data", methods=["POST"])
+@login_required
+def save_bot_data():
+    """
+    Save editable bot config fields for a business account.
+    Persists to smb_bot_config (DB) so changes survive Railway deploys.
+    Allowed fields: tone, welcome_message, signup_question,
+                    outreach_invite_message, address, hours, website, tracked_links
+    """
+    user = current_user()
+    if (user.get("account_type") or "performer") != "business":
+        return jsonify(error="Only business accounts can edit bot config via this endpoint"), 403
+
+    slug = user.get("creator_slug") or ""
+    if not slug:
+        return jsonify(error="No tenant slug configured for this account"), 400
+
+    data = request.get_json(silent=True) or {}
+
+    allowed = {
+        "tone", "welcome_message", "signup_question",
+        "outreach_invite_message", "address", "hours",
+        "website", "tracked_links",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+
+    if not updates:
+        return jsonify(error="No valid fields provided"), 400
+
+    import json, psycopg2.extras
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO smb_bot_config (tenant_slug, config_json, updated_at)
+                       VALUES (%s, %s::jsonb, NOW())
+                       ON CONFLICT (tenant_slug) DO UPDATE
+                       SET config_json = smb_bot_config.config_json || %s::jsonb,
+                           updated_at  = NOW()""",
+                    (slug, json.dumps(updates), json.dumps(updates)),
+                )
+        return jsonify(success=True)
+    except Exception:
+        logger.exception("save_bot_data: failed for slug=%s", slug)
+        return jsonify(error="Failed to save config"), 500
+    finally:
+        conn.close()
 
 
 # ── User ──────────────────────────────────────────────────────────────────────
