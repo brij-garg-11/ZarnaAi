@@ -1334,6 +1334,73 @@ def business_promos():
         conn.close()
 
 
+@api_bp.route("/api/business/customers")
+@login_required
+def business_customers():
+    """Subscriber tier/segment breakdown for the business customers page."""
+    slug = _get_tenant_slug()
+    if not slug:
+        return jsonify(error="No tenant slug configured for this account"), 400
+
+    conn = get_conn()
+    try:
+        import psycopg2.extras, json
+        from pathlib import Path
+
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM smb_subscribers WHERE tenant_slug=%s AND status='active'",
+                (slug,),
+            )
+            total_active = cur.fetchone()[0]
+
+            # Load segment definitions from creator config
+            config_path = Path(__file__).parents[4] / "creator_config" / f"{slug}.json"
+            try:
+                with open(config_path) as f:
+                    cfg = json.load(f)
+                segments_def = cfg.get("segments", [])
+            except Exception:
+                segments_def = []
+
+            # Count subscribers per segment
+            tiers = []
+            for seg in segments_def:
+                name = seg.get("name", "")
+                description = seg.get("description", "")
+                question_key = seg.get("question_key", "")
+                answers = seg.get("answers", [])
+                if not question_key or not answers:
+                    continue
+                placeholders = ",".join(["%s"] * len(answers))
+                cur.execute(
+                    f"""SELECT COUNT(DISTINCT s.id)
+                        FROM smb_subscribers s
+                        JOIN smb_preferences p ON p.subscriber_id = s.id
+                        WHERE s.tenant_slug=%s
+                          AND p.question_key=%s
+                          AND p.answer IN ({placeholders})""",
+                    (slug, question_key, *answers),
+                )
+                count = cur.fetchone()[0]
+                tiers.append({
+                    "name": name,
+                    "description": description,
+                    "count": count,
+                })
+
+            # Always include an "All Subscribers" tier
+            tiers.insert(0, {
+                "name": "ALL",
+                "description": "All active subscribers",
+                "count": total_active,
+            })
+
+        return jsonify(tiers=tiers, total_subscribers=total_active)
+    finally:
+        conn.close()
+
+
 @api_bp.route("/api/business/customer-of-week")
 @login_required
 def business_customer_of_week():
