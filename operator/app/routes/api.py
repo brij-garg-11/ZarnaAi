@@ -2381,3 +2381,141 @@ def team_remove_member(member_id):
         return jsonify(success=True)
     finally:
         conn.close()
+
+
+# ── Onboarding ─────────────────────────────────────────────────────────────────
+
+@api_bp.route("/api/onboarding/status")
+@login_required
+def api_onboarding_status():
+    """
+    Returns whether the current user has completed bot onboarding.
+    Lovable calls this on load to decide whether to show the wizard
+    or redirect straight to the dashboard.
+
+    Response:
+      { "completed": true,  "account_type": "performer", "creator_slug": "zarna" }
+      { "completed": false, "account_type": null,        "creator_slug": null }
+    """
+    user = current_user()
+    completed = bool(user.get("creator_slug") and user.get("account_type"))
+    return jsonify(
+        completed=completed,
+        account_type=user.get("account_type"),
+        creator_slug=user.get("creator_slug"),
+    )
+
+
+@api_bp.route("/api/onboarding/submit", methods=["POST"])
+@login_required
+def api_onboarding_submit():
+    """
+    Save the bot creation wizard data. Called on Step 4 of onboarding.
+
+    Accepts:
+    {
+      "account_type":  "performer" | "business",
+      "display_name":  "Zarna Garg",
+      "slug":          "zarna",          // suggested from name, user-editable
+      "bio":           "...",
+      "tone":          "casual" | "professional" | "hype" | "warm",
+      "website_url":   "https://...",
+      "podcast_url":   "https://...",
+      "media_urls":    ["https://...", ...],
+      "extra_context": "Anything else the AI should know..."
+    }
+
+    Actions:
+    1. Validate slug uniqueness.
+    2. Insert into bot_configs (status=submitted).
+    3. Set operator_users.creator_slug + account_type.
+
+    Returns: { success, creator_slug, account_type }
+    """
+    import re
+    user = current_user()
+    data = request.get_json(silent=True) or {}
+
+    account_type  = data.get("account_type", "performer")
+    if account_type not in ("performer", "business"):
+        account_type = "performer"
+
+    display_name  = (data.get("display_name") or "").strip()[:120]
+    slug          = re.sub(r"[^a-z0-9_]", "", (data.get("slug") or "").strip().lower())[:40]
+    bio           = (data.get("bio") or "").strip()[:2000]
+    tone          = (data.get("tone") or "casual").strip()[:50]
+    website_url   = (data.get("website_url") or "").strip()[:500]
+    podcast_url   = (data.get("podcast_url") or "").strip()[:500]
+    media_urls    = [u.strip() for u in (data.get("media_urls") or []) if u.strip()][:20]
+    extra_context = (data.get("extra_context") or "").strip()[:5000]
+
+    if not display_name:
+        return jsonify(success=False, error="Display name is required."), 400
+    if not slug:
+        # Auto-generate from display_name
+        slug = re.sub(r"[^a-z0-9]", "_", display_name.lower()).strip("_")[:40]
+    if not slug:
+        return jsonify(success=False, error="Could not generate a valid slug from the name provided."), 400
+
+    config_json = {
+        "display_name": display_name,
+        "bio": bio,
+        "tone": tone,
+        "website_url": website_url,
+        "podcast_url": podcast_url,
+        "media_urls": media_urls,
+        "extra_context": extra_context,
+    }
+
+    conn = get_conn()
+    try:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # Check slug uniqueness across both operator_users and bot_configs
+            cur.execute(
+                "SELECT id FROM operator_users WHERE creator_slug=%s AND id != %s",
+                (slug, user["id"]),
+            )
+            if cur.fetchone():
+                conn.close()
+                return jsonify(success=False, error=f"The name '{slug}' is already taken. Try a different one."), 409
+            cur.execute(
+                "SELECT id FROM bot_configs WHERE creator_slug=%s",
+                (slug,),
+            )
+            if cur.fetchone():
+                conn.close()
+                return jsonify(success=False, error=f"The name '{slug}' is already taken. Try a different one."), 409
+
+        with conn:
+            with conn.cursor() as cur:
+                # Upsert bot_configs
+                cur.execute(
+                    """INSERT INTO bot_configs
+                           (operator_user_id, creator_slug, account_type, config_json, status)
+                       VALUES (%s, %s, %s, %s, 'submitted')
+                       ON CONFLICT (creator_slug) DO UPDATE
+                       SET config_json=%s, account_type=%s, status='submitted', updated_at=NOW()""",
+                    (user["id"], slug, account_type,
+                     psycopg2.extras.Json(config_json),
+                     psycopg2.extras.Json(config_json), account_type),
+                )
+                # Stamp operator_users with slug + account_type
+                cur.execute(
+                    """UPDATE operator_users
+                       SET creator_slug=%s, account_type=%s
+                       WHERE id=%s""",
+                    (slug, account_type, user["id"]),
+                )
+
+        conn.close()
+        logger.info("onboarding_submit: user=%s slug=%s type=%s", user["email"], slug, account_type)
+        return jsonify(success=True, creator_slug=slug, account_type=account_type)
+
+    except Exception:
+        logger.exception("api_onboarding_submit error")
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return jsonify(success=False, error="Failed to save — please try again."), 500

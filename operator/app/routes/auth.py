@@ -245,6 +245,62 @@ def api_login():
         return jsonify(success=False, error="Login error — please try again."), 500
 
 
+@auth_bp.route("/api/auth/signup", methods=["POST"])
+def api_signup():
+    """
+    Self-serve account creation.
+    Accepts: {"email": "...", "password": "...", "name": "..."}
+    Returns: {"success": true, "user": {...}, "onboarding_required": true}
+          or {"success": false, "error": "..."}
+    """
+    data = request.get_json(silent=True) or {}
+    email    = (data.get("email") or "").strip().lower()
+    password = (data.get("password") or "").strip()
+    name     = (data.get("name") or "").strip()
+
+    if not email or not password:
+        return jsonify(success=False, error="Email and password are required."), 400
+    if len(password) < 8:
+        return jsonify(success=False, error="Password must be at least 8 characters."), 400
+    if not name:
+        name = email.split("@")[0].title()
+
+    try:
+        conn = get_conn()
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("SELECT id FROM operator_users WHERE email=%s", (email,))
+            existing = cur.fetchone()
+
+        if existing:
+            conn.close()
+            return jsonify(success=False, error="An account with that email already exists."), 409
+
+        pw_hash = generate_password_hash(password)
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO operator_users
+                           (email, name, password_hash, is_owner, is_active, last_login_at)
+                       VALUES (%s, %s, %s, FALSE, TRUE, NOW())
+                       RETURNING id""",
+                    (email, name, pw_hash),
+                )
+                new_id = cur.fetchone()[0]
+
+        session["operator_user_id"] = new_id
+        conn.close()
+        return jsonify(
+            success=True,
+            onboarding_required=True,
+            user={"email": email, "name": name, "account_type": None, "creator_slug": None},
+        )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("api_signup error")
+        return jsonify(success=False, error="Signup failed — please try again."), 500
+
+
 @auth_bp.route("/api/auth/logout", methods=["POST"])
 def api_logout():
     """JSON logout — clears session."""
@@ -271,24 +327,32 @@ def _get_google_client():
 
 @auth_bp.route("/api/auth/google")
 def google_login():
-    """Redirect the browser to Google's OAuth consent screen."""
+    """
+    Redirect the browser to Google's OAuth consent screen.
+    Pass ?signup=true to allow brand-new self-serve signups through.
+    """
     import os
     google = _get_google_client()
     redirect_uri = os.getenv(
         "GOOGLE_REDIRECT_URI",
         "https://zarnaai-production.up.railway.app/api/auth/google/callback",
     )
-    return google.authorize_redirect(redirect_uri)
+    # Carry signup flag through OAuth state so callback knows the intent
+    signup = request.args.get("signup", "false")
+    return google.authorize_redirect(redirect_uri, state=f"signup={signup}")
 
 
 @auth_bp.route("/api/auth/google/callback")
 def google_callback():
     """
-    Handle Google's redirect back. Verify the token, look up the matching
-    operator_users row by email, set the session, and redirect to the dashboard.
-    Only pre-existing accounts can log in — no self-signup.
+    Handle Google's redirect back. Three scenarios:
+    1. Existing user — log them in.
+    2. New user with a pending invite — auto-provision from invite.
+    3. New user with signup=true state — create a fresh account, land on onboarding.
     """
     import os
+    import logging
+    logger = logging.getLogger(__name__)
     frontend_url = os.getenv("FRONTEND_URL", "https://zar-fan-connect.lovable.app")
 
     try:
@@ -296,6 +360,11 @@ def google_callback():
         token = google.authorize_access_token()
         userinfo = token.get("userinfo") or google.userinfo()
         email = (userinfo.get("email") or "").strip().lower()
+        name  = (userinfo.get("name") or email.split("@")[0].title()).strip()
+
+        # Recover signup intent from state param
+        state = request.args.get("state", "")
+        is_signup = "signup=true" in state
 
         if not email:
             return redirect(f"{frontend_url}/login?error=no_email")
@@ -309,23 +378,33 @@ def google_callback():
             )
             user = cur.fetchone()
 
-        if not user:
-            # Check for a pending invite — auto-provision the account
-            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-                cur.execute(
-                    """SELECT * FROM operator_invites
-                       WHERE email=%s AND accepted_at IS NULL
-                       ORDER BY created_at DESC LIMIT 1""",
-                    (email,),
-                )
-                invite = cur.fetchone()
+        if user:
+            # Scenario 1: existing account — log in normally
+            session["operator_user_id"] = user["id"]
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE operator_users SET last_login_at=NOW() WHERE id=%s",
+                        (user["id"],),
+                    )
+            conn.close()
+            # If they have no creator_slug yet, they still need onboarding
+            if not user.get("creator_slug"):
+                return redirect(f"{frontend_url}/onboarding")
+            return redirect(f"{frontend_url}/dashboard")
 
-            if not invite:
-                conn.close()
-                return redirect(f"{frontend_url}/login?error=not_authorized")
+        # No existing account — check for a pending invite first
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """SELECT * FROM operator_invites
+                   WHERE email=%s AND accepted_at IS NULL
+                   ORDER BY created_at DESC LIMIT 1""",
+                (email,),
+            )
+            invite = cur.fetchone()
 
-            # Create the operator_users row from the invite
-            name = userinfo.get("name") or email.split("@")[0].title()
+        if invite:
+            # Scenario 2: invited user — auto-provision from invite
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -341,7 +420,6 @@ def google_callback():
                          invite["account_type"], invite["creator_slug"], name),
                     )
                     new_id = cur.fetchone()[0]
-                    # Mark invite as accepted
                     cur.execute(
                         "UPDATE operator_invites SET accepted_at=NOW() WHERE id=%s",
                         (invite["id"],),
@@ -350,18 +428,29 @@ def google_callback():
             conn.close()
             return redirect(f"{frontend_url}/dashboard")
 
-        session["operator_user_id"] = user["id"]
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE operator_users SET last_login_at=NOW() WHERE id=%s",
-                    (user["id"],),
-                )
+        if is_signup:
+            # Scenario 3: brand-new self-serve signup via Google
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """INSERT INTO operator_users
+                               (email, name, password_hash, is_owner, is_active, last_login_at)
+                           VALUES (%s, %s, '', FALSE, TRUE, NOW())
+                           ON CONFLICT (email) DO UPDATE
+                           SET is_active=TRUE, name=%s, last_login_at=NOW()
+                           RETURNING id""",
+                        (email, name, name),
+                    )
+                    new_id = cur.fetchone()[0]
+            session["operator_user_id"] = new_id
+            conn.close()
+            return redirect(f"{frontend_url}/onboarding")
+
+        # Unknown user, no invite, not a signup intent
         conn.close()
-        return redirect(f"{frontend_url}/dashboard")
+        return redirect(f"{frontend_url}/login?error=not_authorized")
 
     except Exception:
-        import logging
         logging.getLogger(__name__).exception("Google OAuth callback failed")
         return redirect(f"{frontend_url}/login?error=oauth_failed")
 
