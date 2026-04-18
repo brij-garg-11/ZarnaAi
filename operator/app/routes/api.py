@@ -1124,15 +1124,25 @@ def user_info():
         is_owner=user["is_owner"],
         account_type=user.get("account_type") or "performer",
         creator_slug=user.get("creator_slug") or "",
+        is_super_admin=bool(user.get("is_super_admin")),
     )
 
 
 # ── Business (multi-tenant SMB) ────────────────────────────────────────────────
 
 def _get_tenant_slug() -> str | None:
-    """Returns the tenant_slug for the current logged-in business user."""
+    """
+    Returns the effective tenant_slug for the current request.
+    Super-admins can override via session['viewing_as']; everyone else
+    gets their own creator_slug.
+    """
+    from flask import session
     user = current_user()
-    return user.get("creator_slug") if user else None
+    if not user:
+        return None
+    if user.get("is_super_admin"):
+        return session.get("viewing_as") or user.get("creator_slug")
+    return user.get("creator_slug")
 
 
 @api_bp.route("/api/business/stats")
@@ -2005,3 +2015,149 @@ def delete_business_promo(promo_id):
         return jsonify(error="Failed to delete promo"), 500
     finally:
         conn.close()
+
+
+# ── Super-admin project switcher ───────────────────────────────────────────────
+
+def _require_super_admin():
+    """Returns the user dict if super admin, else None."""
+    user = current_user()
+    if not user or not user.get("is_super_admin"):
+        return None
+    return user
+
+
+@api_bp.route("/api/admin/projects")
+@login_required
+def admin_projects():
+    """
+    Returns all projects (tenants + performers) the super-admin can view.
+    Each entry has enough metadata to render a project card.
+    """
+    if not _require_super_admin():
+        return jsonify(error="Super-admin access required"), 403
+
+    conn = get_conn()
+    try:
+        import psycopg2.extras, json
+        from pathlib import Path
+
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # Get distinct creator slugs and their account types
+            cur.execute("""
+                SELECT DISTINCT creator_slug, account_type
+                FROM operator_users
+                WHERE creator_slug IS NOT NULL AND is_active=TRUE
+                ORDER BY creator_slug
+            """)
+            slugs = cur.fetchall()
+
+        projects = []
+        for row in slugs:
+            slug = row["creator_slug"]
+            account_type = row["account_type"]
+
+            # Load display metadata from local config
+            display_name = slug.replace("_", " ").title()
+            logo_url = ""
+            location = ""
+
+            if account_type == "business":
+                config_path = _BUSINESS_CONFIGS_DIR / f"{slug}.json"
+            else:
+                config_path = Path(__file__).parents[3] / "creator_config" / f"{slug}.json"
+
+            try:
+                cfg = json.loads(config_path.read_text())
+                display_name = cfg.get("display_name") or cfg.get("name") or display_name
+                logo_url = cfg.get("logo_url") or ""
+                location = cfg.get("location") or ""
+            except Exception:
+                pass
+
+            # Live subscriber/fan counts
+            try:
+                with conn.cursor() as cur:
+                    if account_type == "business":
+                        cur.execute(
+                            "SELECT COUNT(*) FROM smb_subscribers WHERE tenant_slug=%s AND status='active'",
+                            (slug,),
+                        )
+                    else:
+                        cur.execute("SELECT COUNT(*) FROM contacts")
+                    count = cur.fetchone()[0]
+            except Exception:
+                count = 0
+
+            projects.append({
+                "slug": slug,
+                "display_name": display_name,
+                "account_type": account_type,
+                "logo_url": logo_url,
+                "location": location,
+                "subscriber_count": count,
+            })
+
+        return jsonify(projects=projects)
+    finally:
+        conn.close()
+
+
+@api_bp.route("/api/admin/select-project", methods=["POST"])
+@login_required
+def admin_select_project():
+    """Set the super-admin's active viewing context to a specific project."""
+    from flask import session
+    if not _require_super_admin():
+        return jsonify(error="Super-admin access required"), 403
+
+    data = request.get_json(silent=True) or {}
+    slug = (data.get("slug") or "").strip()
+    if not slug:
+        return jsonify(error="slug is required"), 400
+
+    # Verify the slug exists
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT account_type FROM operator_users WHERE creator_slug=%s AND is_active=TRUE LIMIT 1",
+                (slug,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return jsonify(error="Project not found"), 404
+        session["viewing_as"] = slug
+        session["viewing_as_account_type"] = row[0]
+        return jsonify(success=True, slug=slug, account_type=row[0])
+    finally:
+        conn.close()
+
+
+@api_bp.route("/api/admin/exit-project", methods=["POST"])
+@login_required
+def admin_exit_project():
+    """Clear the super-admin's viewing context — returns to project selector."""
+    from flask import session
+    if not _require_super_admin():
+        return jsonify(error="Super-admin access required"), 403
+    session.pop("viewing_as", None)
+    session.pop("viewing_as_account_type", None)
+    return jsonify(success=True)
+
+
+@api_bp.route("/api/admin/current-project")
+@login_required
+def admin_current_project():
+    """Returns which project the super-admin is currently viewing, if any."""
+    from flask import session
+    user = current_user()
+    if not user or not user.get("is_super_admin"):
+        return jsonify(viewing_as=None)
+    slug = session.get("viewing_as")
+    account_type = session.get("viewing_as_account_type")
+    return jsonify(
+        viewing_as=slug,
+        viewing_as_account_type=account_type,
+        is_super_admin=True,
+    )
