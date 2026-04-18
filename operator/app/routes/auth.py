@@ -12,6 +12,7 @@ from functools import wraps
 
 from flask import (
     Blueprint,
+    current_app,
     flash,
     jsonify,
     redirect,
@@ -249,6 +250,83 @@ def api_logout():
     """JSON logout — clears session."""
     session.pop("operator_user_id", None)
     return jsonify(success=True)
+
+
+# ── Google OAuth ───────────────────────────────────────────────────────────────
+
+def _get_google_client():
+    import os
+    from authlib.integrations.flask_client import OAuth
+    oauth = OAuth()
+    oauth.init_app(current_app)
+    google = oauth.register(
+        name="google",
+        client_id=os.getenv("GOOGLE_CLIENT_ID"),
+        client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_kwargs={"scope": "openid email profile"},
+    )
+    return google
+
+
+@auth_bp.route("/api/auth/google")
+def google_login():
+    """Redirect the browser to Google's OAuth consent screen."""
+    import os
+    google = _get_google_client()
+    redirect_uri = os.getenv(
+        "GOOGLE_REDIRECT_URI",
+        "https://zarnaai-production.up.railway.app/api/auth/google/callback",
+    )
+    return google.authorize_redirect(redirect_uri)
+
+
+@auth_bp.route("/api/auth/google/callback")
+def google_callback():
+    """
+    Handle Google's redirect back. Verify the token, look up the matching
+    operator_users row by email, set the session, and redirect to the dashboard.
+    Only pre-existing accounts can log in — no self-signup.
+    """
+    import os
+    frontend_url = os.getenv("FRONTEND_URL", "https://zar-fan-connect.lovable.app")
+
+    try:
+        google = _get_google_client()
+        token = google.authorize_access_token()
+        userinfo = token.get("userinfo") or google.userinfo()
+        email = (userinfo.get("email") or "").strip().lower()
+
+        if not email:
+            return redirect(f"{frontend_url}/login?error=no_email")
+
+        conn = get_conn()
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM operator_users WHERE email=%s AND is_active=TRUE",
+                (email,),
+            )
+            user = cur.fetchone()
+
+        if not user:
+            conn.close()
+            return redirect(f"{frontend_url}/login?error=not_authorized")
+
+        session["operator_user_id"] = user["id"]
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE operator_users SET last_login_at=NOW() WHERE id=%s",
+                    (user["id"],),
+                )
+        conn.close()
+        return redirect(f"{frontend_url}/dashboard")
+
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Google OAuth callback failed")
+        return redirect(f"{frontend_url}/login?error=oauth_failed")
 
 
 @auth_bp.route("/api/auth/me", methods=["GET"])
