@@ -331,6 +331,65 @@ def inbox_thread(phone_last4):
     return jsonify(messages=messages, fan=fan, phone_last4=phone_last4)
 
 
+# ── Fan of the Week ───────────────────────────────────────────────────────────
+
+@api_bp.route("/api/fan-of-the-week")
+@login_required
+def fan_of_the_week():
+    """
+    Surfaces one real, engaging fan message from the past 7 days.
+    Picks the longest fan message (most expressive) that isn't a blast reply,
+    opt-out, or single-word response. Falls back to past 30 days if quiet week.
+    """
+    try:
+        conn = get_conn()
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            for days_back in (7, 30, 90):
+                cur.execute("""
+                    SELECT
+                        m.body,
+                        m.created_at,
+                        RIGHT(m.phone_number, 4) AS phone_last4,
+                        c.fan_tier,
+                        c.fan_tags,
+                        c.fan_memory
+                    FROM messages m
+                    LEFT JOIN contacts c ON c.phone_number = m.phone_number
+                    WHERE
+                        m.role = 'user'
+                        AND m.created_at >= NOW() - INTERVAL '%s days'
+                        AND LENGTH(m.body) > 30
+                        AND m.body NOT ILIKE 'stop%%'
+                        AND m.body NOT ILIKE 'yes%%'
+                        AND m.body NOT ILIKE 'no%%'
+                        AND m.body NOT ILIKE 'ok%%'
+                        AND m.intent NOT IN ('STOP', 'OPTOUT')
+                    ORDER BY LENGTH(m.body) DESC, RANDOM()
+                    LIMIT 1
+                """, (days_back,))
+                row = cur.fetchone()
+                if row:
+                    break
+        conn.close()
+    except Exception:
+        logger.exception("api: failed to fetch fan of the week")
+        return jsonify(found=False), 500
+
+    if not row:
+        return jsonify(found=False)
+
+    tags = row["fan_tags"] or []
+    return jsonify(
+        found=True,
+        body=row["body"],
+        phone_last4=row["phone_last4"],
+        created_at=row["created_at"].isoformat(),
+        fan_tier=row["fan_tier"],
+        fan_tags=tags[:3],
+    )
+
+
 # ── Bot Data ──────────────────────────────────────────────────────────────────
 
 @api_bp.route("/api/bot-data")
