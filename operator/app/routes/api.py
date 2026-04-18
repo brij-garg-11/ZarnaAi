@@ -331,6 +331,50 @@ def inbox_thread(phone_last4):
     return jsonify(messages=messages, fan=fan, phone_last4=phone_last4)
 
 
+# ── Bot Data ──────────────────────────────────────────────────────────────────
+
+@api_bp.route("/api/bot-data")
+@login_required
+def bot_data():
+    """
+    Returns the current bot configuration for the logged-in user.
+    Stub: reads from creator_config/<slug>.json.
+    Future: will read from DB per user's creator_slug.
+    """
+    import json, os
+    from pathlib import Path
+
+    # Stub: hardcoded to zarna until multi-tenant user→slug mapping is built
+    slug = "zarna"
+    config_path = Path(__file__).parents[4] / "creator_config" / f"{slug}.json"
+
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+    except Exception:
+        logger.exception("api: failed to load creator config for slug=%s", slug)
+        return jsonify(error="Config not found"), 404
+
+    # Return only the fields the UI needs — never expose internal prompt blocks
+    links = cfg.get("links", {})
+    return jsonify(
+        name=cfg.get("name", ""),
+        description=cfg.get("description", ""),
+        voice_style=cfg.get("voice_style", ""),
+        links={
+            "tickets": links.get("tickets", ""),
+            "merch": links.get("merch", ""),
+            "book": links.get("book", ""),
+            "youtube": links.get("youtube", ""),
+        },
+        banned_words=cfg.get("banned_words", []),
+        name_variants=cfg.get("name_variants", []),
+        # Edit count stub — will be real when plan tracking is built
+        edits_used=0,
+        edits_limit=20,
+    )
+
+
 # ── User ──────────────────────────────────────────────────────────────────────
 
 @api_bp.route("/api/user")
