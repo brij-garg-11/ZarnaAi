@@ -5,8 +5,16 @@ All routes require an active session (login via /api/auth/login first).
 All routes return JSON — no HTML rendering.
 """
 
+import sys, os
+from pathlib import Path
+
 from flask import Blueprint, jsonify, request
 from ..routes.auth import login_required, current_user
+
+# Make the top-level app package importable from within the operator sub-package
+_repo_root = str(Path(__file__).parents[4])
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
 from ..queries import get_overview_stats, list_shows, list_blast_drafts, get_all_tags
 from ..db import get_conn
 import logging
@@ -977,11 +985,11 @@ def bot_data():
     Stub: reads from creator_config/<slug>.json.
     Future: will read from DB per user's creator_slug.
     """
-    import json, os
+    import json
     from pathlib import Path
 
-    # Stub: hardcoded to zarna until multi-tenant user→slug mapping is built
-    slug = "zarna"
+    user = current_user()
+    slug = (user.get("creator_slug") or "zarna") if user else "zarna"
     config_path = Path(__file__).parents[4] / "creator_config" / f"{slug}.json"
 
     try:
@@ -991,7 +999,30 @@ def bot_data():
         logger.exception("api: failed to load creator config for slug=%s", slug)
         return jsonify(error="Config not found"), 404
 
-    # Return only the fields the UI needs — never expose internal prompt blocks
+    account_type = (user.get("account_type") or "performer") if user else "performer"
+
+    if account_type == "business":
+        # Business bot config — fields relevant to a venue/club
+        tracked_links = cfg.get("tracked_links", {})
+        knowledge = cfg.get("knowledge_base", {})
+        return jsonify(
+            display_name=cfg.get("display_name", ""),
+            business_type=cfg.get("business_type", ""),
+            location=cfg.get("location", ""),
+            tone=cfg.get("tone", ""),
+            welcome_message=cfg.get("welcome_message", ""),
+            signup_question=cfg.get("signup_question", ""),
+            outreach_invite_message=cfg.get("outreach_invite_message", ""),
+            tracked_links=tracked_links,
+            address=knowledge.get("address", ""),
+            hours=knowledge.get("hours", ""),
+            website=cfg.get("website", ""),
+            logo_url=cfg.get("logo_url", ""),
+            edits_used=0,
+            edits_limit=20,
+        )
+
+    # Performer bot config
     links = cfg.get("links", {})
     return jsonify(
         name=cfg.get("name", ""),
@@ -1005,7 +1036,6 @@ def bot_data():
         },
         banned_words=cfg.get("banned_words", []),
         name_variants=cfg.get("name_variants", []),
-        # Edit count stub — will be real when plan tracking is built
         edits_used=0,
         edits_limit=20,
     )
@@ -1453,5 +1483,141 @@ def business_customer_of_week():
                 last_seen=best["last_seen"].isoformat() if best["last_seen"] else None,
                 status=sub["status"] if sub else "active",
             )
+    finally:
+        conn.close()
+
+
+@api_bp.route("/api/business/blast/send", methods=["POST"])
+@login_required
+def business_blast_send():
+    """
+    Fire a promo blast for the business tenant.
+    Body: { "message": "...", "audience": "all|segment:LOCAL|segment:ENGAGED|..." }
+    The message is AI-enhanced before sending (fixes typos, keeps all facts intact).
+    """
+    slug = _get_tenant_slug()
+    if not slug:
+        return jsonify(error="No tenant slug configured for this account"), 400
+
+    data = request.get_json(silent=True) or {}
+    message = (data.get("message") or "").strip()
+    audience = (data.get("audience") or "all").strip()
+
+    if not message:
+        return jsonify(error="Message is required"), 400
+
+    try:
+        from app.smb.tenants import get_registry
+        from app.smb.blast import send_blast_from_portal
+
+        tenant = get_registry().get_by_slug(slug)
+        if not tenant:
+            return jsonify(error=f"Tenant config not found for slug: {slug}"), 500
+
+        status = send_blast_from_portal(
+            message_text=message,
+            tenant=tenant,
+            audience_type=audience,
+        )
+        return jsonify(success=True, status=status)
+    except Exception:
+        logger.exception("business_blast_send: failed for tenant=%s", slug)
+        return jsonify(error="Failed to queue blast"), 500
+
+
+@api_bp.route("/api/business/blast/preview-count", methods=["POST"])
+@login_required
+def business_blast_preview_count():
+    """
+    Return how many subscribers would receive a blast for the given audience.
+    Body: { "audience": "all|segment:LOCAL|..." }
+    """
+    slug = _get_tenant_slug()
+    if not slug:
+        return jsonify(error="No tenant slug configured for this account"), 400
+
+    data = request.get_json(silent=True) or {}
+    audience = (data.get("audience") or "all").strip().lower()
+
+    conn = get_conn()
+    try:
+        import psycopg2.extras, json
+        from pathlib import Path
+
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            if audience == "all":
+                cur.execute(
+                    "SELECT COUNT(*) FROM smb_subscribers WHERE tenant_slug=%s AND status='active'",
+                    (slug,),
+                )
+                count = cur.fetchone()[0]
+            elif audience.startswith("segment:"):
+                seg_name = audience[8:].strip().upper()
+                config_path = Path(__file__).parents[4] / "creator_config" / f"{slug}.json"
+                cfg = json.load(open(config_path))
+                seg = next((s for s in cfg.get("segments", []) if s["name"].upper() == seg_name), None)
+                if not seg:
+                    return jsonify(error=f"Unknown segment: {seg_name}"), 400
+                ph = ",".join(["%s"] * len(seg["answers"]))
+                cur.execute(
+                    f"""SELECT COUNT(DISTINCT s.id)
+                        FROM smb_subscribers s
+                        JOIN smb_preferences p ON p.subscriber_id = s.id
+                        WHERE s.tenant_slug=%s AND p.question_key=%s AND p.answer IN ({ph})""",
+                    (slug, seg["question_key"], *seg["answers"]),
+                )
+                count = cur.fetchone()[0]
+            else:
+                return jsonify(error="Invalid audience type"), 400
+
+        return jsonify(count=count, audience=audience)
+    finally:
+        conn.close()
+
+
+# ── Password change (all account types) ──────────────────────────────────────
+
+@api_bp.route("/api/auth/change-password", methods=["POST"])
+@login_required
+def change_password():
+    """
+    Change the current user's password.
+    Body: { "current_password": "...", "new_password": "..." }
+    """
+    from werkzeug.security import check_password_hash, generate_password_hash
+
+    data = request.get_json(silent=True) or {}
+    current_pw = data.get("current_password") or ""
+    new_pw = data.get("new_password") or ""
+
+    if not current_pw or not new_pw:
+        return jsonify(error="Both current and new password are required"), 400
+    if len(new_pw) < 8:
+        return jsonify(error="New password must be at least 8 characters"), 400
+
+    user = current_user()
+    conn = get_conn()
+    try:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                "SELECT password_hash FROM operator_users WHERE id=%s",
+                (user["id"],),
+            )
+            row = cur.fetchone()
+            if not row or not check_password_hash(row["password_hash"], current_pw):
+                return jsonify(error="Current password is incorrect"), 401
+
+        new_hash = generate_password_hash(new_pw)
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE operator_users SET password_hash=%s WHERE id=%s",
+                    (new_hash, user["id"]),
+                )
+        return jsonify(success=True)
+    except Exception:
+        logger.exception("change_password: failed for user_id=%s", user["id"])
+        return jsonify(error="Password change failed"), 500
     finally:
         conn.close()
