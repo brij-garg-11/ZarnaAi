@@ -535,8 +535,9 @@ def api_create_blast():
 @api_bp.route("/api/blasts/<int:draft_id>/save", methods=["POST"])
 @login_required
 def api_save_blast(draft_id):
-    """Save blast draft fields. Returns {success, draft_id}."""
+    """Save blast draft fields including media_url, link_url, and tracked link creation."""
     from ..queries import save_blast_draft
+    from ..routes.blast import _create_tracked_link
     data = request.get_json(silent=True) or {}
     user = current_user()
 
@@ -553,18 +554,83 @@ def api_save_blast(draft_id):
         audience_type = "all"
     audience_filter = (data.get("audience_filter") or "").strip()[:200]
     sample_pct = max(1, min(100, int(data.get("sample_pct", 100) or 100)))
+    media_url = (data.get("media_url") or "").strip()[:1000]
+    link_url  = (data.get("link_url") or "").strip()[:2000]
+    tracked_link_slug = (data.get("tracked_link_slug") or "").strip()
+
+    # Auto-create a tracked link the first time a link_url is saved on this draft
+    if link_url and not tracked_link_slug:
+        tracked_link_slug = _create_tracked_link(link_url, name) or ""
+        logger.info("api_save_blast: created tracked_link_slug=%r for draft %s", tracked_link_slug, draft_id)
 
     try:
         new_id = save_blast_draft(
             name=name, body=body, channel=channel,
             audience_type=audience_type, audience_filter=audience_filter,
-            sample_pct=sample_pct,
+            sample_pct=sample_pct, media_url=media_url,
+            link_url=link_url, tracked_link_slug=tracked_link_slug,
             created_by=user["email"] if user else "",
             draft_id=draft_id,
         )
-        return jsonify(success=True, draft_id=new_id)
+        tracked_url = ""
+        if tracked_link_slug:
+            scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+            host   = request.headers.get("X-Forwarded-Host", request.host)
+            tracked_url = f"{scheme}://{host}/t/{tracked_link_slug}"
+        return jsonify(success=True, draft_id=new_id,
+                       tracked_link_slug=tracked_link_slug, tracked_url=tracked_url)
     except Exception as e:
         logger.exception("api_save_blast error")
+        return jsonify(success=False, error=str(e)), 500
+
+
+@api_bp.route("/api/blasts/upload-image", methods=["POST"])
+@login_required
+def api_upload_image():
+    """
+    Upload a blast image (MMS). Stores in Postgres and returns a public URL.
+    Accepts multipart/form-data with field name 'image'.
+    Returns { success, url, size }.
+    """
+    import uuid, base64
+
+    f = request.files.get("image")
+    if not f or not f.filename:
+        return jsonify(success=False, error="No file received."), 400
+
+    ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else "jpg"
+    if ext not in ("jpg", "jpeg", "png", "gif", "webp"):
+        return jsonify(success=False, error=f"Unsupported format .{ext} — use jpg, png, gif, or webp."), 400
+
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    mime_type = f.content_type or f"image/{ext}"
+
+    try:
+        data = f.read()
+        if not data:
+            return jsonify(success=False, error="Uploaded file is empty."), 400
+
+        data_b64 = base64.b64encode(data).decode("ascii")
+        conn = get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO operator_blast_images (filename, mime_type, data_b64) "
+                        "VALUES (%s, %s, %s) RETURNING id",
+                        (filename, mime_type, data_b64),
+                    )
+                    image_id = cur.fetchone()[0]
+        finally:
+            conn.close()
+
+        scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+        host   = request.headers.get("X-Forwarded-Host", request.host)
+        url = f"{scheme}://{host}/operator/blast/img/{image_id}/{filename}"
+        logger.info("api_upload_image: stored id=%s size=%d url=%s", image_id, len(data), url)
+        return jsonify(success=True, url=url, size=len(data), image_id=image_id)
+    except Exception as e:
+        logger.exception("api_upload_image error")
         return jsonify(success=False, error=str(e)), 500
 
 
