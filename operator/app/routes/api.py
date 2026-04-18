@@ -331,6 +331,278 @@ def inbox_thread(phone_last4):
     return jsonify(messages=messages, fan=fan, phone_last4=phone_last4)
 
 
+# ── Shows (write) ─────────────────────────────────────────────────────────────
+
+@api_bp.route("/api/shows/create", methods=["POST"])
+@login_required
+def api_create_show():
+    """Create a new live show draft. Returns {success, show_id, error}."""
+    from ..routes.shows import _create_show, _parse_local_dt, EVENT_TIMEZONE_CHOICES, _ALLOWED_TZ
+    data = request.get_json(silent=True) or {}
+
+    name = (data.get("name") or "").strip()
+    keyword = " ".join((data.get("keyword") or "").upper().split())
+    mode = data.get("signup_mode", "keyword")
+    use_kw = (mode == "keyword")
+    etz = data.get("event_timezone") or "America/New_York"
+    if etz not in _ALLOWED_TZ:
+        etz = "America/New_York"
+    ws = _parse_local_dt(data.get("window_start"), etz)
+    we = _parse_local_dt(data.get("window_end"), etz)
+    deliver = (data.get("deliver_as") or "sms").lower()
+    if deliver not in ("sms", "whatsapp"):
+        deliver = "sms"
+    event_cat = (data.get("event_category") or "comedy").lower()
+    if event_cat not in ("comedy", "live_stream", "other"):
+        event_cat = "comedy"
+
+    if not name:
+        return jsonify(success=False, error="Show name is required."), 400
+    if use_kw and not keyword:
+        return jsonify(success=False, error="Keyword is required for keyword mode."), 400
+    if not use_kw and (ws is None or we is None):
+        return jsonify(success=False, error="Window start and end are required for time-window mode."), 400
+
+    try:
+        show_id = _create_show(name, keyword, use_kw, ws, we, deliver, event_cat, etz)
+        return jsonify(success=True, show_id=show_id, message=f'Show "{name}" created as a draft.')
+    except Exception as e:
+        logger.exception("api_create_show error")
+        return jsonify(success=False, error=str(e)), 500
+
+
+@api_bp.route("/api/shows/<int:show_id>/activate", methods=["POST"])
+@login_required
+def api_activate_show(show_id):
+    """Activate a show (set status=live, ends any currently live show)."""
+    from ..routes.shows import _update_show_status
+    try:
+        _update_show_status(show_id, "live")
+        return jsonify(success=True, status="live", show_id=show_id)
+    except Exception as e:
+        logger.exception("api_activate_show error")
+        return jsonify(success=False, error=str(e)), 500
+
+
+@api_bp.route("/api/shows/<int:show_id>/end", methods=["POST"])
+@login_required
+def api_end_show(show_id):
+    """End a live show."""
+    from ..routes.shows import _update_show_status
+    try:
+        _update_show_status(show_id, "ended")
+        return jsonify(success=True, status="ended", show_id=show_id)
+    except Exception as e:
+        logger.exception("api_end_show error")
+        return jsonify(success=False, error=str(e)), 500
+
+
+# ── Blasts (write) ─────────────────────────────────────────────────────────────
+
+@api_bp.route("/api/blasts/create", methods=["POST"])
+@login_required
+def api_create_blast():
+    """Create a blank blast draft. Returns {success, draft_id}."""
+    from ..queries import save_blast_draft
+    user = current_user()
+    try:
+        draft_id = save_blast_draft(
+            name="Untitled draft",
+            body="",
+            channel="twilio",
+            audience_type="all",
+            audience_filter="",
+            sample_pct=100,
+            created_by=user["email"] if user else "",
+        )
+        return jsonify(success=True, draft_id=draft_id)
+    except Exception as e:
+        logger.exception("api_create_blast error")
+        return jsonify(success=False, error=str(e)), 500
+
+
+@api_bp.route("/api/blasts/<int:draft_id>/save", methods=["POST"])
+@login_required
+def api_save_blast(draft_id):
+    """Save blast draft fields. Returns {success, draft_id}."""
+    from ..queries import save_blast_draft
+    data = request.get_json(silent=True) or {}
+    user = current_user()
+
+    body = (data.get("body") or "").strip()
+    if not body:
+        return jsonify(success=False, error="Message body is required."), 400
+
+    name = (data.get("name") or "Untitled draft").strip()[:120]
+    channel = data.get("channel", "twilio")
+    if channel not in ("twilio", "slicktext"):
+        channel = "twilio"
+    audience_type = data.get("audience_type", "all")
+    if audience_type not in ("all", "tag", "location", "random", "show", "tier"):
+        audience_type = "all"
+    audience_filter = (data.get("audience_filter") or "").strip()[:200]
+    sample_pct = max(1, min(100, int(data.get("sample_pct", 100) or 100)))
+
+    try:
+        new_id = save_blast_draft(
+            name=name, body=body, channel=channel,
+            audience_type=audience_type, audience_filter=audience_filter,
+            sample_pct=sample_pct,
+            created_by=user["email"] if user else "",
+            draft_id=draft_id,
+        )
+        return jsonify(success=True, draft_id=new_id)
+    except Exception as e:
+        logger.exception("api_save_blast error")
+        return jsonify(success=False, error=str(e)), 500
+
+
+@api_bp.route("/api/blasts/preview-count", methods=["POST"])
+@login_required
+def api_blast_preview_count():
+    """Returns audience count for given filter as JSON."""
+    from ..queries import count_audience
+    data = request.get_json(silent=True) or {}
+    audience_type = data.get("audience_type", "all")
+    if audience_type not in ("all", "tag", "location", "random", "show", "tier"):
+        audience_type = "all"
+    audience_filter = (data.get("audience_filter") or "").strip()
+    sample_pct = max(1, min(100, int(data.get("sample_pct", 100) or 100)))
+    try:
+        count = count_audience(audience_type, audience_filter, sample_pct)
+        return jsonify(success=True, count=count)
+    except Exception as e:
+        logger.exception("api_blast_preview_count error")
+        return jsonify(success=False, count=0, error=str(e)), 500
+
+
+@api_bp.route("/api/blasts/<int:draft_id>/test", methods=["POST"])
+@login_required
+def api_blast_test(draft_id):
+    """Send a [TEST] copy of the blast to a single phone number."""
+    from ..blast_sender import _send_one
+    from ..queries import get_blast_draft
+    data = request.get_json(silent=True) or {}
+
+    test_phone = (data.get("test_phone") or "").strip()
+    body = (data.get("body") or "").strip()
+
+    if not test_phone:
+        return jsonify(success=False, error="test_phone is required."), 400
+    if not body:
+        return jsonify(success=False, error="Message body is required."), 400
+
+    channel = data.get("channel", "twilio")
+    if channel not in ("twilio", "slicktext"):
+        channel = "twilio"
+
+    test_body = f"[TEST] {body}"
+    try:
+        ok = _send_one(test_phone, test_body, channel)
+        if ok:
+            return jsonify(success=True, message=f"Test sent to ***{test_phone[-4:]}")
+        else:
+            return jsonify(success=False, error="Send failed — check Twilio credentials."), 500
+    except Exception as e:
+        logger.exception("api_blast_test error")
+        return jsonify(success=False, error=str(e)), 500
+
+
+@api_bp.route("/api/blasts/<int:draft_id>/send", methods=["POST"])
+@login_required
+def api_blast_send(draft_id):
+    """Send a blast immediately to its full audience."""
+    from ..queries import get_blast_draft, save_blast_draft
+    from ..blast_sender import execute_blast_async
+    from ..db import get_conn
+
+    draft = get_blast_draft(draft_id)
+    if not draft:
+        return jsonify(success=False, error="Draft not found."), 404
+    if draft["status"] in ("sent", "cancelled"):
+        return jsonify(success=False, error="This blast has already been sent or cancelled."), 400
+
+    body = (draft.get("body") or "").strip()
+    if not body:
+        return jsonify(success=False, error="Message body is required before sending."), 400
+
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE blast_drafts SET status='sending', updated_at=NOW() WHERE id=%s",
+                    (draft_id,),
+                )
+    except Exception as e:
+        logger.exception("api_blast_send: failed to mark sending")
+        return jsonify(success=False, error=str(e)), 500
+    finally:
+        conn.close()
+
+    execute_blast_async(draft_id)
+    return jsonify(success=True, message="Blast queued — sending in background.", draft_id=draft_id)
+
+
+@api_bp.route("/api/blasts/<int:draft_id>/schedule", methods=["POST"])
+@login_required
+def api_blast_schedule(draft_id):
+    """Schedule a blast for a future UTC datetime."""
+    from ..queries import get_blast_draft, schedule_blast
+    from datetime import datetime, timezone
+    data = request.get_json(silent=True) or {}
+
+    send_at_str = (data.get("send_at") or "").strip()
+    if not send_at_str:
+        return jsonify(success=False, error="send_at (ISO datetime) is required."), 400
+
+    draft = get_blast_draft(draft_id)
+    if not draft:
+        return jsonify(success=False, error="Draft not found."), 404
+
+    try:
+        send_at = datetime.fromisoformat(send_at_str).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return jsonify(success=False, error="Invalid datetime format — use ISO 8601."), 400
+
+    try:
+        schedule_blast(draft_id, send_at)
+        return jsonify(success=True, scheduled_at=send_at.isoformat(), draft_id=draft_id)
+    except Exception as e:
+        logger.exception("api_blast_schedule error")
+        return jsonify(success=False, error=str(e)), 500
+
+
+@api_bp.route("/api/blasts/<int:draft_id>/cancel", methods=["POST"])
+@login_required
+def api_blast_cancel(draft_id):
+    """Cancel a scheduled or draft blast."""
+    from ..queries import mark_blast_cancelled
+    try:
+        mark_blast_cancelled(draft_id)
+        return jsonify(success=True, draft_id=draft_id)
+    except Exception as e:
+        logger.exception("api_blast_cancel error")
+        return jsonify(success=False, error=str(e)), 500
+
+
+@api_bp.route("/api/blasts/<int:draft_id>/status")
+@login_required
+def api_blast_status(draft_id):
+    """Poll blast send progress."""
+    from ..queries import get_blast_draft
+    draft = get_blast_draft(draft_id)
+    if not draft:
+        return jsonify(success=False, error="not found"), 404
+    return jsonify(
+        success=True,
+        status=draft["status"],
+        sent_count=draft["sent_count"] or 0,
+        failed_count=draft["failed_count"] or 0,
+        total_recipients=draft["total_recipients"] or 0,
+    )
+
+
 # ── Fan of the Week ───────────────────────────────────────────────────────────
 
 @api_bp.route("/api/fan-of-the-week")
