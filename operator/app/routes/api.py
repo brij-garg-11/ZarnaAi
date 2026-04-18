@@ -1016,10 +1016,11 @@ def bot_data():
 @api_bp.route("/api/user")
 @login_required
 def user_info():
-    """Returns the current logged-in user's info."""
+    """Returns the current logged-in user's info including account_type."""
     user = current_user()
     return jsonify(
         email=user["email"],
         name=user["name"],
         is_owner=user["is_owner"],
+        account_type=user.get("account_type") or "performer",
     )
