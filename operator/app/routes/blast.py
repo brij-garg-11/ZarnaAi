@@ -304,12 +304,12 @@ def _create_tracked_link(raw_url: str, label: str) -> str | None:
         conn.close()
 
 
-@blast_bp.route("/operator/blast/img/<int:image_id>/<filename>")
-def serve_db_image(image_id: int, filename: str):
+@blast_bp.route("/operator/blast/img/<int:image_id>/<access_token>/<filename>")
+def serve_db_image(image_id: int, access_token: str, filename: str):
     """
-    Serve a blast image from Postgres — NO login required, survives redeploys.
-    Twilio/SlickText fetch this URL directly during MMS delivery.
-    Uses base64 TEXT column (data_b64) — avoids all psycopg2 binary encoding issues.
+    Serve a blast image from Postgres — NO login required (Twilio fetches during MMS).
+    access_token in the URL prevents enumeration: guessing an integer id is not
+    enough; the caller must also know the random token set at upload time.
     """
     from flask import Response
     from ..db import get_conn
@@ -317,12 +317,16 @@ def serve_db_image(image_id: int, filename: str):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT data_b64, mime_type FROM operator_blast_images WHERE id=%s",
+                "SELECT data_b64, mime_type, access_token FROM operator_blast_images WHERE id=%s",
                 (image_id,),
             )
             row = cur.fetchone()
         if not row or not row[0]:
             logger.warning("serve_db_image: id=%s not found or empty", image_id)
+            return "Image not found", 404
+        stored_token = row[2] or ""
+        if stored_token and stored_token != access_token:
+            logger.warning("serve_db_image: invalid token for id=%s", image_id)
             return "Image not found", 404
         data = base64.b64decode(row[0])
         mime_type = row[1] or "image/jpeg"

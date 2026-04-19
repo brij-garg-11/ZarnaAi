@@ -468,6 +468,9 @@ def api_create_show():
 def api_activate_show(show_id):
     """Activate a show (set status=live, ends any currently live show)."""
     from ..routes.shows import _update_show_status
+    user = current_user()
+    if not _user_owns_show(show_id, user):
+        return jsonify(success=False, error="Show not found."), 404
     try:
         _update_show_status(show_id, "live")
         return jsonify(success=True, status="live", show_id=show_id)
@@ -481,6 +484,9 @@ def api_activate_show(show_id):
 def api_end_show(show_id):
     """End a live show."""
     from ..routes.shows import _update_show_status
+    user = current_user()
+    if not _user_owns_show(show_id, user):
+        return jsonify(success=False, error="Show not found."), 404
     try:
         _update_show_status(show_id, "ended")
         return jsonify(success=True, status="ended", show_id=show_id)
@@ -645,6 +651,59 @@ def api_smart_send_preview():
 
 # ── Blasts (write) ─────────────────────────────────────────────────────────────
 
+# ── Ownership helpers ──────────────────────────────────────────────────────────
+
+def _user_owns_draft(draft_id: int, user: dict) -> bool:
+    """
+    Returns True if the current user is allowed to operate on this blast draft.
+    Super-admins pass unconditionally. Regular users must match created_by email.
+    """
+    if user.get("is_super_admin"):
+        return True
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT created_by FROM blast_drafts WHERE id=%s", (draft_id,))
+            row = cur.fetchone()
+        conn.close()
+        if not row:
+            return False
+        return (row[0] or "").lower() == (user.get("email") or "").lower()
+    except Exception:
+        logger.exception("_user_owns_draft check failed for draft_id=%s", draft_id)
+        return False
+
+
+def _user_owns_show(show_id: int, user: dict) -> bool:
+    """
+    Returns True if the current user is allowed to operate on this live show.
+    Super-admins pass unconditionally. Regular users check creator_slug scoping
+    via the shows table (created_by column if present, otherwise slug-level gate).
+    """
+    if user.get("is_super_admin"):
+        return True
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT created_by FROM live_shows WHERE id=%s",
+                (show_id,),
+            )
+            row = cur.fetchone()
+        conn.close()
+        if not row:
+            return False
+        created_by = (row[0] or "").lower()
+        # If show has no created_by (legacy rows), allow any authenticated user
+        # for backward compatibility — tightened once creator_slug is on shows.
+        if not created_by:
+            return True
+        return created_by == (user.get("email") or "").lower()
+    except Exception:
+        logger.exception("_user_owns_show check failed for show_id=%s", show_id)
+        return False
+
+
 @api_bp.route("/api/blasts/create", methods=["POST"])
 @login_required
 def api_create_blast():
@@ -675,6 +734,8 @@ def api_save_blast(draft_id):
     from ..routes.blast import _create_tracked_link
     data = request.get_json(silent=True) or {}
     user = current_user()
+    if not _user_owns_draft(draft_id, user):
+        return jsonify(success=False, error="Not found."), 404
 
     body = (data.get("body") or "").strip()
     if not body:
@@ -741,19 +802,21 @@ def api_upload_image():
     mime_type = f.content_type or f"image/{ext}"
 
     try:
+        import secrets as _secrets
         data = f.read()
         if not data:
             return jsonify(success=False, error="Uploaded file is empty."), 400
 
         data_b64 = base64.b64encode(data).decode("ascii")
+        access_token = _secrets.token_hex(16)
         conn = get_conn()
         try:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO operator_blast_images (filename, mime_type, data_b64) "
-                        "VALUES (%s, %s, %s) RETURNING id",
-                        (filename, mime_type, data_b64),
+                        "INSERT INTO operator_blast_images (filename, mime_type, data_b64, access_token) "
+                        "VALUES (%s, %s, %s, %s) RETURNING id",
+                        (filename, mime_type, data_b64, access_token),
                     )
                     image_id = cur.fetchone()[0]
         finally:
@@ -761,7 +824,7 @@ def api_upload_image():
 
         scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
         host   = request.headers.get("X-Forwarded-Host", request.host)
-        url = f"{scheme}://{host}/operator/blast/img/{image_id}/{filename}"
+        url = f"{scheme}://{host}/operator/blast/img/{image_id}/{access_token}/{filename}"
         logger.info("api_upload_image: stored id=%s size=%d url=%s", image_id, len(data), url)
         return jsonify(success=True, url=url, size=len(data), image_id=image_id)
     except Exception as e:
@@ -831,6 +894,8 @@ def api_blast_send(draft_id):
     from ..queries import get_blast_draft, save_blast_draft
     from ..blast_sender import execute_blast_async
     user = current_user()
+    if not _user_owns_draft(draft_id, user):
+        return jsonify(success=False, error="Draft not found."), 404
 
     draft = get_blast_draft(draft_id)
     if not draft:
@@ -898,6 +963,10 @@ def api_blast_schedule(draft_id):
     """Schedule a blast for a future UTC datetime."""
     from ..queries import get_blast_draft, schedule_blast
     from datetime import datetime, timezone
+    user = current_user()
+    if not _user_owns_draft(draft_id, user):
+        return jsonify(success=False, error="Draft not found."), 404
+
     data = request.get_json(silent=True) or {}
 
     send_at_str = (data.get("send_at") or "").strip()
@@ -926,6 +995,9 @@ def api_blast_schedule(draft_id):
 def api_blast_cancel(draft_id):
     """Cancel a scheduled or draft blast."""
     from ..queries import mark_blast_cancelled
+    user = current_user()
+    if not _user_owns_draft(draft_id, user):
+        return jsonify(success=False, error="Draft not found."), 404
     try:
         mark_blast_cancelled(draft_id)
         return jsonify(success=True, draft_id=draft_id)
@@ -939,6 +1011,9 @@ def api_blast_cancel(draft_id):
 def api_blast_status(draft_id):
     """Poll blast send progress."""
     from ..queries import get_blast_draft
+    user = current_user()
+    if not _user_owns_draft(draft_id, user):
+        return jsonify(success=False, error="not found"), 404
     draft = get_blast_draft(draft_id)
     if not draft:
         return jsonify(success=False, error="not found"), 404
@@ -1050,8 +1125,11 @@ def bot_data():
     import json
 
     user = current_user()
-    slug = (user.get("creator_slug") or "zarna") if user else "zarna"
+    slug = user.get("creator_slug") if user else None
     account_type = (user.get("account_type") or "performer") if user else "performer"
+
+    if not slug:
+        return jsonify(error="Onboarding not complete — no bot configured yet."), 400
 
     if account_type == "business":
         config_path = _BUSINESS_CONFIGS_DIR / f"{slug}.json"
@@ -1176,7 +1254,7 @@ def save_bot_data():
     account_type = (user.get("account_type") or "performer")
     slug = user.get("creator_slug") or ""
     if not slug:
-        return jsonify(error="No slug configured for this account"), 400
+        return jsonify(error="Onboarding not complete — no bot configured yet."), 400
 
     data = request.get_json(silent=True) or {}
 
@@ -1937,6 +2015,9 @@ def change_password():
 @login_required
 def delete_blast(blast_id):
     """Delete a blast draft. Refuses to delete blasts that are currently sending."""
+    user = current_user()
+    if not _user_owns_draft(blast_id, user):
+        return jsonify(error="Blast not found"), 404
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -1962,6 +2043,9 @@ def delete_blast(blast_id):
 @login_required
 def delete_show(show_id):
     """Delete a live show. Refuses to delete shows that are currently live."""
+    user = current_user()
+    if not _user_owns_show(show_id, user):
+        return jsonify(error="Show not found"), 404
     conn = get_conn()
     try:
         with conn.cursor() as cur:

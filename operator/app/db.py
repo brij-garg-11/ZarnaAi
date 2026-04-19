@@ -179,6 +179,18 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_blast_recipients_phone ON blast_recipients (phone_number, sent_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_blast_recipients_blast ON blast_recipients (blast_id)",
 
+        # ── Blast image access tokens ──────────────────────────────────────
+        # access_token: random hex included in the image URL so sequential IDs
+        # can't be enumerated to fetch other tenants' uploaded images.
+        # Existing rows get a deterministic token derived from their id so old
+        # Twilio MMS URLs stay valid after the migration.
+        "ALTER TABLE operator_blast_images ADD COLUMN IF NOT EXISTS access_token TEXT DEFAULT NULL",
+        """
+        UPDATE operator_blast_images
+        SET access_token = md5(id::text || 'zar-img-salt')
+        WHERE access_token IS NULL
+        """,
+
         # ── Password reset tokens ──────────────────────────────────────────
         """
         CREATE TABLE IF NOT EXISTS password_reset_tokens (

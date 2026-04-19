@@ -1,5 +1,6 @@
+import re
 import os
-from flask import Flask
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 from .db import init_db
@@ -68,6 +69,44 @@ def create_app() -> Flask:
     app.register_blueprint(team_bp)
     app.register_blueprint(smb_portal_bp)
     app.register_blueprint(api_bp)
+
+    # ── CSRF protection for state-changing API requests ────────────────────
+    # All /api/* POST/PUT/PATCH/DELETE requests must originate from an allowed
+    # origin. Browsers always send Origin on cross-origin requests; same-origin
+    # requests from the Railway host itself are also permitted.
+    # This rejects any cross-site request forgery attempt where a malicious
+    # page tries to trigger a credentialed POST to our API.
+    _CSRF_EXEMPT_PATHS = {"/api/auth/google/callback"}
+    _CSRF_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+    _ALLOWED_ORIGIN_PATTERNS = [
+        re.compile(r"^https?://localhost(:\d+)?$"),
+        re.compile(r"^https://.*\.lovable\.app$"),
+        re.compile(r"^https://lovable\.dev$"),
+        re.compile(r"^https://.*\.gptengineer\.app$"),
+    ] + [re.compile(r"^" + re.escape(o) + r"$") for o in _CORS_ORIGINS]
+
+    def _origin_allowed(origin: str) -> bool:
+        return any(p.match(origin) for p in _ALLOWED_ORIGIN_PATTERNS)
+
+    @app.before_request
+    def enforce_csrf():
+        if request.method not in _CSRF_METHODS:
+            return
+        if not request.path.startswith("/api/"):
+            return
+        if request.path in _CSRF_EXEMPT_PATHS:
+            return
+        origin = request.headers.get("Origin") or request.headers.get("Referer", "")
+        # Strip path from Referer to get origin
+        if origin and not origin.startswith("http"):
+            return  # malformed, block
+        if origin:
+            # Normalise Referer to scheme+host
+            from urllib.parse import urlparse
+            parsed = urlparse(origin)
+            check = f"{parsed.scheme}://{parsed.netloc}"
+            if not _origin_allowed(check):
+                return jsonify(error="CSRF check failed"), 403
 
     # Health check
     @app.route("/health")
