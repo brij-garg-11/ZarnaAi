@@ -179,6 +179,52 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_blast_recipients_phone ON blast_recipients (phone_number, sent_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_blast_recipients_blast ON blast_recipients (blast_id)",
 
+        # ── Onboarding / self-serve tables ─────────────────────────────────
+
+        # Columns added to operator_users for self-serve accounts
+        "ALTER TABLE operator_users ADD COLUMN IF NOT EXISTS creator_slug TEXT DEFAULT NULL",
+        "ALTER TABLE operator_users ADD COLUMN IF NOT EXISTS account_type TEXT DEFAULT NULL",
+        "ALTER TABLE operator_users ADD COLUMN IF NOT EXISTS is_super_admin BOOLEAN DEFAULT FALSE",
+
+        # bot_configs: one row per self-signed-up creator; written by /api/onboarding/submit
+        """
+        CREATE TABLE IF NOT EXISTS bot_configs (
+            id               BIGSERIAL PRIMARY KEY,
+            operator_user_id BIGINT NOT NULL REFERENCES operator_users(id) ON DELETE CASCADE,
+            creator_slug     TEXT UNIQUE NOT NULL,
+            account_type     TEXT NOT NULL DEFAULT 'performer',
+            config_json      JSONB NOT NULL DEFAULT '{}',
+            status           TEXT NOT NULL DEFAULT 'submitted',
+            created_at       TIMESTAMPTZ DEFAULT NOW(),
+            updated_at       TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_bot_configs_user ON bot_configs(operator_user_id)",
+
+        # smb_bot_config: DB-persisted overrides for business bot settings
+        """
+        CREATE TABLE IF NOT EXISTS smb_bot_config (
+            tenant_slug  TEXT PRIMARY KEY,
+            config_json  JSONB NOT NULL DEFAULT '{}',
+            updated_at   TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+
+        # operator_invites: pending team invites created by owners/admins
+        """
+        CREATE TABLE IF NOT EXISTS operator_invites (
+            id           BIGSERIAL PRIMARY KEY,
+            email        TEXT NOT NULL,
+            creator_slug TEXT NOT NULL,
+            account_type TEXT NOT NULL DEFAULT 'performer',
+            invited_by   BIGINT REFERENCES operator_users(id) ON DELETE SET NULL,
+            accepted_at  TIMESTAMPTZ,
+            created_at   TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE (email, creator_slug)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_operator_invites_email ON operator_invites(email)",
+
         # ── Data-cleanup on every startup ──────────────────────────────────
         # 1. Clear /tmp-based image URLs (ephemeral Railway filesystem, gone on redeploy)
         "UPDATE blast_drafts SET media_url='' WHERE media_url LIKE '%/operator/blast/uploads/%'",

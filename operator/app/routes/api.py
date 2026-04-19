@@ -1016,13 +1016,36 @@ def fan_of_the_week():
 
 # ── Bot Data ──────────────────────────────────────────────────────────────────
 
+def _load_performer_config_from_db(slug: str) -> dict | None:
+    """
+    Load a performer's bot config from bot_configs.config_json.
+    Returns the parsed dict, or None if no row exists.
+    """
+    import psycopg2.extras
+    try:
+        dbc = get_conn()
+        with dbc.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                "SELECT config_json FROM bot_configs WHERE creator_slug=%s",
+                (slug,),
+            )
+            row = cur.fetchone()
+        dbc.close()
+        return dict(row["config_json"]) if row and row["config_json"] else None
+    except Exception:
+        logger.exception("api: failed to load bot_configs for slug=%s", slug)
+        return None
+
+
 @api_bp.route("/api/bot-data")
 @login_required
 def bot_data():
     """
     Returns the current bot configuration for the logged-in user.
-    Stub: reads from creator_config/<slug>.json.
-    Future: will read from DB per user's creator_slug.
+
+    Business accounts: merge file defaults with DB overrides from smb_bot_config.
+    Performer accounts: prefer bot_configs DB row; fall back to creator_config JSON
+                        for legacy installs (e.g. Zarna's hand-crafted file).
     """
     import json
 
@@ -1030,21 +1053,15 @@ def bot_data():
     slug = (user.get("creator_slug") or "zarna") if user else "zarna"
     account_type = (user.get("account_type") or "performer") if user else "performer"
 
-    # Business configs live in operator/app/business_configs/
-    # Performer configs live in creator_config/ at repo root (not available in Railway container)
     if account_type == "business":
         config_path = _BUSINESS_CONFIGS_DIR / f"{slug}.json"
-    else:
-        config_path = Path(__file__).parents[3] / "creator_config" / f"{slug}.json"
+        try:
+            with open(config_path) as f:
+                cfg = json.load(f)
+        except Exception:
+            logger.warning("api: no file config for business slug=%s, using empty base", slug)
+            cfg = {}
 
-    try:
-        with open(config_path) as f:
-            cfg = json.load(f)
-    except Exception:
-        logger.exception("api: failed to load creator config for slug=%s", slug)
-        return jsonify(error="Config not found"), 404
-
-    if account_type == "business":
         # Merge DB overrides on top of file defaults so edits survive deploys
         import psycopg2.extras
         db_overrides = {}
@@ -1069,7 +1086,7 @@ def bot_data():
         tracked_links = db_overrides.get("tracked_links", cfg.get("tracked_links", {}))
 
         return jsonify(
-            display_name=cfg.get("display_name", ""),
+            display_name=_get("display_name", cfg.get("display_name", "")),
             business_type=cfg.get("business_type", ""),
             location=cfg.get("location", ""),
             tone=_get("tone"),
@@ -1086,11 +1103,50 @@ def bot_data():
         )
 
     # ── Performer bot config ──
+    # 1. Try DB first (self-serve accounts always have a bot_configs row)
+    db_cfg = _load_performer_config_from_db(slug)
+    if db_cfg is not None:
+        links = db_cfg.get("links", {})
+        return jsonify(
+            name=db_cfg.get("name", db_cfg.get("display_name", "")),
+            bio=db_cfg.get("bio", ""),
+            description=db_cfg.get("description", ""),
+            voice_style=db_cfg.get("voice_style", ""),
+            tone=db_cfg.get("tone", "casual"),
+            website_url=db_cfg.get("website_url", ""),
+            podcast_url=db_cfg.get("podcast_url", ""),
+            media_urls=db_cfg.get("media_urls", []),
+            links={
+                "tickets": links.get("tickets", ""),
+                "merch": links.get("merch", ""),
+                "book": links.get("book", ""),
+                "youtube": links.get("youtube", ""),
+            },
+            banned_words=db_cfg.get("banned_words", []),
+            name_variants=db_cfg.get("name_variants", []),
+            edits_used=0,
+            edits_limit=20,
+        )
+
+    # 2. Fall back to legacy file-based config (e.g. Zarna's hand-crafted JSON)
+    config_path = Path(__file__).parents[3] / "creator_config" / f"{slug}.json"
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+    except Exception:
+        logger.exception("api: no DB row or file config for performer slug=%s", slug)
+        return jsonify(error="Config not found"), 404
+
     links = cfg.get("links", {})
     return jsonify(
         name=cfg.get("name", ""),
+        bio=cfg.get("bio", ""),
         description=cfg.get("description", ""),
         voice_style=cfg.get("voice_style", ""),
+        tone=cfg.get("tone", "casual"),
+        website_url=cfg.get("website_url", cfg.get("links", {}).get("website", "")),
+        podcast_url=cfg.get("podcast_url", ""),
+        media_urls=cfg.get("media_urls", []),
         links={
             "tickets": links.get("tickets", ""),
             "merch": links.get("merch", ""),
@@ -1108,47 +1164,76 @@ def bot_data():
 @login_required
 def save_bot_data():
     """
-    Save editable bot config fields for a business account.
-    Persists to smb_bot_config (DB) so changes survive Railway deploys.
-    Allowed fields: tone, welcome_message, signup_question,
-                    outreach_invite_message, address, hours, website, tracked_links
-    """
-    user = current_user()
-    if (user.get("account_type") or "performer") != "business":
-        return jsonify(error="Only business accounts can edit bot config via this endpoint"), 403
+    Save editable bot config fields. Persists to DB so changes survive deploys.
 
+    Business accounts: upserts into smb_bot_config.
+    Performer accounts: upserts into bot_configs.config_json.
+    """
+    import json
+    import psycopg2.extras
+
+    user = current_user()
+    account_type = (user.get("account_type") or "performer")
     slug = user.get("creator_slug") or ""
     if not slug:
-        return jsonify(error="No tenant slug configured for this account"), 400
+        return jsonify(error="No slug configured for this account"), 400
 
     data = request.get_json(silent=True) or {}
 
-    allowed = {
-        "tone", "welcome_message", "signup_question",
-        "outreach_invite_message", "address", "hours",
-        "website", "tracked_links",
-    }
-    updates = {k: v for k, v in data.items() if k in allowed}
+    if account_type == "business":
+        allowed = {
+            "tone", "welcome_message", "signup_question",
+            "outreach_invite_message", "address", "hours",
+            "website", "tracked_links", "display_name",
+        }
+        updates = {k: v for k, v in data.items() if k in allowed}
+        if not updates:
+            return jsonify(error="No valid fields provided"), 400
 
+        conn = get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """INSERT INTO smb_bot_config (tenant_slug, config_json, updated_at)
+                           VALUES (%s, %s::jsonb, NOW())
+                           ON CONFLICT (tenant_slug) DO UPDATE
+                           SET config_json = smb_bot_config.config_json || %s::jsonb,
+                               updated_at  = NOW()""",
+                        (slug, json.dumps(updates), json.dumps(updates)),
+                    )
+            return jsonify(success=True)
+        except Exception:
+            logger.exception("save_bot_data: business failed for slug=%s", slug)
+            return jsonify(error="Failed to save config"), 500
+        finally:
+            conn.close()
+
+    # ── Performer save ──
+    allowed_performer = {
+        "name", "bio", "description", "tone", "voice_style",
+        "website_url", "podcast_url", "media_urls", "banned_words", "links",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed_performer}
     if not updates:
         return jsonify(error="No valid fields provided"), 400
 
-    import json, psycopg2.extras
     conn = get_conn()
     try:
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """INSERT INTO smb_bot_config (tenant_slug, config_json, updated_at)
-                       VALUES (%s, %s::jsonb, NOW())
-                       ON CONFLICT (tenant_slug) DO UPDATE
-                       SET config_json = smb_bot_config.config_json || %s::jsonb,
+                    """INSERT INTO bot_configs
+                           (operator_user_id, creator_slug, account_type, config_json, status)
+                       VALUES (%s, %s, 'performer', %s::jsonb, 'active')
+                       ON CONFLICT (creator_slug) DO UPDATE
+                       SET config_json = bot_configs.config_json || %s::jsonb,
                            updated_at  = NOW()""",
-                    (slug, json.dumps(updates), json.dumps(updates)),
+                    (user["id"], slug, json.dumps(updates), json.dumps(updates)),
                 )
         return jsonify(success=True)
     except Exception:
-        logger.exception("save_bot_data: failed for slug=%s", slug)
+        logger.exception("save_bot_data: performer failed for slug=%s", slug)
         return jsonify(error="Failed to save config"), 500
     finally:
         conn.close()
@@ -2507,6 +2592,24 @@ def api_onboarding_submit():
                        WHERE id=%s""",
                     (slug, account_type, user["id"]),
                 )
+                # Seed smb_bot_config for business accounts so GET /api/bot-data
+                # always finds a row without requiring a manual file deploy.
+                if account_type == "business":
+                    import json as _json
+                    seed = _json.dumps({
+                        "display_name": display_name,
+                        "tone": tone,
+                        "website": website_url,
+                        "welcome_message": "",
+                        "signup_question": "",
+                        "outreach_invite_message": "",
+                    })
+                    cur.execute(
+                        """INSERT INTO smb_bot_config (tenant_slug, config_json, updated_at)
+                           VALUES (%s, %s::jsonb, NOW())
+                           ON CONFLICT (tenant_slug) DO NOTHING""",
+                        (slug, seed),
+                    )
 
         conn.close()
         logger.info("onboarding_submit: user=%s slug=%s type=%s", user["email"], slug, account_type)
