@@ -304,6 +304,36 @@ def _create_tracked_link(raw_url: str, label: str) -> str | None:
         conn.close()
 
 
+@blast_bp.route("/operator/blast/img/<int:image_id>/<filename>")
+def serve_db_image_legacy(image_id: int, filename: str):
+    """
+    Backward-compatible route for blast images uploaded before the access_token
+    migration. Serves the image directly without token validation so existing
+    Twilio MMS URLs in sent/draft blasts keep working.
+    """
+    from flask import Response
+    from ..db import get_conn
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT data_b64, mime_type FROM operator_blast_images WHERE id=%s",
+                (image_id,),
+            )
+            row = cur.fetchone()
+        if not row or not row[0]:
+            return "Image not found", 404
+        data = base64.b64decode(row[0])
+        resp = Response(data, status=200, mimetype=row[1] or "image/jpeg")
+        resp.headers["Cache-Control"] = "public, max-age=86400"
+        return resp
+    except Exception as e:
+        logger.exception("serve_db_image_legacy error for id=%s: %s", image_id, e)
+        return "Error serving image", 500
+    finally:
+        conn.close()
+
+
 @blast_bp.route("/operator/blast/img/<int:image_id>/<access_token>/<filename>")
 def serve_db_image(image_id: int, access_token: str, filename: str):
     """
