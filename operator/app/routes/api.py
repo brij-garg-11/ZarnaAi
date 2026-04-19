@@ -2566,11 +2566,23 @@ def api_onboarding_status():
     Lovable calls this on load to decide whether to show the wizard
     or redirect straight to the dashboard.
 
+    Super-admins who have selected a project via /api/admin/select-project
+    are always considered "completed" for that viewing context — they should
+    never be bounced to the onboarding wizard while impersonating a tenant.
+
     Response:
       { "completed": true,  "account_type": "performer", "creator_slug": "zarna" }
       { "completed": false, "account_type": null,        "creator_slug": null }
     """
+    from flask import session
     user = current_user()
+
+    # Super-admin impersonating a project → always treat as completed
+    if user.get("is_super_admin") and session.get("viewing_as"):
+        slug = session["viewing_as"]
+        account_type = session.get("viewing_as_account_type") or "performer"
+        return jsonify(completed=True, account_type=account_type, creator_slug=slug)
+
     completed = bool(user.get("creator_slug") and user.get("account_type"))
     return jsonify(
         completed=completed,
