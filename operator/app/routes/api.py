@@ -2203,7 +2203,11 @@ def admin_projects():
             except Exception:
                 pass
 
-            # Live subscriber/fan counts
+            # Live subscriber/fan counts.
+            # Business: real per-tenant count from smb_subscribers.
+            # Performer: contacts table is shared across all performers on the
+            # same deployment — there is no per-slug filter, so we show None
+            # and let the frontend display a dash rather than a misleading total.
             try:
                 with conn.cursor() as cur:
                     if account_type == "business":
@@ -2211,11 +2215,11 @@ def admin_projects():
                             "SELECT COUNT(*) FROM smb_subscribers WHERE tenant_slug=%s AND status='active'",
                             (slug,),
                         )
+                        count = cur.fetchone()[0]
                     else:
-                        cur.execute("SELECT COUNT(*) FROM contacts")
-                    count = cur.fetchone()[0]
+                        count = None
             except Exception:
-                count = 0
+                count = None
 
             projects.append({
                 "slug": slug,
@@ -2223,7 +2227,7 @@ def admin_projects():
                 "account_type": account_type,
                 "logo_url": logo_url,
                 "location": location,
-                "subscriber_count": count,
+                "subscriber_count": count,  # None for performers (shared table)
             })
 
         return jsonify(projects=projects)
