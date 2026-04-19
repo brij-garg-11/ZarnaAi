@@ -308,6 +308,152 @@ def api_logout():
     return jsonify(success=True)
 
 
+# ── Password reset ─────────────────────────────────────────────────────────────
+
+def _send_reset_email(to_email: str, reset_url: str) -> None:
+    """Send a password reset email via Resend."""
+    import os
+    import resend
+
+    resend.api_key = os.getenv("RESEND_API_KEY", "")
+    from_addr = os.getenv("RESEND_FROM", "onboarding@resend.dev")
+
+    resend.Emails.send({
+        "from": f"Zar <{from_addr}>",
+        "to": [to_email],
+        "subject": "Reset your Zar password",
+        "html": f"""
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px 24px">
+          <h2 style="font-size:22px;font-weight:700;margin-bottom:8px">Reset your password</h2>
+          <p style="color:#555;margin-bottom:24px">
+            We received a request to reset the password for your Zar account.
+            Click the button below — this link expires in 1 hour.
+          </p>
+          <a href="{reset_url}"
+             style="display:inline-block;background:#f97316;color:#fff;font-weight:600;
+                    padding:12px 28px;border-radius:8px;text-decoration:none;font-size:15px">
+            Reset password
+          </a>
+          <p style="color:#999;font-size:13px;margin-top:32px">
+            If you didn't request this, you can ignore this email.
+            Your password won't change until you click the link above.
+          </p>
+        </div>
+        """,
+    })
+
+
+@auth_bp.route("/api/auth/forgot-password", methods=["POST"])
+def api_forgot_password():
+    """
+    Request a password reset email.
+    Always returns 200 so we don't leak whether an email is registered.
+    """
+    import os
+    import secrets
+    from datetime import datetime, timedelta, timezone
+
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if not email:
+        return jsonify(success=True)
+
+    frontend_url = os.getenv("FRONTEND_URL", "https://zar-fan-connect.lovable.app")
+
+    try:
+        conn = get_conn()
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                "SELECT id, email FROM operator_users WHERE email=%s AND is_active=TRUE",
+                (email,),
+            )
+            user = cur.fetchone()
+
+        if user:
+            token = secrets.token_urlsafe(32)
+            expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """INSERT INTO password_reset_tokens (user_id, token, expires_at)
+                           VALUES (%s, %s, %s)""",
+                        (user["id"], token, expires_at),
+                    )
+            reset_url = f"{frontend_url}/reset-password?token={token}"
+            try:
+                _send_reset_email(user["email"], reset_url)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception(
+                    "forgot_password: failed to send email to %s", email
+                )
+        conn.close()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("forgot_password error for %s", email)
+
+    # Always 200 — never reveal whether the email exists
+    return jsonify(success=True)
+
+
+@auth_bp.route("/api/auth/reset-password", methods=["POST"])
+def api_reset_password():
+    """
+    Consume a reset token and set a new password.
+    Token is single-use and expires after 1 hour.
+    """
+    from datetime import datetime, timezone
+    from werkzeug.security import generate_password_hash
+
+    data = request.get_json(silent=True) or {}
+    token    = (data.get("token") or "").strip()
+    password = (data.get("password") or "").strip()
+
+    if not token:
+        return jsonify(success=False, error="Reset token is required."), 400
+    if not password or len(password) < 8:
+        return jsonify(success=False, error="Password must be at least 8 characters."), 400
+
+    try:
+        conn = get_conn()
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """SELECT id, user_id, expires_at, used_at
+                   FROM password_reset_tokens
+                   WHERE token=%s""",
+                (token,),
+            )
+            row = cur.fetchone()
+
+        if not row:
+            return jsonify(success=False, error="Invalid or expired reset link."), 400
+        if row["used_at"] is not None:
+            return jsonify(success=False, error="This reset link has already been used."), 400
+        if row["expires_at"] < datetime.now(timezone.utc):
+            return jsonify(success=False, error="This reset link has expired. Please request a new one."), 400
+
+        pw_hash = generate_password_hash(password)
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE operator_users SET password_hash=%s WHERE id=%s",
+                    (pw_hash, row["user_id"]),
+                )
+                cur.execute(
+                    "UPDATE password_reset_tokens SET used_at=NOW() WHERE id=%s",
+                    (row["id"],),
+                )
+        conn.close()
+        return jsonify(success=True)
+
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("reset_password error")
+        return jsonify(success=False, error="Something went wrong — please try again."), 500
+
+
 # ── Google OAuth ───────────────────────────────────────────────────────────────
 
 def _get_google_client():

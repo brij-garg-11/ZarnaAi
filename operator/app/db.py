@@ -179,6 +179,20 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_blast_recipients_phone ON blast_recipients (phone_number, sent_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_blast_recipients_blast ON blast_recipients (blast_id)",
 
+        # ── Password reset tokens ──────────────────────────────────────────
+        """
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id         BIGSERIAL PRIMARY KEY,
+            user_id    BIGINT NOT NULL REFERENCES operator_users(id) ON DELETE CASCADE,
+            token      TEXT UNIQUE NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL,
+            used_at    TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_prt_token ON password_reset_tokens(token)",
+        "CREATE INDEX IF NOT EXISTS idx_prt_user ON password_reset_tokens(user_id)",
+
         # ── Onboarding / self-serve tables ─────────────────────────────────
 
         # Columns added to operator_users for self-serve accounts
