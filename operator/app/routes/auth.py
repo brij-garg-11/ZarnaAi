@@ -7,6 +7,7 @@ on first deploy and hit /operator/setup to create the owner account.
 After that, manage team members from the Team page.
 """
 
+import logging
 import os
 from functools import wraps
 
@@ -26,6 +27,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from ..db import get_conn
 
 auth_bp = Blueprint("auth", __name__)
+logger = logging.getLogger(__name__)
 
 
 # ── Session helpers ────────────────────────────────────────────────────────
@@ -223,6 +225,12 @@ def api_login():
         if user and check_password_hash(user["password_hash"], password):
             session["operator_user_id"] = user["id"]
             session.permanent = True
+            logger.info(
+                "[AUTH] api_login success — user=%s session.permanent=%s lifetime=%s",
+                user["email"],
+                session.permanent,
+                current_app.config.get("PERMANENT_SESSION_LIFETIME"),
+            )
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -244,6 +252,7 @@ def api_login():
         return jsonify(success=False, error="Incorrect email or password."), 401
 
     except Exception:
+        logger.exception("[AUTH] api_login error")
         return jsonify(success=False, error="Login error — please try again."), 500
 
 
@@ -605,7 +614,7 @@ def google_callback():
         return redirect(f"{frontend_url}/login?error=not_authorized")
 
     except Exception:
-        logging.getLogger(__name__).exception("Google OAuth callback failed")
+        logger.exception("Google OAuth callback failed")
         return redirect(f"{frontend_url}/login?error=oauth_failed")
 
 
@@ -615,8 +624,16 @@ def api_me():
     Returns the currently authenticated user, or 401 if not logged in.
     The React frontend can call this on load to check session state.
     """
+    uid = session.get("operator_user_id")
+    logger.info(
+        "[AUTH] /api/auth/me — session uid=%s permanent=%s cookie=%s",
+        uid,
+        session.permanent,
+        request.cookies.get("session", "NO_COOKIE"),
+    )
     user = current_user()
     if not user:
+        logger.info("[AUTH] /api/auth/me — unauthenticated (no valid user for uid=%s)", uid)
         return jsonify(authenticated=False), 401
     return jsonify(
         authenticated=True,
