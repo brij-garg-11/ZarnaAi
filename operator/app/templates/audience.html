@@ -13,9 +13,7 @@
 
   <div class="flex items-center justify-between mb-4">
     <div class="section-label">Fan of the Week</div>
-    <button @click="showCandidates = !showCandidates"
-            class="btn-ghost btn-sm"
-            x-text="showCandidates ? 'Hide candidates' : 'Pick this week\'s fan'"></button>
+    <span class="text-xs" style="color:var(--text-dim);">Auto-picked every Monday at 3 AM UTC</span>
   </div>
 
   <!-- Current pick card -->
@@ -30,34 +28,19 @@
           <div class="flex items-center gap-2 flex-wrap mb-1">
             <span class="font-bold text-base" style="color:var(--pink-dark);">Fan ···<span x-text="current.phone_last4"></span></span>
             <span class="badge" :class="tierBadge(current.fan_tier)" x-text="tierLabel(current.fan_tier)"></span>
-            <template x-if="current.saved">
-              <span class="badge" style="background:#fce7f0;color:#c6235d;border:1px solid #f9c0d8;">✓ This Week</span>
-            </template>
-            <template x-if="!current.saved">
-              <span class="badge" style="background:#fef9c3;color:#854d0e;border:1px solid #fde68a;">Suggested</span>
-            </template>
+            <span class="badge" style="background:#fce7f0;color:#c6235d;border:1px solid #f9c0d8;">⭐ Fan of the Week</span>
           </div>
           <p class="text-sm mb-2 italic" style="color:var(--text-muted);" x-text="'&ldquo;' + current.body + '&rdquo;'"></p>
-          <div class="flex flex-wrap gap-1.5 mb-2">
+          <div class="flex flex-wrap gap-1.5 mb-3">
             <template x-for="tag in (current.fan_tags || [])" :key="tag">
               <span class="tag-pill" x-text="tag"></span>
             </template>
             <span x-show="current.fan_location" class="tag-pill" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe;"
                   x-text="current.fan_location"></span>
           </div>
-          <div class="flex items-center gap-4">
-            <template x-if="!current.saved">
-              <button @click="selectFan(current.phone_last4, current.body)"
-                      class="btn-pink btn-sm"
-                      :disabled="saving">
-                <span x-text="saving ? 'Saving…' : '⭐ Lock in as Fan of the Week'"></span>
-              </button>
-            </template>
-            <button @click="openThread(current.phone_last4)"
-                    class="btn-ghost btn-sm">
-              💬 View conversation
-            </button>
-          </div>
+          <button @click="openThread(current.phone_last4)" class="btn-ghost btn-sm">
+            💬 View conversation
+          </button>
         </div>
       </div>
     </div>
@@ -65,57 +48,9 @@
   <template x-if="!current || !current.found">
     <div class="card mb-4 text-center py-8" style="color:var(--text-dim);">
       <div class="text-3xl mb-2">🌟</div>
-      <div class="text-sm">No qualifying fans found this week yet.</div>
+      <div class="text-sm">No pick yet this week — auto-picks every Monday morning.</div>
     </div>
   </template>
-
-  <!-- Candidate list -->
-  <div x-show="showCandidates" x-transition class="mb-4">
-    <div class="card">
-      <div class="section-label mb-4">Top candidates this week</div>
-      <template x-if="candidates.length === 0 && !loadingCandidates">
-        <p class="text-sm" style="color:var(--text-dim);">No candidates found.</p>
-      </template>
-      <template x-if="loadingCandidates">
-        <p class="text-sm" style="color:var(--text-dim);">Loading…</p>
-      </template>
-      <div class="space-y-3">
-        <template x-for="(c, i) in candidates" :key="c.phone_last4">
-          <div class="card-sm flex items-start gap-3"
-               :style="i === 0 ? 'border-color: var(--pink); background: var(--pink-pale);' : ''">
-            <div class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shrink-0"
-                 :style="i === 0 ? 'background:var(--pink);color:white;' : 'background:var(--border);color:var(--text-muted);'">
-              <span x-text="i + 1"></span>
-            </div>
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2 flex-wrap mb-0.5">
-                <span class="font-semibold text-sm" style="color:var(--text);">Fan ···<span x-text="c.phone_last4"></span></span>
-                <span class="badge" :class="tierBadge(c.fan_tier)" x-text="tierLabel(c.fan_tier)"></span>
-                <template x-for="tag in (c.fan_tags || []).slice(0,3)" :key="tag">
-                  <span class="tag-pill text-xs" x-text="tag"></span>
-                </template>
-              </div>
-              <p class="text-xs italic mb-1.5" style="color:var(--text-muted);"
-                 x-text="'&ldquo;' + c.message_text.slice(0, 120) + (c.message_text.length > 120 ? '…' : '') + '&rdquo;'"></p>
-              <div class="flex items-center gap-3">
-                <button @click="selectFan(c.phone_last4, c.message_text)"
-                        class="btn-pink btn-sm"
-                        :disabled="saving">
-                  ⭐ Pick this fan
-                </button>
-                <button @click="openThread(c.phone_last4)"
-                        class="btn-ghost btn-sm">
-                  💬 Convo
-                </button>
-                <span class="text-xs" style="color:var(--text-dim);"
-                      x-text="'Score: ' + c.candidate_score + (c.came_back ? ' · came back' : '') + (c.reply_count > 0 ? ' · ' + c.reply_count + ' replies' : '')"></span>
-              </div>
-            </div>
-          </div>
-        </template>
-      </div>
-    </div>
-  </div>
 
   <!-- History table -->
   <div class="card">
@@ -251,16 +186,11 @@
 function fotw() {
   return {
     current: null,
-    candidates: [],
     history: [],
-    showCandidates: false,
-    saving: false,
-    loadingCandidates: false,
     loadingHistory: false,
 
     async init() {
       await Promise.all([this.loadCurrent(), this.loadHistory()]);
-      this.$watch('showCandidates', v => { if (v && this.candidates.length === 0) this.loadCandidates(); });
     },
 
     async loadCurrent() {
@@ -268,16 +198,6 @@ function fotw() {
         const r = await fetch('/api/fan-of-the-week');
         this.current = await r.json();
       } catch(e) { console.error(e); }
-    },
-
-    async loadCandidates() {
-      this.loadingCandidates = true;
-      try {
-        const r = await fetch('/api/fan-of-the-week/candidates');
-        const d = await r.json();
-        this.candidates = d.candidates || [];
-      } catch(e) { console.error(e); }
-      this.loadingCandidates = false;
     },
 
     async loadHistory() {
@@ -288,24 +208,6 @@ function fotw() {
         this.history = d.history || [];
       } catch(e) { console.error(e); }
       this.loadingHistory = false;
-    },
-
-    async selectFan(phone_last4, message_text) {
-      this.saving = true;
-      try {
-        const r = await fetch('/api/fan-of-the-week/select', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone_last4, message_text }),
-        });
-        const d = await r.json();
-        if (d.ok) {
-          this.showCandidates = false;
-          await this.loadCurrent();
-          await this.loadHistory();
-        }
-      } catch(e) { console.error(e); }
-      this.saving = false;
     },
 
     openThread(phone_last4) {

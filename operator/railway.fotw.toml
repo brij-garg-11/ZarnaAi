@@ -1,0 +1,15 @@
+# Weekly Fan of the Week auto-picker.
+#
+# Runs every Monday at 3:05 AM UTC — 5 minutes after fan scoring finishes —
+# so tier/score data is fresh when ranking candidates.
+#
+# Point a separate Railway cron service at this file:
+#   Service → Settings → Railway config file → operator/railway.fotw.toml
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python -u operator/scripts/pick_fan_of_the_week.py"
+cronSchedule = "5 3 * * 1"
+watchPatterns = ["operator/scripts/pick_fan_of_the_week.py", "operator/requirements.txt"]
