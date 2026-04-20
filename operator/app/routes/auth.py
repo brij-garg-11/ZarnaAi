@@ -495,7 +495,7 @@ def google_login():
     google = _get_google_client()
     redirect_uri = os.getenv(
         "GOOGLE_REDIRECT_URI",
-        "https://zarnaai-production.up.railway.app/api/auth/google/callback",
+        "https://api.zar.bot/api/auth/google/callback",
     )
     # Carry signup flag through OAuth state so callback knows the intent
     signup = request.args.get("signup", "false")
