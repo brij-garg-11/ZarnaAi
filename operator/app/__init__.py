@@ -1,5 +1,6 @@
 import re
 import os
+from datetime import timedelta
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -22,6 +23,8 @@ _CORS_ORIGINS = [
 def create_app() -> Flask:
     app = Flask(__name__, template_folder="templates", static_folder="static")
     app.secret_key = os.getenv("OPERATOR_SECRET_KEY", os.getenv("SECRET_KEY", "change-me-in-production"))
+    app.config["SESSION_PERMANENT"] = True
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=int(os.getenv("SESSION_LIFETIME_DAYS", "30")))
 
     # Allow cross-origin requests to /api/* from the marketing site.
     # supports_credentials=True is required for the session cookie to be sent.

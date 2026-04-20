@@ -95,6 +95,7 @@ def login():
                 user = cur.fetchone()
             if user and check_password_hash(user["password_hash"], password):
                 session["operator_user_id"] = user["id"]
+                session.permanent = True
                 with conn:
                     with conn.cursor() as cur:
                         cur.execute(
@@ -221,6 +222,7 @@ def api_login():
 
         if user and check_password_hash(user["password_hash"], password):
             session["operator_user_id"] = user["id"]
+            session.permanent = True
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -289,6 +291,7 @@ def api_signup():
                 new_id = cur.fetchone()[0]
 
         session["operator_user_id"] = new_id
+        session.permanent = True
         conn.close()
         return jsonify(
             success=True,
@@ -529,6 +532,7 @@ def google_callback():
         if user:
             # Scenario 1: existing account — log in normally
             session["operator_user_id"] = user["id"]
+            session.permanent = True
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -573,6 +577,7 @@ def google_callback():
                         (invite["id"],),
                     )
             session["operator_user_id"] = new_id
+            session.permanent = True
             conn.close()
             return redirect(f"{frontend_url}/dashboard")
 
@@ -591,6 +596,7 @@ def google_callback():
                     )
                     new_id = cur.fetchone()[0]
             session["operator_user_id"] = new_id
+            session.permanent = True
             conn.close()
             return redirect(f"{frontend_url}/onboarding")
 
