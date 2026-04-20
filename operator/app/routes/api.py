@@ -1055,7 +1055,7 @@ _FOTW_CANDIDATES_SQL = """
         FROM messages m
         WHERE m.role = 'user'
           AND m.created_at >= NOW() - INTERVAL '1 day' * %s
-          AND LENGTH(m.text) BETWEEN 50 AND 400
+          AND LENGTH(m.text) BETWEEN 15 AND 400
           AND m.text NOT ILIKE 'stop%%'
           AND m.text NOT ILIKE 'yes%%'
           AND m.text NOT ILIKE 'no%%'
