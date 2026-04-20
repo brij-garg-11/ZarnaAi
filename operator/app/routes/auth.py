@@ -316,7 +316,7 @@ def _send_reset_email(to_email: str, reset_url: str) -> None:
     import resend
 
     resend.api_key = os.getenv("RESEND_API_KEY", "")
-    from_addr = os.getenv("RESEND_FROM", "onboarding@resend.dev")
+    from_addr = os.getenv("RESEND_FROM", "hello@zar.bot")
 
     resend.Emails.send({
         "from": f"Zar <{from_addr}>",
