@@ -25,6 +25,7 @@ def create_app() -> Flask:
     app.secret_key = os.getenv("OPERATOR_SECRET_KEY", os.getenv("SECRET_KEY", "change-me-in-production"))
     app.config["SESSION_PERMANENT"] = True
     app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=int(os.getenv("SESSION_LIFETIME_DAYS", "30")))
+    app.config["SESSION_REFRESH_EACH_REQUEST"] = True
 
     # Allow cross-origin requests to /api/* from the marketing site.
     # supports_credentials=True is required for the session cookie to be sent.
