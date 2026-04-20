@@ -2683,6 +2683,48 @@ def team_members():
         conn.close()
 
 
+def _send_invite_email(to_email: str, inviter_name: str, project_name: str) -> None:
+    """Send a team invite email via Resend."""
+    import os
+    import resend
+
+    resend.api_key = os.getenv("RESEND_API_KEY", "")
+    from_addr = os.getenv("RESEND_FROM", "hello@zar.bot")
+    login_url = os.getenv("FRONTEND_URL", "https://zar.bot") + "/login"
+
+    resend.Emails.send({
+        "from": f"Zar <{from_addr}>",
+        "to": [to_email],
+        "subject": "Someone slid into your inbox (professionally)",
+        "html": f"""
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;color:#111">
+          <div style="margin-bottom:24px">
+            <span style="font-size:22px;font-weight:800;color:#f97316">ZarBot</span>
+          </div>
+          <h2 style="font-size:20px;font-weight:700;margin:0 0 12px">
+            You have been invited to join {project_name} on Zar
+          </h2>
+          <p style="color:#555;margin:0 0 8px;line-height:1.6">
+            <strong>{inviter_name}</strong> has added you as a team member.
+            Sign in with Google to get access to the dashboard, fan conversations, and more.
+          </p>
+          <p style="color:#555;margin:0 0 28px;line-height:1.6">
+            Use <strong>{to_email}</strong> when signing in so your invite is recognized automatically.
+          </p>
+          <a href="{login_url}"
+             style="display:inline-block;background:#f97316;color:#fff;font-weight:700;
+                    padding:13px 32px;border-radius:8px;text-decoration:none;font-size:15px">
+            Accept invite
+          </a>
+          <p style="color:#aaa;font-size:12px;margin-top:36px;line-height:1.6">
+            Your fans are waiting. Don't ghost them.<br>
+            If you were not expecting this invite, you can safely ignore this email.
+          </p>
+        </div>
+        """,
+    })
+
+
 @api_bp.route("/api/team/invite", methods=["POST"])
 @login_required
 def team_invite():
@@ -2729,6 +2771,14 @@ def team_invite():
                     (email, slug, account_type_for_project, user["id"], user["id"]),
                 )
                 invite_id = cur.fetchone()[0]
+
+        # Send invite email (non-blocking, failure does not break the invite)
+        inviter_name = user.get("name") or user.get("email") or "Your teammate"
+        project_name = slug.replace("_", " ").title()
+        try:
+            _send_invite_email(email, inviter_name, project_name)
+        except Exception:
+            logger.exception("team_invite: failed to send email to %s", email)
 
         return jsonify(success=True, invite_id=invite_id, email=email)
     except Exception:
