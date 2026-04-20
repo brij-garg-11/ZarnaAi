@@ -313,6 +313,7 @@ def api_logout():
 def _send_reset_email(to_email: str, reset_url: str) -> None:
     """Send a password reset email via Resend."""
     import os
+    import uuid
     import resend
 
     resend.api_key = os.getenv("RESEND_API_KEY", "")
@@ -322,12 +323,13 @@ def _send_reset_email(to_email: str, reset_url: str) -> None:
         "from": f"Zar <{from_addr}>",
         "to": [to_email],
         "subject": "Reset your Zar password",
+        "headers": {"Message-ID": f"<reset-{uuid.uuid4().hex}@zar.bot>"},
         "html": f"""
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px 24px">
           <h2 style="font-size:22px;font-weight:700;margin-bottom:8px">Reset your password</h2>
           <p style="color:#555;margin-bottom:24px">
             We received a request to reset the password for your Zar account.
-            Click the button below — this link expires in 1 hour.
+            Click the button below. This link expires in 1 hour.
           </p>
           <a href="{reset_url}"
              style="display:inline-block;background:#f97316;color:#fff;font-weight:600;
