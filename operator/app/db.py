@@ -251,6 +251,20 @@ def init_db():
         """,
         "CREATE INDEX IF NOT EXISTS idx_operator_invites_email ON operator_invites(email)",
 
+        # ── Fan of the Week ────────────────────────────────────────────────
+        """
+        CREATE TABLE IF NOT EXISTS fan_of_the_week (
+            id           BIGSERIAL PRIMARY KEY,
+            phone_number TEXT        NOT NULL,
+            week_of      DATE        NOT NULL,
+            message_text TEXT        DEFAULT '',
+            selected_at  TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE (week_of)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_fotw_week ON fan_of_the_week (week_of DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_fotw_phone ON fan_of_the_week (phone_number)",
+
         # ── Data-cleanup on every startup ──────────────────────────────────
         # 1. Clear /tmp-based image URLs (ephemeral Railway filesystem, gone on redeploy)
         "UPDATE blast_drafts SET media_url='' WHERE media_url LIKE '%/operator/blast/uploads/%'",

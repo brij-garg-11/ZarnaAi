@@ -1028,42 +1028,120 @@ def api_blast_status(draft_id):
 
 # ── Fan of the Week ───────────────────────────────────────────────────────────
 
+_FOTW_CANDIDATES_SQL = """
+    WITH
+    -- recent fan activity signals (last 7 days)
+    recent_replies AS (
+        SELECT phone_number, COUNT(*) AS reply_count
+        FROM   messages
+        WHERE  role = 'user'
+          AND  created_at >= NOW() - INTERVAL '7 days'
+          AND  did_user_reply = true
+        GROUP  BY phone_number
+    ),
+    came_back AS (
+        SELECT phone_number, COUNT(*) > 0 AS did_come_back
+        FROM   conversation_sessions
+        WHERE  came_back_within_7d = true
+          AND  created_at >= NOW() - INTERVAL '7 days'
+        GROUP  BY phone_number
+    ),
+    -- best qualifying message per fan (not blast reply, not opt-out, 50-400 chars)
+    best_msg AS (
+        SELECT DISTINCT ON (m.phone_number)
+            m.phone_number,
+            m.text AS message_text,
+            m.created_at AS msg_at
+        FROM messages m
+        WHERE m.role = 'user'
+          AND m.created_at >= NOW() - INTERVAL '1 day' * %s
+          AND LENGTH(m.text) BETWEEN 50 AND 400
+          AND m.text NOT ILIKE 'stop%%'
+          AND m.text NOT ILIKE 'yes%%'
+          AND m.text NOT ILIKE 'no%%'
+          AND m.text NOT ILIKE 'ok%%'
+          AND (m.intent IS NULL OR m.intent NOT IN ('STOP', 'OPTOUT'))
+        ORDER BY m.phone_number, LENGTH(m.text) DESC
+    )
+    SELECT
+        bm.phone_number,
+        RIGHT(bm.phone_number, 4)                AS phone_last4,
+        bm.message_text,
+        bm.msg_at,
+        c.fan_tier,
+        COALESCE(c.fan_score, 0)                 AS fan_score,
+        c.fan_tags,
+        c.fan_location,
+        c.fan_memory,
+        COALESCE(rr.reply_count, 0)              AS reply_count,
+        COALESCE(cb.did_come_back, false)        AS came_back,
+        (
+            COALESCE(c.fan_score, 0) * 0.4
+          + CASE c.fan_tier
+                WHEN 'superfan' THEN 30
+                WHEN 'engaged'  THEN 15
+                ELSE 0
+            END
+          + LEAST(COALESCE(rr.reply_count, 0) * 5, 25)
+          + CASE WHEN COALESCE(cb.did_come_back, false) THEN 20 ELSE 0 END
+          + CASE WHEN c.fan_memory IS NOT NULL AND c.fan_memory != '' THEN 10 ELSE 0 END
+          + RANDOM() * 5
+        )                                        AS candidate_score
+    FROM best_msg bm
+    LEFT JOIN contacts c  ON c.phone_number = bm.phone_number
+    LEFT JOIN recent_replies rr ON rr.phone_number = bm.phone_number
+    LEFT JOIN came_back cb      ON cb.phone_number = bm.phone_number
+    WHERE bm.phone_number NOT IN (
+        SELECT phone_number FROM fan_of_the_week
+        WHERE week_of >= CURRENT_DATE - INTERVAL '8 weeks'
+    )
+    ORDER BY candidate_score DESC
+    LIMIT 5
+"""
+
+
 @api_bp.route("/api/fan-of-the-week")
 @login_required
 def fan_of_the_week():
     """
-    Surfaces one real, engaging fan message from the past 7 days.
-    Picks the longest fan message (most expressive) that isn't a blast reply,
-    opt-out, or single-word response. Falls back to past 30 days if quiet week.
+    Returns this week's saved Fan of the Week if one has been selected,
+    otherwise falls back to the top dynamic candidate.
     """
+    import psycopg2.extras
     try:
         conn = get_conn()
-        import psycopg2.extras
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # Check if a pick is already saved for the current week
+            cur.execute("""
+                SELECT f.phone_number, RIGHT(f.phone_number, 4) AS phone_last4,
+                       f.message_text, f.week_of, f.selected_at,
+                       c.fan_tier, c.fan_tags, c.fan_location, c.fan_memory, c.fan_score
+                FROM fan_of_the_week f
+                LEFT JOIN contacts c ON c.phone_number = f.phone_number
+                WHERE f.week_of = DATE_TRUNC('week', CURRENT_DATE)::date
+                LIMIT 1
+            """)
+            saved = cur.fetchone()
+            if saved:
+                conn.close()
+                tags = saved["fan_tags"] or []
+                return jsonify(
+                    found=True,
+                    saved=True,
+                    phone_last4=saved["phone_last4"],
+                    body=saved["message_text"] or "",
+                    week_of=saved["week_of"].isoformat(),
+                    selected_at=saved["selected_at"].isoformat(),
+                    fan_tier=saved["fan_tier"],
+                    fan_tags=tags[:5],
+                    fan_location=saved["fan_location"] or "",
+                    fan_memory=saved["fan_memory"] or "",
+                    fan_score=saved["fan_score"],
+                )
+            # No saved pick — return top dynamic candidate
+            row = None
             for days_back in (7, 30, 90):
-                cur.execute("""
-                    SELECT
-                        m.text  AS body,
-                        m.created_at,
-                        RIGHT(m.phone_number, 4) AS phone_last4,
-                        c.fan_tier,
-                        c.fan_tags,
-                        c.fan_location,
-                        c.fan_memory
-                    FROM messages m
-                    LEFT JOIN contacts c ON c.phone_number = m.phone_number
-                    WHERE
-                        m.role = 'user'
-                        AND m.created_at >= NOW() - INTERVAL '%s days'
-                        AND LENGTH(m.text) > 30
-                        AND m.text NOT ILIKE 'stop%%'
-                        AND m.text NOT ILIKE 'yes%%'
-                        AND m.text NOT ILIKE 'no%%'
-                        AND m.text NOT ILIKE 'ok%%'
-                        AND (m.intent IS NULL OR m.intent NOT IN ('STOP', 'OPTOUT'))
-                    ORDER BY LENGTH(m.text) DESC, RANDOM()
-                    LIMIT 1
-                """, (days_back,))
+                cur.execute(_FOTW_CANDIDATES_SQL, (days_back,))
                 row = cur.fetchone()
                 if row:
                     break
@@ -1078,15 +1156,169 @@ def fan_of_the_week():
     tags = row["fan_tags"] or []
     return jsonify(
         found=True,
-        body=row["body"],
+        saved=False,
         phone_last4=row["phone_last4"],
-        created_at=row["created_at"].isoformat(),
+        body=row["message_text"],
+        created_at=row["msg_at"].isoformat(),
         fan_tier=row["fan_tier"],
-        fan_tags=tags[:3],
+        fan_tags=tags[:5],
         fan_location=row["fan_location"] or "",
         fan_memory=row["fan_memory"] or "",
+        fan_score=row["fan_score"],
         days_back=days_back,
     )
+
+
+@api_bp.route("/api/fan-of-the-week/candidates")
+@login_required
+def fan_of_the_week_candidates():
+    """
+    Returns up to 5 smart-ranked candidates for Fan of the Week,
+    excluding anyone picked in the last 8 weeks.
+    """
+    import psycopg2.extras
+    try:
+        conn = get_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            rows = []
+            for days_back in (7, 30, 90):
+                cur.execute(_FOTW_CANDIDATES_SQL, (days_back,))
+                rows = cur.fetchall()
+                if rows:
+                    break
+        conn.close()
+    except Exception:
+        logger.exception("api: failed to fetch fan of the week candidates")
+        return jsonify(candidates=[], days_back=0), 500
+
+    candidates = []
+    for r in rows:
+        tags = r["fan_tags"] or []
+        candidates.append({
+            "phone_last4": r["phone_last4"],
+            "message_text": r["message_text"],
+            "msg_at": r["msg_at"].isoformat(),
+            "fan_tier": r["fan_tier"],
+            "fan_score": r["fan_score"],
+            "fan_tags": tags[:5],
+            "fan_location": r["fan_location"] or "",
+            "fan_memory": r["fan_memory"] or "",
+            "reply_count": r["reply_count"],
+            "came_back": r["came_back"],
+            "candidate_score": round(float(r["candidate_score"]), 1),
+        })
+    return jsonify(candidates=candidates, days_back=days_back)
+
+
+@api_bp.route("/api/fan-of-the-week/select", methods=["POST"])
+@login_required
+def fan_of_the_week_select():
+    """
+    Save the chosen Fan of the Week for the current week.
+    Body: { "phone_last4": "1234", "message_text": "..." }
+    Also tags the contact with 'fan_of_the_week'.
+    """
+    import psycopg2.extras
+    data = request.get_json(silent=True) or {}
+    phone_last4 = (data.get("phone_last4") or "").strip()
+    message_text = (data.get("message_text") or "").strip()[:500]
+
+    if not phone_last4:
+        return jsonify(ok=False, error="phone_last4 required"), 400
+
+    try:
+        conn = get_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # Resolve last-4 to full phone number
+            cur.execute("""
+                SELECT phone_number FROM messages
+                WHERE RIGHT(phone_number, 4) = %s
+                GROUP BY phone_number
+                ORDER BY MAX(created_at) DESC
+                LIMIT 1
+            """, (phone_last4,))
+            row = cur.fetchone()
+            if not row:
+                conn.close()
+                return jsonify(ok=False, error="Fan not found"), 404
+
+            phone = row["phone_number"]
+
+            # Upsert the pick for this week
+            cur.execute("""
+                INSERT INTO fan_of_the_week (phone_number, week_of, message_text)
+                VALUES (%s, DATE_TRUNC('week', CURRENT_DATE)::date, %s)
+                ON CONFLICT (week_of) DO UPDATE
+                    SET phone_number = EXCLUDED.phone_number,
+                        message_text = EXCLUDED.message_text,
+                        selected_at  = NOW()
+            """, (phone, message_text))
+
+            # Add 'fan_of_the_week' tag to the contact (avoid duplicates)
+            cur.execute("""
+                UPDATE contacts
+                SET fan_tags = array_append(
+                    COALESCE(fan_tags, '{}'),
+                    'fan_of_the_week'
+                )
+                WHERE phone_number = %s
+                  AND NOT ('fan_of_the_week' = ANY(COALESCE(fan_tags, '{}')))
+            """, (phone,))
+
+        conn.commit()
+        conn.close()
+    except Exception:
+        logger.exception("api: failed to save fan of the week selection")
+        return jsonify(ok=False, error="DB error"), 500
+
+    return jsonify(ok=True, phone_last4=phone_last4)
+
+
+@api_bp.route("/api/fan-of-the-week/history")
+@login_required
+def fan_of_the_week_history():
+    """
+    Returns all past Fan of the Week picks, newest first.
+    """
+    import psycopg2.extras
+    try:
+        conn = get_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("""
+                SELECT
+                    f.week_of,
+                    f.message_text,
+                    f.selected_at,
+                    RIGHT(f.phone_number, 4)  AS phone_last4,
+                    c.fan_tier,
+                    c.fan_tags,
+                    c.fan_location,
+                    c.fan_score
+                FROM fan_of_the_week f
+                LEFT JOIN contacts c ON c.phone_number = f.phone_number
+                ORDER BY f.week_of DESC
+                LIMIT 52
+            """)
+            rows = cur.fetchall()
+        conn.close()
+    except Exception:
+        logger.exception("api: failed to fetch fan of the week history")
+        return jsonify(history=[]), 500
+
+    history = []
+    for r in rows:
+        tags = r["fan_tags"] or []
+        history.append({
+            "week_of": r["week_of"].isoformat(),
+            "phone_last4": r["phone_last4"],
+            "message_text": (r["message_text"] or "")[:200],
+            "selected_at": r["selected_at"].isoformat() if r["selected_at"] else None,
+            "fan_tier": r["fan_tier"],
+            "fan_tags": tags[:5],
+            "fan_location": r["fan_location"] or "",
+            "fan_score": r["fan_score"],
+        })
+    return jsonify(history=history)
 
 
 # ── Bot Data ──────────────────────────────────────────────────────────────────

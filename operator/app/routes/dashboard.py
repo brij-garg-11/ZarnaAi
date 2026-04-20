@@ -5,6 +5,13 @@ from ..queries import get_overview_stats
 dashboard_bp = Blueprint("dashboard", __name__)
 
 
+@dashboard_bp.route("/operator/audience")
+@login_required
+def audience():
+    user = current_user()
+    return render_template("audience.html", user=user)
+
+
 @dashboard_bp.route("/operator/dashboard")
 @login_required
 def index():

@@ -1,0 +1,405 @@
+{% extends "base.html" %}
+{% block title %}Audience{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-2xl font-bold mb-1" style="color:var(--text);">Audience</h1>
+  <div class="pink-line mt-2 mb-3"></div>
+  <p class="text-sm" style="color:var(--text-muted);">Fan of the Week, tier breakdown, and your superfans</p>
+</div>
+
+<!-- ── Fan of the Week ──────────────────────────────────────────────────────── -->
+<div x-data="fotw()" x-init="init()" class="mb-10">
+
+  <div class="flex items-center justify-between mb-4">
+    <div class="section-label">Fan of the Week</div>
+    <button @click="showCandidates = !showCandidates"
+            class="btn-ghost btn-sm"
+            x-text="showCandidates ? 'Hide candidates' : 'Pick this week\'s fan'"></button>
+  </div>
+
+  <!-- Current pick card -->
+  <template x-if="current && current.found">
+    <div class="card-pink mb-4">
+      <div class="flex items-start gap-4">
+        <div class="w-12 h-12 rounded-2xl flex items-center justify-center text-xl shrink-0"
+             style="background: linear-gradient(135deg, #ef4984, #c6235d); color:white; box-shadow: 0 4px 14px rgba(239,73,132,0.35);">
+          ⭐
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap mb-1">
+            <span class="font-bold text-base" style="color:var(--pink-dark);">Fan ···<span x-text="current.phone_last4"></span></span>
+            <span class="badge" :class="tierBadge(current.fan_tier)" x-text="tierLabel(current.fan_tier)"></span>
+            <template x-if="current.saved">
+              <span class="badge" style="background:#fce7f0;color:#c6235d;border:1px solid #f9c0d8;">✓ This Week</span>
+            </template>
+            <template x-if="!current.saved">
+              <span class="badge" style="background:#fef9c3;color:#854d0e;border:1px solid #fde68a;">Suggested</span>
+            </template>
+          </div>
+          <p class="text-sm mb-2 italic" style="color:var(--text-muted);" x-text="'&ldquo;' + current.body + '&rdquo;'"></p>
+          <div class="flex flex-wrap gap-1.5 mb-2">
+            <template x-for="tag in (current.fan_tags || [])" :key="tag">
+              <span class="tag-pill" x-text="tag"></span>
+            </template>
+            <span x-show="current.fan_location" class="tag-pill" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe;"
+                  x-text="current.fan_location"></span>
+          </div>
+          <div class="flex items-center gap-4">
+            <template x-if="!current.saved">
+              <button @click="selectFan(current.phone_last4, current.body)"
+                      class="btn-pink btn-sm"
+                      :disabled="saving">
+                <span x-text="saving ? 'Saving…' : '⭐ Lock in as Fan of the Week'"></span>
+              </button>
+            </template>
+            <button @click="openThread(current.phone_last4)"
+                    class="btn-ghost btn-sm">
+              💬 View conversation
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
+  <template x-if="!current || !current.found">
+    <div class="card mb-4 text-center py-8" style="color:var(--text-dim);">
+      <div class="text-3xl mb-2">🌟</div>
+      <div class="text-sm">No qualifying fans found this week yet.</div>
+    </div>
+  </template>
+
+  <!-- Candidate list -->
+  <div x-show="showCandidates" x-transition class="mb-4">
+    <div class="card">
+      <div class="section-label mb-4">Top candidates this week</div>
+      <template x-if="candidates.length === 0 && !loadingCandidates">
+        <p class="text-sm" style="color:var(--text-dim);">No candidates found.</p>
+      </template>
+      <template x-if="loadingCandidates">
+        <p class="text-sm" style="color:var(--text-dim);">Loading…</p>
+      </template>
+      <div class="space-y-3">
+        <template x-for="(c, i) in candidates" :key="c.phone_last4">
+          <div class="card-sm flex items-start gap-3"
+               :style="i === 0 ? 'border-color: var(--pink); background: var(--pink-pale);' : ''">
+            <div class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shrink-0"
+                 :style="i === 0 ? 'background:var(--pink);color:white;' : 'background:var(--border);color:var(--text-muted);'">
+              <span x-text="i + 1"></span>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 flex-wrap mb-0.5">
+                <span class="font-semibold text-sm" style="color:var(--text);">Fan ···<span x-text="c.phone_last4"></span></span>
+                <span class="badge" :class="tierBadge(c.fan_tier)" x-text="tierLabel(c.fan_tier)"></span>
+                <template x-for="tag in (c.fan_tags || []).slice(0,3)" :key="tag">
+                  <span class="tag-pill text-xs" x-text="tag"></span>
+                </template>
+              </div>
+              <p class="text-xs italic mb-1.5" style="color:var(--text-muted);"
+                 x-text="'&ldquo;' + c.message_text.slice(0, 120) + (c.message_text.length > 120 ? '…' : '') + '&rdquo;'"></p>
+              <div class="flex items-center gap-3">
+                <button @click="selectFan(c.phone_last4, c.message_text)"
+                        class="btn-pink btn-sm"
+                        :disabled="saving">
+                  ⭐ Pick this fan
+                </button>
+                <button @click="openThread(c.phone_last4)"
+                        class="btn-ghost btn-sm">
+                  💬 Convo
+                </button>
+                <span class="text-xs" style="color:var(--text-dim);"
+                      x-text="'Score: ' + c.candidate_score + (c.came_back ? ' · came back' : '') + (c.reply_count > 0 ? ' · ' + c.reply_count + ' replies' : '')"></span>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- History table -->
+  <div class="card">
+    <div class="section-label mb-4">Fan of the Week — history</div>
+    <template x-if="history.length === 0 && !loadingHistory">
+      <p class="text-sm" style="color:var(--text-dim);">No picks yet. Select your first Fan of the Week above.</p>
+    </template>
+    <template x-if="loadingHistory">
+      <p class="text-sm" style="color:var(--text-dim);">Loading…</p>
+    </template>
+    <template x-if="history.length > 0">
+      <div class="overflow-x-auto">
+        <table class="zarna-table">
+          <thead>
+            <tr>
+              <th>Week of</th>
+              <th>Fan</th>
+              <th>Tier</th>
+              <th>Tags</th>
+              <th>Message</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="row in history" :key="row.week_of">
+              <tr class="cursor-pointer" @click="openThread(row.phone_last4)"
+                  title="Click to open conversation">
+                <td>
+                  <div class="font-semibold text-sm" style="color:var(--text);" x-text="formatWeek(row.week_of)"></div>
+                </td>
+                <td>
+                  <div class="flex items-center gap-2">
+                    <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
+                         style="background: var(--pink-pale); color: var(--pink-dark);">⭐</div>
+                    <span class="font-mono text-sm" style="color:var(--text);">···<span x-text="row.phone_last4"></span></span>
+                  </div>
+                </td>
+                <td>
+                  <span class="badge" :class="tierBadge(row.fan_tier)" x-text="tierLabel(row.fan_tier)"></span>
+                </td>
+                <td>
+                  <div class="flex flex-wrap gap-1">
+                    <template x-for="tag in (row.fan_tags || []).slice(0,3)" :key="tag">
+                      <span class="tag-pill" style="font-size:11px;padding:2px 8px;" x-text="tag"></span>
+                    </template>
+                    <span x-show="(row.fan_tags || []).length === 0" class="text-xs" style="color:var(--text-dim);">—</span>
+                  </div>
+                </td>
+                <td>
+                  <span class="text-sm italic" style="color:var(--text-muted);"
+                        x-text="row.message_text ? '&ldquo;' + row.message_text.slice(0,80) + (row.message_text.length > 80 ? '…' : '') + '&rdquo;' : '—'"></span>
+                </td>
+                <td>
+                  <button class="btn-ghost btn-sm" @click.stop="openThread(row.phone_last4)">💬</button>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </template>
+  </div>
+</div>
+
+<!-- ── Conversation modal ────────────────────────────────────────────────────── -->
+<div x-data="threadModal()" x-on:open-thread.window="open($event.detail)"
+     x-show="visible" x-transition
+     class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
+     style="background: rgba(0,0,0,0.45);" @click.self="close()">
+
+  <div class="w-full max-w-lg rounded-2xl flex flex-col"
+       style="background:white; border:1px solid var(--border); max-height:85vh; box-shadow:0 20px 60px rgba(0,0,0,0.2);"
+       @click.stop>
+
+    <!-- Header -->
+    <div class="flex items-center justify-between px-5 py-4"
+         style="border-bottom:1px solid var(--border);">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm"
+             style="background:var(--pink-pale);color:var(--pink-dark);">⭐</div>
+        <div>
+          <div class="font-bold text-sm" style="color:var(--text);">
+            Fan ···<span x-text="phone_last4"></span>
+          </div>
+          <div class="text-xs" style="color:var(--text-dim);">
+            <span class="badge" :class="fanTierBadge()" x-text="fanTierLabel()" style="font-size:11px;padding:2px 8px;"></span>
+            <template x-for="tag in (fan.fan_tags || []).slice(0,3)" :key="tag">
+              <span class="tag-pill ml-1" style="font-size:11px;padding:2px 8px;" x-text="tag"></span>
+            </template>
+          </div>
+        </div>
+      </div>
+      <button @click="close()" style="color:var(--text-dim);font-size:20px;line-height:1;">✕</button>
+    </div>
+
+    <!-- Messages -->
+    <div class="flex-1 overflow-y-auto px-4 py-4 space-y-2" id="thread-scroll">
+      <template x-if="loading">
+        <div class="text-center py-8 text-sm" style="color:var(--text-dim);">Loading…</div>
+      </template>
+      <template x-for="msg in messages" :key="msg.created_at + msg.role">
+        <div class="flex" :class="msg.role === 'user' ? 'justify-start' : 'justify-end'">
+          <div class="max-w-xs px-4 py-2.5 rounded-2xl text-sm leading-relaxed"
+               :style="msg.role === 'user'
+                 ? 'background:var(--bg);border:1px solid var(--border);color:var(--text);border-bottom-left-radius:4px;'
+                 : 'background:linear-gradient(135deg,#ef4984,#c6235d);color:white;border-bottom-right-radius:4px;'">
+            <span x-text="msg.body"></span>
+            <div class="text-xs mt-1 opacity-60" x-text="formatTime(msg.created_at)"></div>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- Send -->
+    <div class="px-4 pb-4 pt-3" style="border-top:1px solid var(--border);">
+      <div class="flex gap-2">
+        <input x-model="replyText" @keydown.enter.prevent="send()"
+               class="zarna-input flex-1" placeholder="Send a message…"
+               :disabled="sending" style="min-height:unset;padding:10px 14px;">
+        <button @click="send()" class="btn-pink btn-sm" :disabled="sending || !replyText.trim()">
+          <span x-text="sending ? '…' : 'Send'"></span>
+        </button>
+      </div>
+      <div x-show="sendError" class="mt-1 text-xs" style="color:var(--red);" x-text="sendError"></div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function fotw() {
+  return {
+    current: null,
+    candidates: [],
+    history: [],
+    showCandidates: false,
+    saving: false,
+    loadingCandidates: false,
+    loadingHistory: false,
+
+    async init() {
+      await Promise.all([this.loadCurrent(), this.loadHistory()]);
+      this.$watch('showCandidates', v => { if (v && this.candidates.length === 0) this.loadCandidates(); });
+    },
+
+    async loadCurrent() {
+      try {
+        const r = await fetch('/api/fan-of-the-week');
+        this.current = await r.json();
+      } catch(e) { console.error(e); }
+    },
+
+    async loadCandidates() {
+      this.loadingCandidates = true;
+      try {
+        const r = await fetch('/api/fan-of-the-week/candidates');
+        const d = await r.json();
+        this.candidates = d.candidates || [];
+      } catch(e) { console.error(e); }
+      this.loadingCandidates = false;
+    },
+
+    async loadHistory() {
+      this.loadingHistory = true;
+      try {
+        const r = await fetch('/api/fan-of-the-week/history');
+        const d = await r.json();
+        this.history = d.history || [];
+      } catch(e) { console.error(e); }
+      this.loadingHistory = false;
+    },
+
+    async selectFan(phone_last4, message_text) {
+      this.saving = true;
+      try {
+        const r = await fetch('/api/fan-of-the-week/select', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone_last4, message_text }),
+        });
+        const d = await r.json();
+        if (d.ok) {
+          this.showCandidates = false;
+          await this.loadCurrent();
+          await this.loadHistory();
+        }
+      } catch(e) { console.error(e); }
+      this.saving = false;
+    },
+
+    openThread(phone_last4) {
+      window.dispatchEvent(new CustomEvent('open-thread', { detail: phone_last4 }));
+    },
+
+    tierBadge(tier) {
+      const m = { superfan: 'badge-sent', engaged: 'badge-scheduled', lurker: 'badge-draft', dormant: 'badge-cancelled' };
+      return m[tier] || 'badge-draft';
+    },
+    tierLabel(tier) {
+      const m = { superfan: '⭐ Superfan', engaged: '✅ Engaged', lurker: '👀 Lurker', dormant: '😴 Dormant' };
+      return m[tier] || tier || '—';
+    },
+    formatWeek(dateStr) {
+      const d = new Date(dateStr + 'T00:00:00');
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    },
+  };
+}
+
+function threadModal() {
+  return {
+    visible: false,
+    phone_last4: '',
+    messages: [],
+    fan: {},
+    loading: false,
+    replyText: '',
+    sending: false,
+    sendError: '',
+
+    async open(phone_last4) {
+      this.phone_last4 = phone_last4;
+      this.messages = [];
+      this.fan = {};
+      this.replyText = '';
+      this.sendError = '';
+      this.visible = true;
+      this.loading = true;
+      try {
+        const r = await fetch(`/api/inbox/${phone_last4}/thread`);
+        const d = await r.json();
+        this.messages = d.messages || [];
+        this.fan = d.fan || {};
+      } catch(e) { console.error(e); }
+      this.loading = false;
+      this.$nextTick(() => this.scrollBottom());
+    },
+
+    close() { this.visible = false; },
+
+    async send() {
+      const text = this.replyText.trim();
+      if (!text || this.sending) return;
+      this.sending = true;
+      this.sendError = '';
+      try {
+        const r = await fetch(`/api/inbox/${this.phone_last4}/send`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        const d = await r.json();
+        if (d.success) {
+          this.replyText = '';
+          this.messages.push({ role: 'assistant', body: text, created_at: new Date().toISOString() });
+          this.$nextTick(() => this.scrollBottom());
+        } else {
+          this.sendError = d.error || 'Failed to send.';
+        }
+      } catch(e) { this.sendError = 'Network error.'; }
+      this.sending = false;
+    },
+
+    scrollBottom() {
+      const el = document.getElementById('thread-scroll');
+      if (el) el.scrollTop = el.scrollHeight;
+    },
+
+    fanTierBadge() {
+      const m = { superfan: 'badge-sent', engaged: 'badge-scheduled', lurker: 'badge-draft', dormant: 'badge-cancelled' };
+      return m[this.fan.fan_tier] || 'badge-draft';
+    },
+    fanTierLabel() {
+      const m = { superfan: '⭐ Superfan', engaged: '✅ Engaged', lurker: '👀 Lurker', dormant: '😴 Dormant' };
+      return m[this.fan.fan_tier] || this.fan.fan_tier || '—';
+    },
+    formatTime(iso) {
+      const d = new Date(iso);
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' +
+             d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    },
+  };
+}
+</script>
+{% endblock %}
