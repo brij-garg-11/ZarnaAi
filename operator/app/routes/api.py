@@ -1043,7 +1043,7 @@ _FOTW_CANDIDATES_SQL = """
         SELECT phone_number, COUNT(*) > 0 AS did_come_back
         FROM   conversation_sessions
         WHERE  came_back_within_7d = true
-          AND  created_at >= NOW() - INTERVAL '7 days'
+          AND  started_at >= NOW() - INTERVAL '7 days'
         GROUP  BY phone_number
     ),
     -- best qualifying message per fan (not blast reply, not opt-out, 50-400 chars)
