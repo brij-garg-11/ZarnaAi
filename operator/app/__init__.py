@@ -13,7 +13,7 @@ _CORS_ORIGINS = [
     o.strip()
     for o in os.getenv(
         "CORS_ALLOWED_ORIGINS",
-        "http://localhost:3000,http://localhost:5173,http://localhost:8080,https://zar.com,https://www.zar.com,https://zar-fan-connect.lovable.app,https://zarnaai-production.up.railway.app,https://lovable.dev,https://gptengineer.app",
+        "http://localhost:3000,http://localhost:5173,http://localhost:8080,https://zar.bot,https://www.zar.bot,https://zar.com,https://www.zar.com,https://zar-fan-connect.lovable.app,https://zarnaai-production.up.railway.app,https://lovable.dev,https://gptengineer.app",
     ).split(",")
     if o.strip()
 ]
