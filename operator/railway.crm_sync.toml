@@ -1,0 +1,14 @@
+# Daily Notion CRM sync — updates cost estimates + metrics for all customers.
+# Runs at 3 AM UTC every day.
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python scripts/sync_crm_to_notion.py"
+cronSchedule = "0 3 * * *"
+
+# Required env vars (set in Railway dashboard):
+#   NOTION_TOKEN
+#   DATABASE_URL
+#   NOTION_PERFORMERS_DB_ID   (optional — defaults hardcoded)
+#   NOTION_BUSINESSES_DB_ID   (optional — defaults hardcoded)

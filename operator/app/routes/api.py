@@ -3214,6 +3214,14 @@ def api_onboarding_submit():
 
         conn.close()
         logger.info("onboarding_submit: user=%s slug=%s type=%s", user["email"], slug, account_type)
+
+        # Fire async Notion CRM record creation
+        try:
+            from ..notion_crm import create_customer_async
+            create_customer_async(user["id"], user["email"], account_type, slug, config_json)
+        except Exception:
+            logger.warning("onboarding_submit: notion_crm import failed — skipping", exc_info=True)
+
         return jsonify(success=True, creator_slug=slug, account_type=account_type)
 
     except Exception:
