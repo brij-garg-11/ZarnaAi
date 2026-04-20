@@ -14,7 +14,7 @@ _CORS_ORIGINS = [
     o.strip()
     for o in os.getenv(
         "CORS_ALLOWED_ORIGINS",
-        "http://localhost:3000,http://localhost:5173,http://localhost:8080,https://zar.bot,https://www.zar.bot,https://zar.com,https://www.zar.com,https://zar-fan-connect.lovable.app,https://zarnaai-production.up.railway.app,https://lovable.dev,https://gptengineer.app",
+        "http://localhost:3000,http://localhost:5173,http://localhost:8080,https://zar.bot,https://www.zar.bot,https://api.zar.bot,https://zar.com,https://www.zar.com,https://zar-fan-connect.lovable.app,https://zarnaai-production.up.railway.app,https://lovable.dev,https://gptengineer.app",
     ).split(",")
     if o.strip()
 ]
@@ -41,16 +41,18 @@ def create_app() -> Flask:
         supports_credentials=True,
     )
 
-    # The React frontend (Lovable) and this Flask backend are on different domains,
-    # so the session cookie must be SameSite=None; Secure to be sent cross-origin.
-    # Without this, /api/auth/me always returns 401 even after a successful login.
-    app.config["SESSION_COOKIE_SAMESITE"] = "None"
     app.config["SESSION_COOKIE_SECURE"] = True
 
-    # Optionally scope the cookie to a shared domain (e.g. .zar.com) when going live.
+    # When SESSION_COOKIE_DOMAIN is set (e.g. .zar.bot), the frontend and backend
+    # share the same eTLD+1 so the cookie is first-party — SameSite=Lax works and
+    # Chrome won't block it. Without a shared domain (local dev / raw Railway URL)
+    # we fall back to SameSite=None so cross-origin credentialed requests still work.
     cookie_domain = os.getenv("SESSION_COOKIE_DOMAIN")
     if cookie_domain:
         app.config["SESSION_COOKIE_DOMAIN"] = cookie_domain
+        app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    else:
+        app.config["SESSION_COOKIE_SAMESITE"] = "None"
 
     # Railway terminates TLS at its proxy and forwards requests as plain HTTP.
     # ProxyFix makes request.scheme, request.host, and url_for() reflect the
