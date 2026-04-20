@@ -1095,6 +1095,9 @@ _FOTW_CANDIDATES_SQL = """
         SELECT phone_number FROM fan_of_the_week
         WHERE week_of >= CURRENT_DATE - INTERVAL '8 weeks'
     )
+      AND bm.phone_number NOT IN (
+        '+16466406086', '+16467244908', '+16467242012'
+    )
     ORDER BY candidate_score DESC
     LIMIT 5
 """
