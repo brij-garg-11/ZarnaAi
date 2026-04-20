@@ -9,6 +9,6 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "python -u scripts/score_fans.py"
+startCommand = "python -u operator/scripts/score_fans.py"
 cronSchedule = "0 3 * * *"
-watchPatterns = ["scripts/score_fans.py", "requirements.txt", "app/storage/**"]
+watchPatterns = ["operator/scripts/score_fans.py", "operator/requirements.txt", "operator/app/storage/**"]
