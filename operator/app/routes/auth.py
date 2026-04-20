@@ -397,35 +397,6 @@ def api_forgot_password():
     return jsonify(success=True)
 
 
-@auth_bp.route("/api/auth/debug-email", methods=["POST"])
-def api_debug_email():
-    """Temporary debug endpoint — remove after fixing email flow."""
-    import os, traceback
-    import resend as resend_lib
-
-    api_key = os.getenv("RESEND_API_KEY", "")
-    from_addr = os.getenv("RESEND_FROM", "hello@zar.bot")
-    result = {
-        "api_key_set": bool(api_key),
-        "api_key_prefix": api_key[:8] + "..." if api_key else "(empty)",
-        "from_addr": from_addr,
-    }
-    try:
-        resend_lib.api_key = api_key
-        resp = resend_lib.Emails.send({
-            "from": f"Zar <{from_addr}>",
-            "to": ["brij@zarnagarg.com"],
-            "subject": "Debug: Resend test from Railway",
-            "html": "<p>If you see this, Resend is working inside Railway.</p>",
-        })
-        result["send_result"] = str(resp)
-        result["success"] = True
-    except Exception as exc:
-        result["error"] = traceback.format_exc()
-        result["success"] = False
-    return jsonify(result)
-
-
 @auth_bp.route("/api/auth/reset-password", methods=["POST"])
 def api_reset_password():
     """
