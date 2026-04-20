@@ -1324,6 +1324,222 @@ def fan_of_the_week_history():
     return jsonify(history=history)
 
 
+# ── SMB Customer of the Week ──────────────────────────────────────────────────
+
+_COTW_CANDIDATES_SQL = """
+    WITH
+    attendance AS (
+        SELECT
+            phone_number,
+            COUNT(*)                                          AS shows_attended,
+            MAX(checked_in_at)                                AS last_checkin,
+            BOOL_OR(checked_in_at >= NOW() - INTERVAL '30 days') AS attended_recently
+        FROM smb_show_checkins
+        WHERE tenant_slug = %s
+        GROUP BY phone_number
+    ),
+    engagement AS (
+        SELECT phone_number, COUNT(*) AS msg_count
+        FROM smb_messages
+        WHERE tenant_slug = %s
+          AND created_at >= NOW() - INTERVAL '30 days'
+          AND role = 'user'
+        GROUP BY phone_number
+    )
+    SELECT
+        s.phone_number,
+        RIGHT(s.phone_number, 4)                             AS phone_last4,
+        COALESCE(a.shows_attended, 0)                        AS shows_attended,
+        COALESCE(a.last_checkin, s.created_at)               AS last_active,
+        s.created_at                                         AS subscribed_at,
+        COALESCE(e.msg_count, 0)                             AS recent_msgs,
+        (
+            LEAST(COALESCE(a.shows_attended, 0) * 10, 50)
+          + CASE WHEN s.created_at <= NOW() - INTERVAL '90 days' THEN 20 ELSE 0 END
+          + CASE WHEN COALESCE(a.attended_recently, false) THEN 15 ELSE 0 END
+          + LEAST(COALESCE(e.msg_count, 0) * 3, 15)
+          + RANDOM() * 5
+        )                                                    AS candidate_score
+    FROM smb_subscribers s
+    LEFT JOIN attendance a  ON a.phone_number = s.phone_number
+    LEFT JOIN engagement e  ON e.phone_number = s.phone_number
+    WHERE s.tenant_slug = %s
+      AND s.status = 'active'
+      AND s.phone_number NOT IN (
+          SELECT phone_number FROM smb_customer_of_the_week
+          WHERE tenant_slug = %s
+            AND week_of >= CURRENT_DATE - INTERVAL '8 weeks'
+      )
+    ORDER BY candidate_score DESC
+    LIMIT 5
+"""
+
+
+@api_bp.route("/api/smb/<slug>/customer-of-the-week")
+@login_required
+def smb_customer_of_the_week(slug: str):
+    """
+    Returns this week's saved Customer of the Week for an SMB tenant,
+    or falls back to the top dynamic candidate.
+    """
+    import psycopg2.extras
+    try:
+        conn = get_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("""
+                SELECT RIGHT(phone_number, 4) AS phone_last4, message_text,
+                       week_of, selected_at, shows_attended
+                FROM smb_customer_of_the_week
+                WHERE tenant_slug = %s
+                  AND week_of = DATE_TRUNC('week', CURRENT_DATE)::date
+                LIMIT 1
+            """, (slug,))
+            saved = cur.fetchone()
+            if saved:
+                conn.close()
+                return jsonify(
+                    found=True, saved=True,
+                    phone_last4=saved["phone_last4"],
+                    message_text=saved["message_text"] or "",
+                    week_of=saved["week_of"].isoformat(),
+                    selected_at=saved["selected_at"].isoformat(),
+                    shows_attended=saved["shows_attended"],
+                )
+            cur.execute(_COTW_CANDIDATES_SQL, (slug, slug, slug, slug))
+            row = cur.fetchone()
+        conn.close()
+    except Exception:
+        logger.exception("api: smb_customer_of_the_week failed for %s", slug)
+        return jsonify(found=False), 500
+
+    if not row:
+        return jsonify(found=False)
+
+    return jsonify(
+        found=True, saved=False,
+        phone_last4=row["phone_last4"],
+        shows_attended=row["shows_attended"],
+        last_active=row["last_active"].isoformat() if row["last_active"] else None,
+        subscribed_at=row["subscribed_at"].isoformat() if row["subscribed_at"] else None,
+        recent_msgs=row["recent_msgs"],
+    )
+
+
+@api_bp.route("/api/smb/<slug>/customer-of-the-week/candidates")
+@login_required
+def smb_customer_of_the_week_candidates(slug: str):
+    """Top 5 Customer of the Week candidates for an SMB tenant."""
+    import psycopg2.extras
+    try:
+        conn = get_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(_COTW_CANDIDATES_SQL, (slug, slug, slug, slug))
+            rows = cur.fetchall()
+        conn.close()
+    except Exception:
+        logger.exception("api: smb_cotw_candidates failed for %s", slug)
+        return jsonify(candidates=[]), 500
+
+    return jsonify(candidates=[
+        {
+            "phone_last4": r["phone_last4"],
+            "shows_attended": r["shows_attended"],
+            "last_active": r["last_active"].isoformat() if r["last_active"] else None,
+            "subscribed_at": r["subscribed_at"].isoformat() if r["subscribed_at"] else None,
+            "recent_msgs": r["recent_msgs"],
+        }
+        for r in rows
+    ])
+
+
+@api_bp.route("/api/smb/<slug>/customer-of-the-week/select", methods=["POST"])
+@login_required
+def smb_customer_of_the_week_select(slug: str):
+    """
+    Save the chosen Customer of the Week for the current week.
+    Body: { "phone_last4": "1234", "message_text": "..." }
+    """
+    import psycopg2.extras
+    data = request.get_json(silent=True) or {}
+    phone_last4 = (data.get("phone_last4") or "").strip()
+    message_text = (data.get("message_text") or "").strip()[:500]
+
+    if not phone_last4:
+        return jsonify(ok=False, error="phone_last4 required"), 400
+
+    try:
+        conn = get_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("""
+                SELECT phone_number FROM smb_subscribers
+                WHERE tenant_slug = %s AND RIGHT(phone_number, 4) = %s
+                ORDER BY created_at DESC LIMIT 1
+            """, (slug, phone_last4))
+            row = cur.fetchone()
+            if not row:
+                conn.close()
+                return jsonify(ok=False, error="Customer not found"), 404
+            phone = row["phone_number"]
+
+            cur.execute("""
+                SELECT COUNT(*) AS cnt FROM smb_show_checkins
+                WHERE tenant_slug = %s AND phone_number = %s
+            """, (slug, phone))
+            shows_attended = cur.fetchone()["cnt"]
+
+            cur.execute("""
+                INSERT INTO smb_customer_of_the_week
+                    (tenant_slug, phone_number, week_of, message_text, shows_attended)
+                VALUES (%s, %s, DATE_TRUNC('week', CURRENT_DATE)::date, %s, %s)
+                ON CONFLICT (tenant_slug, week_of) DO UPDATE
+                    SET phone_number   = EXCLUDED.phone_number,
+                        message_text   = EXCLUDED.message_text,
+                        shows_attended = EXCLUDED.shows_attended,
+                        selected_at    = NOW()
+            """, (slug, phone, message_text, shows_attended))
+        conn.commit()
+        conn.close()
+    except Exception:
+        logger.exception("api: smb_cotw_select failed for %s", slug)
+        return jsonify(ok=False, error="DB error"), 500
+
+    return jsonify(ok=True, phone_last4=phone_last4)
+
+
+@api_bp.route("/api/smb/<slug>/customer-of-the-week/history")
+@login_required
+def smb_customer_of_the_week_history(slug: str):
+    """Returns last 52 weeks of Customer of the Week picks for an SMB tenant."""
+    import psycopg2.extras
+    try:
+        conn = get_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("""
+                SELECT RIGHT(phone_number, 4) AS phone_last4,
+                       week_of, selected_at, message_text, shows_attended
+                FROM smb_customer_of_the_week
+                WHERE tenant_slug = %s
+                ORDER BY week_of DESC
+                LIMIT 52
+            """, (slug,))
+            rows = cur.fetchall()
+        conn.close()
+    except Exception:
+        logger.exception("api: smb_cotw_history failed for %s", slug)
+        return jsonify(history=[]), 500
+
+    return jsonify(history=[
+        {
+            "phone_last4": r["phone_last4"],
+            "week_of": r["week_of"].isoformat(),
+            "selected_at": r["selected_at"].isoformat() if r["selected_at"] else None,
+            "message_text": (r["message_text"] or "")[:200],
+            "shows_attended": r["shows_attended"],
+        }
+        for r in rows
+    ])
+
+
 # ── Bot Data ──────────────────────────────────────────────────────────────────
 
 def _load_performer_config_from_db(slug: str) -> dict | None:
