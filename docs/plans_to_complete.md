@@ -25,18 +25,6 @@ Steps still remaining:
 
 ---
 
-## 3. `docs/analytics/blast_issues_apr8.md` — 5 open issues
-Fixed: issues 6 (STOP guardrail), 7 (reply attribution timestamp), 9 (CTR denominator).
-Still open:
-- **#1** — Blast button has no lock (triple-send risk)
-- **#2** — No post-send confirmation in the UI
-- **#3** — Subscriber counts are wrong everywhere
-- **#4** — Blast only reached 3,651 of 5,025 subscribers
-- **#5** — User received blast twice (duplicate delivery investigation)
-- **#8** — Admin dashboard auto-refresh defaults to off
-
----
-
 ## 4. `docs/operations/wscc_owner_questions.md` — Answers still missing
 All 9 questions have no answers yet. Need responses from the WSCC owner:
 - SMS keyword, owner phone number, refund policy, lost/missing tickets
