@@ -1,0 +1,32 @@
+# Nightly SlickText subscriber sync — keeps contacts table in sync with all SlickText subscribers.
+#
+# Fixes two blast issues:
+#   1. Admin dashboard "Total Subscribers" was only counting fans who texted the bot directly.
+#   2. Blasts were missing ~1,374 SlickText-only subscribers who never texted back.
+#
+# Setup steps:
+#
+# 1) Railway project → + New Service → GitHub Repo → same repo.
+#
+# 2) Service → Settings → Config-as-code → set path:
+#      operator/railway.slicktext_sync.toml
+#
+# 3) Variables (reference existing vars — do NOT create a new database):
+#      DATABASE_URL              → Variable Reference → same Postgres as the web service
+#      SLICKTEXT_PUBLIC_KEY      → Variable Reference → same as web service
+#      SLICKTEXT_PRIVATE_KEY     → Variable Reference → same as web service
+#      SLICKTEXT_CONTACT_TEXTWORDS → Variable Reference (or leave blank to use default: "3185378:zarna,4633842:hello")
+#
+# 4) Cron schedule runs nightly at 4am UTC (after fan scoring at 3am so tiers are fresh).
+#
+# 5) One-off run:
+#      python scripts/import_slicktext_subscribers.py
+#      python scripts/import_slicktext_subscribers.py --dry-run   # preview without writing
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python -u scripts/import_slicktext_subscribers.py"
+cronSchedule = "0 4 * * *"
+watchPatterns = ["scripts/import_slicktext_subscribers.py", "app/messaging/slicktext_contacts.py", "requirements.txt"]

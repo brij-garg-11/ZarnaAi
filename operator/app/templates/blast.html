@@ -533,7 +533,8 @@
           <p class="text-xs mb-4" style="color:var(--text-dim);">
             Clicking Send Now will immediately queue the blast. Make sure your message is typed above and your audience is selected.
           </p>
-          <button type="submit" name="intent" value="send" class="btn-pink">
+          <button type="submit" name="intent" value="send" class="btn-pink"
+                  onclick="this.style.pointerEvents='none';this.style.opacity='0.5';this.innerHTML='⏳ Queuing blast…'">
             📢 Send Now to <span x-text="audienceCount.toLocaleString()"></span> fans
           </button>
         </div>

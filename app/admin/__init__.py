@@ -1974,22 +1974,34 @@ if (hourEl) new Chart(hourEl, {{
 }});
 
 let _refreshTimer = null;
-let _refreshOn = false;
+let _refreshOn = localStorage.getItem('zarnaAutoRefresh') !== 'false';
 
 function toggleAutoRefresh() {{
   const btn = document.getElementById('autoRefreshBtn');
   if (_refreshOn) {{
     clearInterval(_refreshTimer);
     _refreshOn = false;
+    localStorage.setItem('zarnaAutoRefresh', 'false');
     btn.textContent = '⟳ Auto-refresh: Off';
     btn.classList.remove('active');
   }} else {{
     _refreshOn = true;
+    localStorage.setItem('zarnaAutoRefresh', 'true');
     btn.textContent = '⟳ Auto-refresh: On (30s)';
     btn.classList.add('active');
     _refreshTimer = setInterval(() => location.reload(), 30000);
   }}
 }}
+
+// Start auto-refresh on load (default: on, persisted in localStorage)
+(function() {{
+  const btn = document.getElementById('autoRefreshBtn');
+  if (_refreshOn && btn) {{
+    btn.textContent = '⟳ Auto-refresh: On (30s)';
+    btn.classList.add('active');
+    _refreshTimer = setInterval(() => location.reload(), 30000);
+  }}
+}})();
 
 // ── Conversions chart ───────────────────────────────────────────────────────
 let _convChart = null;
