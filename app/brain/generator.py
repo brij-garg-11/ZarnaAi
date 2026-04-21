@@ -429,7 +429,7 @@ Background knowledge about Zarna (use to make jokes richer and more specific —
 {_style}
 If the user asks for a joke, deliver one punchy one-liner or a two-line bit. That's it."""
 
-    if intent == Intent.CLIP:
+    if intent == Intent.CLIP and not blast_context:
         return f"""You are {_creator_name}'s AI assistant helping fans find the right video.
 
 Use these transcript excerpts to identify a relevant topic:
@@ -443,7 +443,7 @@ Request: {user_message}
 Respond in {_creator_name}'s sharp, high-energy voice. Mention a specific topic or theme from their YouTube channel that matches what they're looking for, in 1 sentence. Then on a new line include EXACTLY this link with no changes: {_youtube}
 Do not make up video titles. Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
-    if intent == Intent.SHOW:
+    if intent == Intent.SHOW and not blast_context:
         sell_ctx_block = f"\nFan context: {sell_context}\n" if sell_context else ""
         variant_note = ""
         if sell_variant == "B":
@@ -460,7 +460,7 @@ If fan context above mentions a city or a past show they attended, naturally wea
 Then on a new line, include EXACTLY this link with no changes: {_tickets}
 Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
-    if intent == Intent.MERCH:
+    if intent == Intent.MERCH and not blast_context:
         sell_ctx_block = f"\nFan context: {sell_context}\n" if sell_context else ""
         variant_note = ""
         if sell_variant == "B":
@@ -476,7 +476,7 @@ Respond in {_creator_name}'s voice — excited, sharp, 1 sentence max. If fan co
 Then on a new line, include EXACTLY this link with no changes: {_merch}
 Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
-    if intent == Intent.BOOK:
+    if intent == Intent.BOOK and not blast_context:
         return f"""You are {_creator_name}'s AI assistant.
 
 The user is asking about {_creator_name}'s book "{_book_title}": {user_message}
@@ -487,7 +487,7 @@ The user is asking about {_creator_name}'s book "{_book_title}": {user_message}
 Respond in {_creator_name}'s voice — sharp, warm, excited about the book, 1 sentence max. Then on a new line, include EXACTLY this link with no changes: {_book_url}
 Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
-    if intent == Intent.PODCAST:
+    if intent == Intent.PODCAST and not blast_context:
         return f"""You are {_creator_name}'s AI assistant helping a fan find a relevant podcast episode.
 
 Here are the most relevant episodes from {_creator_name}'s podcast:
