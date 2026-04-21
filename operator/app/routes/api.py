@@ -753,6 +753,7 @@ def api_save_blast(draft_id):
     media_url = (data.get("media_url") or "").strip()[:1000]
     link_url  = (data.get("link_url") or "").strip()[:2000]
     tracked_link_slug = (data.get("tracked_link_slug") or "").strip()
+    blast_context_note = (data.get("blast_context_note") or "").strip()[:1000]
 
     # Auto-create a tracked link the first time a link_url is saved on this draft
     if link_url and not tracked_link_slug:
@@ -765,6 +766,7 @@ def api_save_blast(draft_id):
             audience_type=audience_type, audience_filter=audience_filter,
             sample_pct=sample_pct, media_url=media_url,
             link_url=link_url, tracked_link_slug=tracked_link_slug,
+            blast_context_note=blast_context_note,
             created_by=user["email"] if user else "",
             draft_id=draft_id,
         )
@@ -914,6 +916,7 @@ def api_blast_send(draft_id):
     media_url     = (data.get("media_url")      or draft.get("media_url")      or "").strip()
     link_url      = (data.get("link_url")       or draft.get("link_url")       or "").strip()
     tracked_link_slug = (data.get("tracked_link_slug") or draft.get("tracked_link_slug") or "").strip()
+    blast_context_note = (data.get("blast_context_note") or draft.get("blast_context_note") or "").strip()[:1000]
 
     if channel not in ("twilio", "slicktext"):
         channel = "twilio"
@@ -931,6 +934,7 @@ def api_blast_send(draft_id):
                 audience_type=audience_type, audience_filter=audience_filter,
                 sample_pct=sample_pct, media_url=media_url,
                 link_url=link_url, tracked_link_slug=tracked_link_slug,
+                blast_context_note=blast_context_note,
                 created_by=user["email"] if user else "",
                 draft_id=draft_id,
             )
