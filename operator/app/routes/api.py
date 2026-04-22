@@ -2042,13 +2042,31 @@ def update_user():
         conn.close()
 
 
+# Plan definitions: name → monthly credit allotment (None = unlimited)
+_PLAN_CREDITS = {
+    "starter": 3200,
+    "growth":  6200,
+    "pro":     12500,
+    "scale":   25200,
+    "custom":  None,   # unlimited
+}
+
+# Credit booster packs (UI-only until Stripe is wired)
+_CREDIT_BOOSTERS = [
+    {"credits": 1000,  "price_usd": 9,  "label": "+1,000 credits"},
+    {"credits": 2500,  "price_usd": 19, "label": "+2,500 credits"},
+    {"credits": 5000,  "price_usd": 35, "label": "+5,000 credits"},
+    {"credits": 10000, "price_usd": 59, "label": "+10,000 credits"},
+]
+
+
 @api_bp.route("/api/billing/status")
 @login_required
 def billing_status():
     """
-    Monthly usage summary for the credit tracking UI.
-    Returns messages sent, blasts sent, fans reached, and cost-to-date this month.
-    No credit limits until Stripe is wired — this is the usage view only.
+    Monthly credit usage summary.
+    1 credit = 1 text sent or received (inbound fan msg + AI reply + each blast recipient).
+    Returns credits_used, credits_total (null = unlimited), plan_name, and breakdown stats.
     """
     import psycopg2.extras
     from datetime import date
@@ -2061,31 +2079,40 @@ def billing_status():
     try:
         conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # Fetch plan info for this user
+            cur.execute(
+                """SELECT plan_name, monthly_credits
+                   FROM operator_users
+                   WHERE creator_slug=%s AND is_active=TRUE
+                   LIMIT 1""",
+                (slug,),
+            )
+            plan_row = cur.fetchone()
+            plan_name      = (plan_row["plan_name"] if plan_row else "starter") or "starter"
+            credits_total  = plan_row["monthly_credits"] if plan_row else _PLAN_CREDITS.get(plan_name, 3200)
+
             if account_type == "performer":
-                # AI replies this month — tracked (exact) + untracked (estimated)
+                # All conversation messages this month (inbound fan + AI replies)
+                # 1 credit each: fan texts in = 1, AI replies = 1
                 cur.execute(
-                    """SELECT
-                          COUNT(*) AS cnt,
-                          COUNT(*) FILTER (WHERE m.ai_cost_usd IS NOT NULL) AS tracked_cnt,
-                          COALESCE(SUM(m.ai_cost_usd), 0) AS exact_ai_cost
+                    """SELECT COUNT(*) AS total_msgs,
+                              COUNT(*) FILTER (WHERE m.role='assistant') AS ai_replies,
+                              COUNT(*) FILTER (WHERE m.ai_cost_usd IS NOT NULL) AS tracked_cnt,
+                              COALESCE(SUM(m.ai_cost_usd), 0) AS exact_ai_cost
                        FROM messages m
                        JOIN contacts c ON c.phone_number = m.phone_number
-                       WHERE c.creator_slug=%s AND m.role='assistant'
+                       WHERE c.creator_slug=%s
                          AND m.created_at >= DATE_TRUNC('month', NOW())""",
                     (slug,),
                 )
-                ai_row = cur.fetchone()
-                replies_this_month = ai_row["cnt"]
-                tracked_cnt = ai_row["tracked_cnt"]
-                untracked_cnt = replies_this_month - tracked_cnt
-                # Combine exact cost with flat-rate estimate for untracked replies.
-                # $0.004/reply is a conservative estimate (actual Gemini cost ~$0.0007/reply).
-                ai_cost_exact = float(ai_row["exact_ai_cost"])
-                ai_cost = round(ai_cost_exact + untracked_cnt * 0.004, 4)
-                # cost_exact only becomes True when all replies this month are tracked
+                msg_row = cur.fetchone()
+                convo_credits      = msg_row["total_msgs"]      # fan texts + AI replies
+                replies_this_month = msg_row["ai_replies"]
+                untracked_cnt      = replies_this_month - msg_row["tracked_cnt"]
+                ai_cost            = round(float(msg_row["exact_ai_cost"]) + untracked_cnt * 0.004, 4)
                 ai_cost_fully_exact = (untracked_cnt == 0)
 
-                # Blasts sent this month
+                # Blast recipients this month — each fan reached = 1 credit
                 cur.execute(
                     """SELECT COUNT(*) AS blasts,
                               COALESCE(SUM(sent_count), 0) AS fans_reached
@@ -2093,25 +2120,29 @@ def billing_status():
                        WHERE status='sent'
                          AND sent_at >= DATE_TRUNC('month', NOW())""",
                 )
-                blast_row = cur.fetchone()
+                blast_row        = cur.fetchone()
+                blast_credits    = int(blast_row["fans_reached"] or 0)
+                blasts_this_month = int(blast_row["blasts"] or 0)
 
-                # SMS cost this month (exact from Twilio nightly sync)
+                # Total credits = conversation credits + blast credits
+                credits_used = convo_credits + blast_credits
+
+                # SMS cost (internal, not shown to client)
                 cur.execute(
                     """SELECT COALESCE(SUM(inbound_cost_usd + outbound_cost_usd), -1) AS sms_cost
                        FROM sms_cost_log
                        WHERE creator_slug=%s AND TO_CHAR(log_date,'YYYY-MM')=%s""",
                     (slug, month),
                 )
-                sms_row = cur.fetchone()
+                sms_row  = cur.fetchone()
                 sms_cost = float(sms_row["sms_cost"]) if sms_row["sms_cost"] >= 0 else None
-
                 total_cost = round(
                     1.15 + ai_cost +
                     (sms_cost if sms_cost is not None else replies_this_month * 0.0079), 2
                 )
 
             else:
-                # Business account — use smb_messages
+                # Business account
                 cur.execute(
                     """SELECT COUNT(*) AS cnt FROM smb_messages
                        WHERE tenant_slug=%s AND role='assistant'
@@ -2119,19 +2150,38 @@ def billing_status():
                     (slug,),
                 )
                 replies_this_month = cur.fetchone()["cnt"]
-                blast_row  = type("r", (), {"blasts": 0, "fans_reached": 0})()
-                ai_cost    = None
-                sms_cost   = None
-                total_cost = round(1.15 + replies_this_month * 0.004 +
-                                   replies_this_month * 0.0079, 2)
+                credits_used       = replies_this_month * 2  # rough: 1 in + 1 out
+                blasts_this_month  = 0
+                blast_credits      = 0
+                ai_cost            = None
+                sms_cost           = None
+                total_cost         = round(1.15 + replies_this_month * 0.004 +
+                                           replies_this_month * 0.0079, 2)
+                ai_cost_fully_exact = False
 
         conn.close()
+
+        # Warning thresholds (null credits_total = unlimited, no warning)
+        credits_warning = None
+        if credits_total:
+            remaining = credits_total - credits_used
+            pct_remaining = remaining / credits_total if credits_total else 1
+            if pct_remaining <= 0.10:
+                credits_warning = "critical"
+            elif pct_remaining <= 0.20:
+                credits_warning = "low"
+
         return jsonify(
             slug=slug,
             month=month,
+            plan_name=plan_name,
+            credits_used=credits_used,
+            credits_total=credits_total,      # null = unlimited
+            credits_warning=credits_warning,  # null | "low" | "critical"
+            boosters=_CREDIT_BOOSTERS,
             replies_this_month=replies_this_month,
-            blasts_this_month=int(blast_row["blasts"] or 0),
-            fans_reached_this_month=int(blast_row["fans_reached"] or 0),
+            blasts_this_month=blasts_this_month,
+            fans_reached_this_month=blast_credits,
             ai_cost_usd=ai_cost,
             sms_cost_usd=sms_cost,
             total_cost_usd=total_cost,
