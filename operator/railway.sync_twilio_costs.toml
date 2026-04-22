@@ -1,0 +1,19 @@
+# Nightly Twilio billing sync — writes exact SMS costs per creator per day to sms_cost_log.
+# Pulls from the Twilio Messages API (same data as your invoice).
+#
+# Setup:
+# 1) Railway project → + New Service → GitHub Repo → same repo
+# 2) Service → Settings → Config-as-code → set path: operator/railway.sync_twilio_costs.toml
+# 3) Variables (reference from existing web service):
+#      DATABASE_URL         → Variable Reference → Postgres (same as web service)
+#      TWILIO_ACCOUNT_SID   → Variable Reference → same as web service
+#      TWILIO_AUTH_TOKEN    → Variable Reference → same as web service
+# 4) Runs nightly at 3am UTC (after fan scoring, before Notion CRM sync at 5am)
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python -u scripts/sync_twilio_costs.py --days 2"
+cronSchedule = "0 3 * * *"
+watchPatterns = ["scripts/sync_twilio_costs.py", "requirements.txt"]

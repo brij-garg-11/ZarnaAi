@@ -14,6 +14,7 @@ from app.analytics.session_manager import get_or_create_session
 from app.brain.conversation_end import is_conversation_ender
 from app.brain.creator_config import CreatorConfig, load_creator
 from app.brain.emphasis import should_suppress_all_emphasis
+import app.brain.generator as _generator_mod
 from app.brain.generator import generate_zarna_reply, infer_reply_provider
 from app.brain.intent import Intent, _fast_classify, classify_intent
 from app.brain.memory import extract_memory
@@ -210,6 +211,8 @@ class ZarnaBrain:
             creator_config=self.creator_config,
         )
         gen_ms = (time.perf_counter() - t_gen) * 1000
+        ai_provider, ai_prompt_tokens, ai_completion_tokens = _generator_mod.get_last_usage()
+        ai_cost = _generator_mod.calc_ai_cost(ai_provider, ai_prompt_tokens, ai_completion_tokens)
 
         # Silently rewrite known URLs (website, podcast) to tracked /t/<slug> links
         # Phone number is embedded as ?f=<token> so clicks can be attributed to this fan.
@@ -241,7 +244,7 @@ class ZarnaBrain:
         # 8b. Track bot turn in session
         _executor.submit(get_or_create_session, phone_number, "assistant")
 
-        # 8c. Write engagement context onto that row in the background
+        # 8c. Write engagement context + AI cost onto that row in the background
         save_reply_context_async(
             executor=_executor,
             storage=self.storage,
@@ -253,6 +256,10 @@ class ZarnaBrain:
             gen_ms=gen_ms,
             conversation_turn=len(history) // 2 + 1,
             sell_variant=sell_variant,
+            provider=ai_provider,
+            prompt_tokens=ai_prompt_tokens,
+            completion_tokens=ai_completion_tokens,
+            ai_cost_usd=ai_cost,
         )
 
         # 9. Update fan memory in the background — no latency impact on reply

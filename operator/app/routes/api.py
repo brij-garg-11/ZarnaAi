@@ -192,6 +192,119 @@ def audience():
     )
 
 
+@api_bp.route("/api/billing/cost-breakdown")
+@login_required
+def api_cost_breakdown():
+    """
+    GET /api/billing/cost-breakdown?slug=zarna&month=2026-04
+    Returns exact AI cost (from messages.ai_cost_usd), SMS cost (from sms_cost_log),
+    and phone rental for a given creator and calendar month.
+    Falls back to flat estimates for any source not yet populated.
+    """
+    import psycopg2.extras
+    slug  = request.args.get("slug", "").strip().lower()
+    month = request.args.get("month", "").strip()  # e.g. "2026-04"
+    if not slug:
+        return jsonify(error="slug is required"), 400
+    if not month:
+        from datetime import date
+        month = date.today().strftime("%Y-%m")
+
+    try:
+        conn = get_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # AI cost — exact from messages table
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(SUM(m.ai_cost_usd), -1)       AS total_ai_usd,
+                    COUNT(*)                                AS message_count,
+                    COALESCE(SUM(m.prompt_tokens), 0)      AS prompt_tokens,
+                    COALESCE(SUM(m.completion_tokens), 0)  AS completion_tokens,
+                    COUNT(*) FILTER (WHERE m.provider = 'gemini')    AS gemini_msgs,
+                    COUNT(*) FILTER (WHERE m.provider = 'openai')    AS openai_msgs,
+                    COUNT(*) FILTER (WHERE m.provider = 'anthropic') AS anthropic_msgs,
+                    COALESCE(SUM(m.ai_cost_usd) FILTER (WHERE m.provider = 'gemini'),    0) AS gemini_cost,
+                    COALESCE(SUM(m.ai_cost_usd) FILTER (WHERE m.provider = 'openai'),    0) AS openai_cost,
+                    COALESCE(SUM(m.ai_cost_usd) FILTER (WHERE m.provider = 'anthropic'), 0) AS anthropic_cost
+                FROM messages m
+                JOIN contacts c ON c.phone_number = m.phone_number
+                WHERE c.creator_slug = %s
+                  AND m.role = 'assistant'
+                  AND TO_CHAR(m.created_at AT TIME ZONE 'UTC', 'YYYY-MM') = %s
+                """,
+                (slug, month),
+            )
+            ai_row = cur.fetchone()
+
+            # SMS cost — from nightly Twilio sync
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(SUM(inbound_cost_usd + outbound_cost_usd), -1) AS total_sms_usd,
+                    COALESCE(SUM(inbound_count), 0)   AS inbound_count,
+                    COALESCE(SUM(outbound_count), 0)  AS outbound_count,
+                    COALESCE(SUM(inbound_cost_usd), 0)  AS inbound_cost_usd,
+                    COALESCE(SUM(outbound_cost_usd), 0) AS outbound_cost_usd
+                FROM sms_cost_log
+                WHERE creator_slug = %s
+                  AND TO_CHAR(log_date, 'YYYY-MM') = %s
+                """,
+                (slug, month),
+            )
+            sms_row = cur.fetchone()
+
+        conn.close()
+
+        PHONE_RENTAL = 1.15
+        AI_FALLBACK_PER_MSG  = 0.004
+        SMS_FALLBACK_PER_MSG = 0.0079
+
+        msg_count   = ai_row["message_count"] or 0
+        total_ai    = float(ai_row["total_ai_usd"]) if ai_row["total_ai_usd"] >= 0 else round(msg_count * AI_FALLBACK_PER_MSG, 2)
+        ai_exact    = ai_row["total_ai_usd"] >= 0
+
+        total_sms   = float(sms_row["total_sms_usd"]) if sms_row["total_sms_usd"] >= 0 else round(msg_count * SMS_FALLBACK_PER_MSG, 2)
+        sms_exact   = sms_row["total_sms_usd"] >= 0
+
+        total_cost  = round(PHONE_RENTAL + total_ai + total_sms, 2)
+
+        return jsonify(
+            slug=slug,
+            month=month,
+            ai={
+                "total_usd":         round(total_ai, 4),
+                "exact":             ai_exact,
+                "message_count":     msg_count,
+                "prompt_tokens":     int(ai_row["prompt_tokens"] or 0),
+                "completion_tokens": int(ai_row["completion_tokens"] or 0),
+                "by_provider": {
+                    "gemini":    round(float(ai_row["gemini_cost"] or 0), 4),
+                    "openai":    round(float(ai_row["openai_cost"] or 0), 4),
+                    "anthropic": round(float(ai_row["anthropic_cost"] or 0), 4),
+                },
+                "msg_by_provider": {
+                    "gemini":    int(ai_row["gemini_msgs"] or 0),
+                    "openai":    int(ai_row["openai_msgs"] or 0),
+                    "anthropic": int(ai_row["anthropic_msgs"] or 0),
+                },
+            },
+            sms={
+                "total_usd":        round(total_sms, 4),
+                "exact":            sms_exact,
+                "inbound_count":    int(sms_row["inbound_count"] or 0),
+                "outbound_count":   int(sms_row["outbound_count"] or 0),
+                "inbound_cost_usd": round(float(sms_row["inbound_cost_usd"] or 0), 4),
+                "outbound_cost_usd":round(float(sms_row["outbound_cost_usd"] or 0), 4),
+            },
+            phone_rental=PHONE_RENTAL,
+            total_cost_usd=total_cost,
+        )
+    except Exception:
+        logger.exception("api: cost-breakdown failed for slug=%s month=%s", slug, month)
+        return jsonify(error="internal error"), 500
+
+
 @api_bp.route("/api/audience/frequency")
 @login_required
 def audience_frequency():

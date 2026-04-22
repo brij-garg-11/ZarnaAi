@@ -1,5 +1,6 @@
 import logging
 import re
+import threading
 from typing import TYPE_CHECKING, List, Optional
 
 from google import genai
@@ -22,6 +23,31 @@ if TYPE_CHECKING:
 
 _CLIENT = genai.Client(api_key=GEMINI_API_KEY)
 _LOGGER = logging.getLogger(__name__)
+
+# Thread-local token usage — populated as a side-effect of each generation call.
+# Read via get_last_usage() in handler.py immediately after generate_zarna_reply().
+_usage_local = threading.local()
+
+# Per-token pricing (USD per token, as of Apr 2026)
+_TOKEN_PRICES = {
+    "gemini":    {"input": 0.10 / 1_000_000, "output": 0.40 / 1_000_000},
+    "openai":    {"input": 0.15 / 1_000_000, "output": 0.60 / 1_000_000},
+    "anthropic": {"input": 3.00 / 1_000_000, "output": 15.00 / 1_000_000},
+}
+
+
+def calc_ai_cost(provider: str, prompt_tokens: int, completion_tokens: int) -> float:
+    p = _TOKEN_PRICES.get(provider, _TOKEN_PRICES["gemini"])
+    return round(prompt_tokens * p["input"] + completion_tokens * p["output"], 8)
+
+
+def get_last_usage() -> tuple:
+    """Return (provider, prompt_tokens, completion_tokens) recorded during last generate call."""
+    return (
+        getattr(_usage_local, "provider", "gemini"),
+        getattr(_usage_local, "prompt_tokens", 0) or 0,
+        getattr(_usage_local, "completion_tokens", 0) or 0,
+    )
 
 # Hardcoded fallback links — used when no CreatorConfig is provided or the
 # config is missing a field.  DO NOT change these; update zarna.json instead.
@@ -734,7 +760,12 @@ def _generate_gemini_raw(prompt: str) -> str:
         model=GENERATION_MODEL,
         contents=prompt,
     )
-    return (response.text or "").strip()
+    text = (response.text or "").strip()
+    usage = response.usage_metadata
+    _usage_local.provider = "gemini"
+    _usage_local.prompt_tokens = getattr(usage, "prompt_token_count", 0) or 0
+    _usage_local.completion_tokens = getattr(usage, "candidates_token_count", 0) or 0
+    return text
 
 
 def _generate_openai_raw(prompt: str) -> str:
@@ -747,7 +778,11 @@ def _generate_openai_raw(prompt: str) -> str:
         max_tokens=500,
         temperature=0.85,
     )
-    return ((r.choices[0].message.content or "") if r.choices else "").strip()
+    text = ((r.choices[0].message.content or "") if r.choices else "").strip()
+    _usage_local.provider = "openai"
+    _usage_local.prompt_tokens = r.usage.prompt_tokens if r.usage else 0
+    _usage_local.completion_tokens = r.usage.completion_tokens if r.usage else 0
+    return text
 
 
 def _generate_anthropic_raw(prompt: str) -> str:
@@ -763,6 +798,9 @@ def _generate_anthropic_raw(prompt: str) -> str:
     for block in msg.content:
         if getattr(block, "type", None) == "text":
             parts.append(block.text)
+    _usage_local.provider = "anthropic"
+    _usage_local.prompt_tokens = msg.usage.input_tokens if msg.usage else 0
+    _usage_local.completion_tokens = msg.usage.output_tokens if msg.usage else 0
     return "".join(parts).strip()
 
 
@@ -855,6 +893,11 @@ def generate_zarna_reply(
     sell_variant, when set ("A" or "B"), selects the A/B copy variation for sell intents.
     creator_config, when set, supplies creator-specific links and voice — falls back to Zarna defaults.
     """
+    # Reset token usage so stale data never leaks between calls on the same thread
+    _usage_local.provider = "gemini"
+    _usage_local.prompt_tokens = 0
+    _usage_local.completion_tokens = 0
+
     # Redirect coding/homework requests before they reach the AI
     if _CODE_REQUEST_RE.search(user_message or ""):
         _LOGGER.info("Code/homework request detected — returning redirect reply")

@@ -54,6 +54,10 @@ def save_reply_context_async(
     gen_ms: float,
     conversation_turn: int,
     sell_variant: Optional[str] = None,
+    provider: Optional[str] = None,
+    prompt_tokens: Optional[int] = None,
+    completion_tokens: Optional[int] = None,
+    ai_cost_usd: Optional[float] = None,
 ) -> None:
     """Submit background task to write context metadata onto the saved reply row."""
     if message_id is None:
@@ -74,6 +78,10 @@ def save_reply_context_async(
                 conversation_turn=conversation_turn,
                 gen_ms=gen_ms,
                 sell_variant=sell_variant,
+                provider=provider,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                ai_cost_usd=ai_cost_usd,
             )
         except Exception:
             _logger.exception(

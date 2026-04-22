@@ -65,6 +65,10 @@ class BaseStorage(ABC):
         conversation_turn: Optional[int] = None,
         gen_ms: Optional[float] = None,
         sell_variant: Optional[str] = None,
+        provider: Optional[str] = None,
+        prompt_tokens: Optional[int] = None,
+        completion_tokens: Optional[int] = None,
+        ai_cost_usd: Optional[float] = None,
     ) -> None:
         """
         Persist context metadata for an assistant message so engagement

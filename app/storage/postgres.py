@@ -9,6 +9,7 @@ Tables are created on first startup — no migration step needed.
 """
 
 import logging
+import os
 import time
 from typing import List, Optional
 
@@ -18,6 +19,8 @@ from psycopg2.pool import ThreadedConnectionPool
 
 from .base import BaseStorage
 from .models import Contact, Message
+
+_CREATOR_SLUG = os.getenv("CREATOR_SLUG", "zarna").strip().lower()
 
 # Cache for top-performing replies — keyed by (intent, tone_mode), expires after 5 min.
 # Prevents a DB round-trip on every inbound message while still picking up new winners.
@@ -47,9 +50,10 @@ CREATE INDEX IF NOT EXISTS messages_phone_created
 
 # Additive migrations — safe to run on every startup (idempotent)
 _MIGRATIONS = """
-ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_memory   TEXT    DEFAULT '';
-ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_tags     TEXT[]  DEFAULT '{}';
-ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_location TEXT    DEFAULT '';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_memory    TEXT    DEFAULT '';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_tags      TEXT[]  DEFAULT '{}';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_location  TEXT    DEFAULT '';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS creator_slug  TEXT    NOT NULL DEFAULT 'zarna';
 """
 
 # One statement per execute — psycopg2 limitation.
@@ -122,6 +126,27 @@ _ENGAGEMENT_ANALYTICS_MIGRATIONS = (
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS msg_source          TEXT DEFAULT 'bot'",
     # A/B variant for sell-intent replies (Pillar 3, Step 7)
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS sell_variant        TEXT",
+    # AI cost tracking — exact per-message costs from provider usage metadata
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS provider          TEXT",
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS prompt_tokens     INT",
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS completion_tokens INT",
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS ai_cost_usd       NUMERIC(10,8)",
+    # SMS cost log — populated nightly by scripts/sync_twilio_costs.py
+    """
+    CREATE TABLE IF NOT EXISTS sms_cost_log (
+        id                SERIAL PRIMARY KEY,
+        log_date          DATE NOT NULL,
+        creator_slug      TEXT NOT NULL,
+        phone_number      TEXT NOT NULL,
+        inbound_count     INT  DEFAULT 0,
+        outbound_count    INT  DEFAULT 0,
+        inbound_cost_usd  NUMERIC(10,4) DEFAULT 0,
+        outbound_cost_usd NUMERIC(10,4) DEFAULT 0,
+        synced_at         TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (log_date, phone_number)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sms_cost_log_slug_date ON sms_cost_log (creator_slug, log_date DESC)",
     # Index for fast analytics queries (filter to scored assistant rows)
     """
     CREATE INDEX IF NOT EXISTS idx_messages_analytics
@@ -446,11 +471,11 @@ class PostgresStorage(BaseStorage):
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        INSERT INTO contacts (phone_number, source)
-                        VALUES (%s, %s)
+                        INSERT INTO contacts (phone_number, source, creator_slug)
+                        VALUES (%s, %s, %s)
                         ON CONFLICT (phone_number) DO NOTHING
                         """,
-                        (phone_number, source),
+                        (phone_number, source, _CREATOR_SLUG),
                     )
         finally:
             self._release(conn)
@@ -690,6 +715,10 @@ class PostgresStorage(BaseStorage):
         conversation_turn=None,
         gen_ms=None,
         sell_variant=None,
+        provider=None,
+        prompt_tokens=None,
+        completion_tokens=None,
+        ai_cost_usd=None,
     ) -> None:
         """Write bot-reply context columns onto an existing message row."""
         if message_id is None:
@@ -708,7 +737,11 @@ class PostgresStorage(BaseStorage):
                             has_link           = %s,
                             conversation_turn  = %s,
                             gen_ms             = %s,
-                            sell_variant       = %s
+                            sell_variant       = %s,
+                            provider           = %s,
+                            prompt_tokens      = %s,
+                            completion_tokens  = %s,
+                            ai_cost_usd        = %s
                         WHERE id = %s
                         """,
                         (
@@ -720,6 +753,10 @@ class PostgresStorage(BaseStorage):
                             conversation_turn,
                             gen_ms,
                             sell_variant,
+                            provider,
+                            prompt_tokens,
+                            completion_tokens,
+                            ai_cost_usd,
                             message_id,
                         ),
                     )
