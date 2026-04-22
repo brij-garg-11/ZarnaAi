@@ -1,42 +1,35 @@
 # Plan: Build Roadmap — Pillars 1–4
 _Source: `docs/Brijs Thoughts/build_roadmap.md`_
 
-Pillar 5 (Smart Blast Engine) is shipped. Remaining steps for Pillars 1–4:
+## Already Done ✅
 
-## Pillar 2 — Link Clicked Within 1h
+- **Step 1** (Pillar 2) — `link_clicked_1h` is fully wired in both the main app (`app/admin/__init__.py`) and operator blast tool. DB column exists. No action needed.
+- **Step 2** (Pillar 1) — "score silence nightly" service is live on Railway with `cronSchedule = "0 2 * * *"` and `operator/railway.score_silence.toml`. Running every night.
+- **Step 3** (Pillar 1) — Cold-start seed run on Apr 21, 2026. 200 examples inserted under snapshot `2026-04-21` for creator `zarna`. Rollback: `python scripts/seed_winning_examples.py --creator zarna --rollback 2026-04-21`
+- **Step 4** (Pillar 3) — MERCH intent. ✅ SHIPPED
+- **Step 5** (Pillar 3) — Per-show / per-city sell copy. ✅ SHIPPED
+- **Step 7** (Pillar 3) — A/B testing on sell copy. ✅ SHIPPED
+- **Step 9** (Pillar 4) — Random % within segment already live in blast UI and `get_audience_phones()`.
 
-- [ ] **Step 1** — Verify `link_clicked_1h` wiring end-to-end
-  - Column exists in DB, operator blast tool already flips it on click
-  - Test: send blast with tracked link → click link → verify `link_clicked_1h = true` on correct message row within 1 hour
+---
 
-## Pillar 1 — Self-Improvement Loop
+## Still To Build
 
-- [ ] **Step 2** — Extract silence scoring into its own Railway cron (`scripts/score_silence.py`)
-  - Currently runs inline; extract to independent job
-  - Test: verify cron runs independently, scores update in DB, main reply pipeline unaffected
+### Step 6 — Winning Examples Expansion (Pillar 3)
+_Operational process — no new code needed. Run quarterly._
+- [ ] Run `python scripts/seed_winning_examples.py --tag YYYY-MM-DD` each quarter to expand the corpus
+- [ ] Prior snapshot stays available for rollback if quality drops
+- [ ] Next run due: ~Jul 2026
 
-- [ ] **Step 3** — Cold-start fix for winning examples
-  - Seed corpus on first deploy from top N highest-scoring historical replies
-  - Store version snapshot for rollback
-  - Test: run quality digest before/after — verify no regression
+### Step 8 — Compound Segment Builder (Pillar 4)
+_Real new work — backend + UI_
+- [ ] Add AND/OR filter logic to `get_audience_phones()` in `operator/app/queries.py`
+- [ ] Update blast audience picker UI in `operator/app/templates/blast.html`
+- [ ] Example: fans tagged `longtime-fan` AND in `New York` AND signed up for a live show
+- [ ] Test: compound filter fan count matches manual DB query
 
-## Pillar 3 — Context-Aware Selling
-
-- [ ] **Step 6** — Winning examples expansion + rollback
-  - Expand corpus quarterly with new material
-  - Version each snapshot with a date; keep prior snapshot for one-command rollback
-  - Test: run quality digest before/after; if scores drop, roll back and verify recovery
-
-## Pillar 4 — Smart Audience Segmentation
-
-- [ ] **Step 8** — Compound segment builder
-  - AND/OR filter logic in blast audience picker
-  - Test: build compound filter → verify fan count matches manual DB query
-
-- [ ] **Step 9** — Random % within segment
-  - Allow X% sample of filtered audience
-  - Test: set 20% on known segment → verify recipient count matches ~20%
-
-- [ ] **Step 10** — UX control for frequency
-  - Expose `fan_tier` and `last_blasted_at` in admin audience view
-  - Test: open audience view → verify tier + last-blasted-at columns display correctly
+### Step 10 — Frequency UX in Audience View (Pillar 4)
+_Builds on fan tiers (already running)_
+- [ ] Add `fan_tier` and `last_blasted_at` columns to the audience view in `operator/app/templates/audience.html`
+- [ ] Backend query to pull tier + last blast date per fan
+- [ ] Test: open audience view → verify columns display correctly
