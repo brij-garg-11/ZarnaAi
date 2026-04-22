@@ -243,6 +243,7 @@ def sync_customer_costs(slug: str, account_type: str, conn) -> bool:
         return False
 
     try:
+        # Keep a single cursor open for all queries in this function.
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             # Subscriber count
             if account_type == "performer":
@@ -299,37 +300,38 @@ def sync_customer_costs(slug: str, account_type: str, conn) -> bool:
                 shows_run = row["cnt"]
                 last_show = row["last"]
 
-        # AI cost — exact sum from messages.ai_cost_usd (null = not yet tracked, fall back to estimate)
-        if account_type == "performer":
+            # AI cost — hybrid: exact sum for tracked replies + flat-rate estimate for untracked
+            if account_type == "performer":
+                cur.execute(
+                    """SELECT
+                          COUNT(*) FILTER (WHERE m.ai_cost_usd IS NOT NULL) AS tracked_cnt,
+                          COUNT(*) AS total_cnt,
+                          COALESCE(SUM(m.ai_cost_usd), 0) AS exact_ai_cost
+                       FROM messages m
+                       JOIN contacts c ON c.phone_number = m.phone_number
+                       WHERE c.creator_slug = %s AND m.role = 'assistant'
+                         AND m.created_at >= DATE_TRUNC('month', NOW())""",
+                    (slug,),
+                )
+                ai_row = cur.fetchone()
+                untracked = ai_row["total_cnt"] - ai_row["tracked_cnt"]
+                est_ai_cost = round(float(ai_row["exact_ai_cost"]) + untracked * AI_COST_PER_MSG, 4)
+            else:
+                est_ai_cost = round(msgs_month * AI_COST_PER_MSG, 2)
+
+            # SMS cost — exact from nightly Twilio sync, else flat-rate estimate
             cur.execute(
-                """SELECT COALESCE(SUM(m.ai_cost_usd), -1) AS ai_cost
-                   FROM messages m
-                   JOIN contacts c ON c.phone_number = m.phone_number
-                   WHERE c.creator_slug = %s AND m.role = 'assistant'
-                     AND m.created_at >= DATE_TRUNC('month', NOW())""",
+                """SELECT COALESCE(SUM(inbound_cost_usd + outbound_cost_usd), -1) AS sms_cost
+                   FROM sms_cost_log
+                   WHERE creator_slug = %s
+                     AND log_date >= DATE_TRUNC('month', CURRENT_DATE)""",
                 (slug,),
             )
-        else:
-            cur.execute("SELECT -1 AS ai_cost")  # SMB uses smb_messages — no cost column yet
-        ai_cost_row = cur.fetchone()["ai_cost"]
-        if ai_cost_row >= 0:
-            est_ai_cost = round(float(ai_cost_row), 4)
-        else:
-            est_ai_cost = round(msgs_month * AI_COST_PER_MSG, 2)
-
-        # SMS cost — from sms_cost_log if available, else flat estimate
-        cur.execute(
-            """SELECT COALESCE(SUM(inbound_cost_usd + outbound_cost_usd), -1) AS sms_cost
-               FROM sms_cost_log
-               WHERE creator_slug = %s
-                 AND log_date >= DATE_TRUNC('month', CURRENT_DATE)""",
-            (slug,),
-        )
-        sms_cost_row = cur.fetchone()["sms_cost"]
-        if sms_cost_row >= 0:
-            est_sms_cost = round(float(sms_cost_row), 4)
-        else:
-            est_sms_cost = round(msgs_month * SMS_COST_PER_MSG, 2)
+            sms_cost_row = cur.fetchone()["sms_cost"]
+            est_sms_cost = (
+                round(float(sms_cost_row), 4) if sms_cost_row >= 0
+                else round(msgs_month * SMS_COST_PER_MSG, 2)
+            )
 
         total_cost = round(PHONE_RENTAL_MONTHLY + est_ai_cost + est_sms_cost, 2)
 
