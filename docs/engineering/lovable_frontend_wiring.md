@@ -179,4 +179,114 @@ Success: `{ "success": true }`
 
 ---
 
+---
+
+## Account settings
+
+### Get current user
+```
+GET /api/user
+```
+Response: `{ "email": "...", "name": "...", "account_type": "performer", "creator_slug": "...", "is_owner": true }`
+
+### Update name or email
+```
+PATCH /api/user
+Body: { "name": "New Name" }          // name only
+      { "email": "new@email.com" }    // email only
+      { "name": "...", "email": "..." } // both
+```
+Success: `{ "success": true, "name": "...", "email": "..." }`
+Conflict (email taken): `409 { "error": "That email is already in use" }`
+
+### Change password
+```
+POST /api/auth/change-password
+Body: { "current_password": "...", "new_password": "..." }
+```
+Success: `{ "success": true }`
+Error: `401 { "error": "Current password is incorrect" }` or `400` if new password < 8 chars
+
+---
+
+## Billing / usage status
+
+### Monthly usage summary
+```
+GET /api/billing/status
+```
+Response:
+```json
+{
+  "slug": "zarna",
+  "month": "2026-04",
+  "replies_this_month": 3091,
+  "blasts_this_month": 25,
+  "fans_reached_this_month": 17606,
+  "ai_cost_usd": 0.0077,
+  "sms_cost_usd": null,
+  "total_cost_usd": 38.42,
+  "cost_exact": false
+}
+```
+- `ai_cost_usd` / `sms_cost_usd` are `null` until data accrues (show estimate instead)
+- `cost_exact: true` once both sources are populated
+
+### Exact cost breakdown by provider
+```
+GET /api/billing/cost-breakdown?slug=zarna&month=2026-04
+```
+Response:
+```json
+{
+  "slug": "zarna",
+  "month": "2026-04",
+  "ai": {
+    "total_usd": 18.42,
+    "exact": true,
+    "message_count": 3091,
+    "prompt_tokens": 3840000,
+    "completion_tokens": 482000,
+    "by_provider": { "gemini": 14.10, "openai": 3.21, "anthropic": 1.11 },
+    "msg_by_provider": { "gemini": 2800, "openai": 241, "anthropic": 50 }
+  },
+  "sms": { "total_usd": 38.14, "exact": false, "inbound_count": 2100, "outbound_count": 3091 },
+  "phone_rental": 1.15,
+  "total_cost_usd": 57.71
+}
+```
+
+---
+
+## Team management
+
+### List members + pending invites
+```
+GET /api/team/members
+```
+Response: `{ "members": [...], "slug": "zarna" }`
+
+Each member: `{ "id": 1, "email": "...", "name": "...", "account_type": "performer", "status": "active" | "pending" }`
+
+### Invite a team member
+```
+POST /api/team/invite
+Body: { "email": "teammate@example.com", "account_type": "performer" }
+```
+Success: `{ "success": true }` — invite email sent via Resend
+
+### Remove a member
+```
+DELETE /api/team/members/<id>
+```
+Success: `{ "success": true }`
+
+### Cancel a pending invite
+```
+DELETE /api/team/invite/<invite_id>
+```
+Success: `{ "success": true }`
+
+---
+
 *Last updated: April 2026*

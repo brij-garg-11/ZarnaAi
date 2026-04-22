@@ -1981,6 +1981,158 @@ def user_info():
     )
 
 
+@api_bp.route("/api/user", methods=["PATCH"])
+@login_required
+def update_user():
+    """
+    Update display name and/or email for the current user.
+    Body: { "name": "...", "email": "..." }  (either or both)
+    """
+    data = request.get_json(silent=True) or {}
+    new_name  = (data.get("name") or "").strip()
+    new_email = (data.get("email") or "").strip().lower()
+
+    if not new_name and not new_email:
+        return jsonify(error="Provide name or email to update"), 400
+    if new_email and "@" not in new_email:
+        return jsonify(error="Invalid email address"), 400
+
+    user = current_user()
+    conn = get_conn()
+    try:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            if new_email and new_email != user["email"]:
+                cur.execute("SELECT id FROM operator_users WHERE email=%s AND id!=%s",
+                            (new_email, user["id"]))
+                if cur.fetchone():
+                    return jsonify(error="That email is already in use"), 409
+
+        updates = []
+        params  = []
+        if new_name:
+            updates.append("name=%s")
+            params.append(new_name)
+        if new_email:
+            updates.append("email=%s")
+            params.append(new_email)
+        params.append(user["id"])
+
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE operator_users SET {', '.join(updates)} WHERE id=%s",
+                    params,
+                )
+
+        # Refresh session with updated values
+        from flask import session as flask_session
+        if new_name:
+            flask_session["user_name"] = new_name
+        if new_email:
+            flask_session["user_email"] = new_email
+
+        return jsonify(success=True,
+                       name=new_name or user["name"],
+                       email=new_email or user["email"])
+    except Exception:
+        logger.exception("update_user: failed for user_id=%s", user["id"])
+        return jsonify(error="Update failed"), 500
+    finally:
+        conn.close()
+
+
+@api_bp.route("/api/billing/status")
+@login_required
+def billing_status():
+    """
+    Monthly usage summary for the credit tracking UI.
+    Returns messages sent, blasts sent, fans reached, and cost-to-date this month.
+    No credit limits until Stripe is wired — this is the usage view only.
+    """
+    import psycopg2.extras
+    from datetime import date
+
+    user = current_user()
+    slug = user.get("creator_slug") or ""
+    account_type = user.get("account_type") or "performer"
+    month = date.today().strftime("%Y-%m")
+
+    try:
+        conn = get_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            if account_type == "performer":
+                # AI replies this month
+                cur.execute(
+                    """SELECT COUNT(*) AS cnt,
+                              COALESCE(SUM(m.ai_cost_usd), -1) AS ai_cost
+                       FROM messages m
+                       JOIN contacts c ON c.phone_number = m.phone_number
+                       WHERE c.creator_slug=%s AND m.role='assistant'
+                         AND m.created_at >= DATE_TRUNC('month', NOW())""",
+                    (slug,),
+                )
+                ai_row = cur.fetchone()
+                replies_this_month = ai_row["cnt"]
+                ai_cost = float(ai_row["ai_cost"]) if ai_row["ai_cost"] >= 0 else None
+
+                # Blasts sent this month
+                cur.execute(
+                    """SELECT COUNT(*) AS blasts,
+                              COALESCE(SUM(sent_count), 0) AS fans_reached
+                       FROM blast_drafts
+                       WHERE status='sent'
+                         AND sent_at >= DATE_TRUNC('month', NOW())""",
+                )
+                blast_row = cur.fetchone()
+
+                # SMS cost this month
+                cur.execute(
+                    """SELECT COALESCE(SUM(inbound_cost_usd + outbound_cost_usd), -1) AS sms_cost
+                       FROM sms_cost_log
+                       WHERE creator_slug=%s AND TO_CHAR(log_date,'YYYY-MM')=%s""",
+                    (slug, month),
+                )
+                sms_row = cur.fetchone()
+                sms_cost = float(sms_row["sms_cost"]) if sms_row["sms_cost"] >= 0 else None
+
+                total_cost = round(
+                    1.15 + (ai_cost or replies_this_month * 0.004) +
+                    (sms_cost or replies_this_month * 0.0079), 2
+                )
+
+            else:
+                # Business account — use smb_messages
+                cur.execute(
+                    """SELECT COUNT(*) AS cnt FROM smb_messages
+                       WHERE tenant_slug=%s AND role='assistant'
+                         AND created_at >= DATE_TRUNC('month', NOW())""",
+                    (slug,),
+                )
+                replies_this_month = cur.fetchone()["cnt"]
+                blast_row  = type("r", (), {"blasts": 0, "fans_reached": 0})()
+                ai_cost    = None
+                sms_cost   = None
+                total_cost = round(1.15 + replies_this_month * 0.004 +
+                                   replies_this_month * 0.0079, 2)
+
+        conn.close()
+        return jsonify(
+            slug=slug,
+            month=month,
+            replies_this_month=replies_this_month,
+            blasts_this_month=int(blast_row["blasts"] or 0),
+            fans_reached_this_month=int(blast_row["fans_reached"] or 0),
+            ai_cost_usd=ai_cost,
+            sms_cost_usd=sms_cost,
+            total_cost_usd=total_cost,
+            cost_exact=(ai_cost is not None and sms_cost is not None),
+        )
+    except Exception:
+        logger.exception("billing_status: failed for slug=%s", slug)
+        return jsonify(error="internal error"), 500
+
+
 # ── Business (multi-tenant SMB) ────────────────────────────────────────────────
 
 def _get_tenant_slug() -> str | None:
