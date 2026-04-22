@@ -2064,8 +2064,15 @@ _CREDIT_BOOSTERS = [
 @login_required
 def billing_status():
     """
-    Monthly credit usage summary.
-    1 credit = 1 text sent or received (inbound fan msg + AI reply + each blast recipient).
+    Monthly credit usage summary — segment-based billing.
+
+    Credits are counted by SMS segments (not flat messages):
+      - Fan inbound / AI reply ≤ 160 chars  → 1 credit
+      - AI reply 161-306 chars              → 2 credits
+      - AI reply 307-459 chars              → 3 credits (etc.)
+      - Text blast                          → CEIL(body_length / 160) × fans_reached
+      - MMS blast (media attached)          → 3 × fans_reached
+
     Returns credits_used, credits_total (null = unlimited), plan_name, and breakdown stats.
     """
     import psycopg2.extras
@@ -2092,39 +2099,58 @@ def billing_status():
             credits_total  = plan_row["monthly_credits"] if plan_row else _PLAN_CREDITS.get(plan_name, 3200)
 
             if account_type == "performer":
-                # All conversation messages this month (inbound fan + AI replies)
-                # 1 credit each: fan texts in = 1, AI replies = 1
+                # Conversation credits — segment-based:
+                #   fan message : CEIL(LENGTH(text) / 160)   (avg ~52 chars = always 1)
+                #   AI reply    : CEIL(reply_length_chars / 160)  (avg ~154 chars, some = 2)
+                # Unicode/emoji messages use 70-char single / 67-char multi thresholds,
+                # but for billing we use the conservative 160/153 GSM-7 limits.
                 cur.execute(
-                    """SELECT COUNT(*) AS total_msgs,
-                              COUNT(*) FILTER (WHERE m.role='assistant') AS ai_replies,
-                              COUNT(*) FILTER (WHERE m.ai_cost_usd IS NOT NULL) AS tracked_cnt,
-                              COALESCE(SUM(m.ai_cost_usd), 0) AS exact_ai_cost
+                    """SELECT
+                          COUNT(*) FILTER (WHERE m.role='assistant') AS ai_replies,
+                          COUNT(*) FILTER (WHERE m.ai_cost_usd IS NOT NULL) AS tracked_cnt,
+                          COALESCE(SUM(m.ai_cost_usd), 0) AS exact_ai_cost,
+                          -- segments: use reply_length_chars for AI replies (pre-computed),
+                          -- fall back to LENGTH(text) for fan messages
+                          COALESCE(SUM(
+                              GREATEST(1, CEIL(
+                                  COALESCE(m.reply_length_chars, LENGTH(m.text), 1)::float / 160
+                              ))
+                          ), 0) AS convo_credits
                        FROM messages m
                        JOIN contacts c ON c.phone_number = m.phone_number
                        WHERE c.creator_slug=%s
                          AND m.created_at >= DATE_TRUNC('month', NOW())""",
                     (slug,),
                 )
-                msg_row = cur.fetchone()
-                convo_credits      = msg_row["total_msgs"]      # fan texts + AI replies
+                msg_row            = cur.fetchone()
+                convo_credits      = int(msg_row["convo_credits"] or 0)
                 replies_this_month = msg_row["ai_replies"]
                 untracked_cnt      = replies_this_month - msg_row["tracked_cnt"]
                 ai_cost            = round(float(msg_row["exact_ai_cost"]) + untracked_cnt * 0.004, 4)
                 ai_cost_fully_exact = (untracked_cnt == 0)
 
-                # Blast recipients this month — each fan reached = 1 credit
+                # Blast credits — segment-based:
+                #   MMS blast (media_url set) → 3 credits per fan
+                #   Text-only blast           → CEIL(LENGTH(body) / 160) credits per fan
                 cur.execute(
-                    """SELECT COUNT(*) AS blasts,
-                              COALESCE(SUM(sent_count), 0) AS fans_reached
+                    """SELECT
+                          COUNT(*) AS blasts,
+                          COALESCE(SUM(sent_count), 0) AS fans_reached,
+                          COALESCE(SUM(
+                              sent_count * CASE
+                                  WHEN media_url IS NOT NULL THEN 3
+                                  ELSE GREATEST(1, CEIL(LENGTH(body)::float / 160))
+                              END
+                          ), 0) AS blast_credits
                        FROM blast_drafts
                        WHERE status='sent'
                          AND sent_at >= DATE_TRUNC('month', NOW())""",
                 )
-                blast_row        = cur.fetchone()
-                blast_credits    = int(blast_row["fans_reached"] or 0)
+                blast_row         = cur.fetchone()
+                blast_credits     = int(blast_row["blast_credits"] or 0)
                 blasts_this_month = int(blast_row["blasts"] or 0)
 
-                # Total credits = conversation credits + blast credits
+                # Total credits = conversation segments + blast segments
                 credits_used = convo_credits + blast_credits
 
                 # SMS cost (internal, not shown to client)

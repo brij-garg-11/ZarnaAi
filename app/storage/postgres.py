@@ -131,6 +131,9 @@ _ENGAGEMENT_ANALYTICS_MIGRATIONS = (
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS prompt_tokens     INT",
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS completion_tokens INT",
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS ai_cost_usd       NUMERIC(10,8)",
+    # SMS segment count — number of billing segments (credits) this message consumes
+    # 1 segment ≤ 160 GSM-7 chars; longer messages cost more. Stored at reply time.
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS sms_segments      SMALLINT DEFAULT 1",
     # SMS cost log — populated nightly by scripts/sync_twilio_costs.py
     """
     CREATE TABLE IF NOT EXISTS sms_cost_log (
@@ -723,6 +726,11 @@ class PostgresStorage(BaseStorage):
         """Write bot-reply context columns onto an existing message row."""
         if message_id is None:
             return
+
+        # Compute billing segments from reply length so credits_used stays accurate
+        from app.utils.sms_segments import segments_for_length
+        sms_segments = segments_for_length(reply_length_chars or 0)
+
         conn = self._acquire()
         try:
             with conn:
@@ -741,7 +749,8 @@ class PostgresStorage(BaseStorage):
                             provider           = %s,
                             prompt_tokens      = %s,
                             completion_tokens  = %s,
-                            ai_cost_usd        = %s
+                            ai_cost_usd        = %s,
+                            sms_segments       = %s
                         WHERE id = %s
                         """,
                         (
@@ -757,6 +766,7 @@ class PostgresStorage(BaseStorage):
                             prompt_tokens,
                             completion_tokens,
                             ai_cost_usd,
+                            sms_segments,
                             message_id,
                         ),
                     )
