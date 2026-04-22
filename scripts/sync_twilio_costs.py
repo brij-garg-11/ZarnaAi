@@ -54,13 +54,22 @@ def _fetch_twilio_daily(account_sid: str, auth_token: str, start: date, end: dat
     }
     auth = HTTPBasicAuth(account_sid, auth_token)
 
+    from email.utils import parsedate_to_datetime as _parse_rfc2822
+
     while page_url:
         resp = requests.get(page_url, params=params if page_url == base_url else None, auth=auth, timeout=30)
         resp.raise_for_status()
         data = resp.json()
         for msg in data.get("messages", []):
+            raw_date = msg.get("date_sent", "") or ""
+            try:
+                # Twilio returns RFC 2822 e.g. "Sat, 18 Apr 2026 00:00:00 +0000"
+                parsed_date = _parse_rfc2822(raw_date).strftime("%Y-%m-%d")
+            except Exception:
+                # Fallback: already ISO format or empty
+                parsed_date = raw_date[:10]
             records.append({
-                "date": msg.get("date_sent", "")[:10],
+                "date": parsed_date,
                 "from": msg.get("from", ""),
                 "to": msg.get("to", ""),
                 "direction": msg.get("direction", ""),  # inbound / outbound-api / outbound-reply

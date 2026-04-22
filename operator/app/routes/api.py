@@ -2062,10 +2062,12 @@ def billing_status():
         conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             if account_type == "performer":
-                # AI replies this month
+                # AI replies this month — tracked (exact) + untracked (estimated)
                 cur.execute(
-                    """SELECT COUNT(*) AS cnt,
-                              COALESCE(SUM(m.ai_cost_usd), -1) AS ai_cost
+                    """SELECT
+                          COUNT(*) AS cnt,
+                          COUNT(*) FILTER (WHERE m.ai_cost_usd IS NOT NULL) AS tracked_cnt,
+                          COALESCE(SUM(m.ai_cost_usd), 0) AS exact_ai_cost
                        FROM messages m
                        JOIN contacts c ON c.phone_number = m.phone_number
                        WHERE c.creator_slug=%s AND m.role='assistant'
@@ -2074,7 +2076,14 @@ def billing_status():
                 )
                 ai_row = cur.fetchone()
                 replies_this_month = ai_row["cnt"]
-                ai_cost = float(ai_row["ai_cost"]) if ai_row["ai_cost"] >= 0 else None
+                tracked_cnt = ai_row["tracked_cnt"]
+                untracked_cnt = replies_this_month - tracked_cnt
+                # Combine exact cost with flat-rate estimate for untracked replies.
+                # $0.004/reply is a conservative estimate (actual Gemini cost ~$0.0007/reply).
+                ai_cost_exact = float(ai_row["exact_ai_cost"])
+                ai_cost = round(ai_cost_exact + untracked_cnt * 0.004, 4)
+                # cost_exact only becomes True when all replies this month are tracked
+                ai_cost_fully_exact = (untracked_cnt == 0)
 
                 # Blasts sent this month
                 cur.execute(
@@ -2086,7 +2095,7 @@ def billing_status():
                 )
                 blast_row = cur.fetchone()
 
-                # SMS cost this month
+                # SMS cost this month (exact from Twilio nightly sync)
                 cur.execute(
                     """SELECT COALESCE(SUM(inbound_cost_usd + outbound_cost_usd), -1) AS sms_cost
                        FROM sms_cost_log
@@ -2097,8 +2106,8 @@ def billing_status():
                 sms_cost = float(sms_row["sms_cost"]) if sms_row["sms_cost"] >= 0 else None
 
                 total_cost = round(
-                    1.15 + (ai_cost or replies_this_month * 0.004) +
-                    (sms_cost or replies_this_month * 0.0079), 2
+                    1.15 + ai_cost +
+                    (sms_cost if sms_cost is not None else replies_this_month * 0.0079), 2
                 )
 
             else:
@@ -2126,7 +2135,7 @@ def billing_status():
             ai_cost_usd=ai_cost,
             sms_cost_usd=sms_cost,
             total_cost_usd=total_cost,
-            cost_exact=(ai_cost is not None and sms_cost is not None),
+            cost_exact=(ai_cost_fully_exact and sms_cost is not None),
         )
     except Exception:
         logger.exception("billing_status: failed for slug=%s", slug)
