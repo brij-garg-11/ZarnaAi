@@ -183,8 +183,8 @@
         <!-- Audience -->
         <div class="mb-5">
           <label class="section-label mb-2 block">Audience</label>
-          <div class="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-3">
-            {% for val, lbl in [("all","Everyone"),("tier","By Tier"),("show","By Show"),("tag","By Tag"),("location","By Location"),("random","Random %")] %}
+          <div class="grid grid-cols-3 sm:grid-cols-7 gap-2 mb-3">
+            {% for val, lbl in [("all","Everyone"),("tier","By Tier"),("show","By Show"),("tag","By Tag"),("location","By Location"),("random","Random %"),("compound","Compound")] %}
             <label class="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg border cursor-pointer text-xs font-medium transition-colors"
                    :style="audienceType==='{{ val }}' ? 'border-color:var(--pink);background:#3a2a0e;color:var(--pink);' : 'border-color:#3d3530;color:#a89080;'">
               <input type="radio" name="audience_type" value="{{ val }}" x-model="audienceType" class="sr-only"
@@ -249,6 +249,43 @@
               <span class="text-sm font-semibold w-12 text-right" style="color:var(--pink);" x-text="samplePct + '%'"></span>
             </div>
             <p class="text-xs mt-1" style="color:var(--text-dim);">Randomly selects this % of your total subscribers</p>
+          </div>
+
+          <!-- Compound filter builder -->
+          <div x-show="audienceType==='compound'" x-transition>
+            <div class="space-y-2 mb-2">
+              <template x-for="(f, i) in compoundFilters" :key="i">
+                <div class="flex items-center gap-2">
+                  <select x-model="f.type" @change="updateCount()"
+                          class="zarna-input" style="width:130px;flex-shrink:0;">
+                    <option value="tier">Tier</option>
+                    <option value="tag">Tag</option>
+                    <option value="location">Location</option>
+                  </select>
+                  <template x-if="f.type === 'tier'">
+                    <select x-model="f.value" @change="updateCount()" class="zarna-input flex-1">
+                      <option value="">— select —</option>
+                      <option value="superfan">⭐ Superfan</option>
+                      <option value="engaged">✅ Engaged</option>
+                      <option value="lurker">👀 Lurker</option>
+                      <option value="dormant">😴 Dormant</option>
+                    </select>
+                  </template>
+                  <template x-if="f.type === 'tag'">
+                    <input type="text" x-model="f.value" @input.debounce.500ms="updateCount()"
+                           class="zarna-input flex-1" placeholder="e.g. longtime-fan">
+                  </template>
+                  <template x-if="f.type === 'location'">
+                    <input type="text" x-model="f.value" @input.debounce.500ms="updateCount()"
+                           class="zarna-input flex-1" placeholder="e.g. New York">
+                  </template>
+                  <button type="button" @click="removeFilter(i)" class="shrink-0 text-xs px-2 py-1.5 rounded"
+                          style="color:#f87171;border:1px solid #f87171;background:transparent;">✕</button>
+                </div>
+              </template>
+            </div>
+            <button type="button" @click="addFilter()" class="btn-ghost btn-sm">+ Add filter</button>
+            <p class="text-xs mt-2" style="color:var(--text-dim);">All filters are combined with AND — fans must match every condition.</p>
           </div>
 
           <!-- Hidden inputs to consolidate audience filter -->
@@ -639,13 +676,24 @@ function blastCompose() {
     sendAt: '',
     isQuiz: {{ 'true' if active_draft and active_draft.is_quiz else 'false' }},
     hasBlastContext: {{ 'true' if active_draft and active_draft.blast_context_note else 'false' }},
+    compoundFilters: [{ type: 'tier', value: '' }],
 
     get resolvedFilter() {
       if (this.audienceType === 'tag') return this.audienceFilter;
       if (this.audienceType === 'location') return this.audienceFilter;
       if (this.audienceType === 'show') return this.audienceFilter;
       if (this.audienceType === 'tier') return this.audienceFilter;
+      if (this.audienceType === 'compound') return JSON.stringify(this.compoundFilters);
       return '';
+    },
+
+    addFilter() {
+      this.compoundFilters.push({ type: 'tier', value: '' });
+    },
+    removeFilter(i) {
+      this.compoundFilters.splice(i, 1);
+      if (this.compoundFilters.length === 0) this.compoundFilters.push({ type: 'tier', value: '' });
+      this.updateCount();
     },
 
     async updateCount() {

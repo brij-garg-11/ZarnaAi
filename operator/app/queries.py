@@ -138,6 +138,17 @@ def count_audience(audience_type: str, audience_filter: str, sample_pct: int = 1
                     )
                 else:
                     cur.execute("SELECT 0")
+            elif audience_type == "compound" and audience_filter:
+                import json
+                try:
+                    filters = json.loads(audience_filter)
+                    clauses, params = _build_compound_clauses(filters)
+                    cur.execute(
+                        f"SELECT COUNT(DISTINCT phone_number) FROM contacts WHERE {' AND '.join(clauses)}",
+                        params,
+                    )
+                except Exception:
+                    cur.execute("SELECT 0")
             else:
                 cur.execute("SELECT COUNT(DISTINCT phone_number) FROM contacts")
             total = cur.fetchone()[0]
@@ -184,6 +195,17 @@ def get_audience_phones(audience_type: str, audience_filter: str, sample_pct: in
                     )
                 else:
                     cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE FALSE")
+            elif audience_type == "compound" and audience_filter:
+                import json
+                try:
+                    filters = json.loads(audience_filter)
+                    clauses, params = _build_compound_clauses(filters)
+                    cur.execute(
+                        f"SELECT DISTINCT phone_number FROM contacts WHERE {' AND '.join(clauses)}",
+                        params,
+                    )
+                except Exception:
+                    cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE FALSE")
             else:
                 cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE phone_number NOT LIKE 'whatsapp:%'")
 
@@ -196,6 +218,32 @@ def get_audience_phones(audience_type: str, audience_filter: str, sample_pct: in
         return phones
     finally:
         conn.close()
+
+
+def _build_compound_clauses(filters: list[dict]) -> tuple[list[str], list]:
+    """
+    Convert a list of filter dicts into SQL WHERE clauses (AND logic).
+    Each filter: {"type": "tier"|"tag"|"location", "value": "..."}
+    Returns (clauses, params) — always includes the whatsapp exclusion.
+    """
+    clauses = ["phone_number NOT LIKE 'whatsapp:%%'"]
+    params: list = []
+    valid_tiers = {"superfan", "engaged", "lurker", "dormant"}
+    for f in filters:
+        ftype = (f.get("type") or "").strip()
+        val = (f.get("value") or "").strip()
+        if not ftype or not val:
+            continue
+        if ftype == "tier" and val.lower() in valid_tiers:
+            clauses.append("fan_tier = %s")
+            params.append(val.lower())
+        elif ftype == "tag":
+            clauses.append("%s = ANY(fan_tags)")
+            params.append(val.lower())
+        elif ftype == "location":
+            clauses.append("LOWER(COALESCE(fan_location,'')) LIKE %s")
+            params.append(f"%{val.lower()}%")
+    return clauses, params
 
 
 def _get_optouts(cur) -> set:

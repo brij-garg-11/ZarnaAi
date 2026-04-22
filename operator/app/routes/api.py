@@ -192,6 +192,85 @@ def audience():
     )
 
 
+@api_bp.route("/api/audience/frequency")
+@login_required
+def audience_frequency():
+    """
+    Step 10 — Blast frequency view.
+    Returns per-tier fan counts + when each tier was last blasted,
+    plus the 50 most recently blasted fans with tier and days-since.
+    """
+    try:
+        conn = get_conn()
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # Tier counts + last blast date per tier
+            cur.execute("""
+                SELECT
+                    c.fan_tier,
+                    COUNT(DISTINCT c.phone_number)                          AS fan_count,
+                    MAX(br.sent_at)                                         AS last_blasted_at,
+                    ROUND(AVG(
+                        EXTRACT(EPOCH FROM (NOW() - br.sent_at)) / 86400
+                    ))::int                                                 AS avg_days_since
+                FROM contacts c
+                LEFT JOIN blast_recipients br ON br.phone_number = c.phone_number
+                WHERE c.fan_tier IS NOT NULL
+                  AND c.phone_number NOT LIKE 'whatsapp:%%'
+                GROUP BY c.fan_tier
+                ORDER BY CASE c.fan_tier
+                    WHEN 'superfan' THEN 1 WHEN 'engaged' THEN 2
+                    WHEN 'lurker'   THEN 3 WHEN 'dormant' THEN 4
+                    ELSE 5 END
+            """)
+            tier_rows = cur.fetchall()
+
+            # 50 fans with most recent blast date (for the frequency table)
+            cur.execute("""
+                SELECT
+                    RIGHT(c.phone_number, 4)                                AS phone_last4,
+                    c.fan_tier,
+                    c.fan_tags,
+                    MAX(br.sent_at)                                         AS last_blasted_at,
+                    EXTRACT(EPOCH FROM (NOW() - MAX(br.sent_at)))::int / 86400 AS days_since
+                FROM contacts c
+                JOIN blast_recipients br ON br.phone_number = c.phone_number
+                WHERE c.phone_number NOT LIKE 'whatsapp:%%'
+                GROUP BY c.phone_number, c.fan_tier, c.fan_tags
+                ORDER BY last_blasted_at DESC
+                LIMIT 50
+            """)
+            fan_rows = cur.fetchall()
+        conn.close()
+
+        tier_icons = {"superfan": "⭐", "engaged": "✅", "lurker": "👀", "dormant": "😴"}
+        return jsonify(
+            tiers=[
+                {
+                    "tier": r["fan_tier"],
+                    "icon": tier_icons.get(r["fan_tier"], ""),
+                    "fan_count": r["fan_count"],
+                    "last_blasted_at": r["last_blasted_at"].isoformat() if r["last_blasted_at"] else None,
+                    "avg_days_since": r["avg_days_since"],
+                }
+                for r in tier_rows
+            ],
+            recent_blasted=[
+                {
+                    "phone_last4": r["phone_last4"],
+                    "fan_tier": r["fan_tier"],
+                    "fan_tags": list(r["fan_tags"] or []),
+                    "last_blasted_at": r["last_blasted_at"].isoformat() if r["last_blasted_at"] else None,
+                    "days_since": r["days_since"],
+                }
+                for r in fan_rows
+            ],
+        )
+    except Exception:
+        logger.exception("api: audience/frequency failed")
+        return jsonify(tiers=[], recent_blasted=[])
+
+
 # ── Inbox ─────────────────────────────────────────────────────────────────────
 
 @api_bp.route("/api/inbox")
