@@ -57,6 +57,11 @@ def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         if not current_user():
+            # API routes (called by Lovable frontend via fetch) need 401 JSON,
+            # not a 302 redirect that fetch() silently follows to an HTML page.
+            if request.path.startswith("/api/"):
+                from flask import jsonify as _jsonify
+                return _jsonify(authenticated=False, error="Login required"), 401
             return redirect(url_for("auth.login", next=request.path))
         return f(*args, **kwargs)
     return decorated
