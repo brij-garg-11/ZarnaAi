@@ -2146,9 +2146,10 @@ def billing_status():
                        WHERE status='sent'
                          AND sent_at >= DATE_TRUNC('month', NOW())""",
                 )
-                blast_row         = cur.fetchone()
-                blast_credits     = int(blast_row["blast_credits"] or 0)
-                blasts_this_month = int(blast_row["blasts"] or 0)
+                blast_row          = cur.fetchone()
+                blast_credits      = int(blast_row["blast_credits"] or 0)
+                blasts_this_month  = int(blast_row["blasts"] or 0)
+                fans_reached_count = int(blast_row["fans_reached"] or 0)
 
                 # Total credits = conversation segments + blast segments
                 credits_used = convo_credits + blast_credits
@@ -2175,14 +2176,15 @@ def billing_status():
                          AND created_at >= DATE_TRUNC('month', NOW())""",
                     (slug,),
                 )
-                replies_this_month = cur.fetchone()["cnt"]
-                credits_used       = replies_this_month * 2  # rough: 1 in + 1 out
-                blasts_this_month  = 0
-                blast_credits      = 0
-                ai_cost            = None
-                sms_cost           = None
-                total_cost         = round(1.15 + replies_this_month * 0.004 +
-                                           replies_this_month * 0.0079, 2)
+                replies_this_month  = cur.fetchone()["cnt"]
+                credits_used        = replies_this_month * 2  # rough: 1 in + 1 out
+                blasts_this_month   = 0
+                blast_credits       = 0
+                fans_reached_count  = 0
+                ai_cost             = None
+                sms_cost            = None
+                total_cost          = round(1.15 + replies_this_month * 0.004 +
+                                            replies_this_month * 0.0079, 2)
                 ai_cost_fully_exact = False
 
         conn.close()
@@ -2202,12 +2204,13 @@ def billing_status():
             month=month,
             plan_name=plan_name,
             credits_used=credits_used,
-            credits_total=credits_total,      # null = unlimited
-            credits_warning=credits_warning,  # null | "low" | "critical"
+            credits_total=credits_total,        # null = unlimited
+            credits_warning=credits_warning,    # null | "low" | "critical"
             boosters=_CREDIT_BOOSTERS,
             replies_this_month=replies_this_month,
             blasts_this_month=blasts_this_month,
-            fans_reached_this_month=blast_credits,
+            fans_reached_this_month=fans_reached_count,  # actual people, not segment-weighted
+            blast_credits=blast_credits,        # segment-weighted credits from blasts
             ai_cost_usd=ai_cost,
             sms_cost_usd=sms_cost,
             total_cost_usd=total_cost,
