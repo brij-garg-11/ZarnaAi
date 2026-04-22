@@ -526,7 +526,7 @@ def smart_send_preview():
 def preview_count():
     """HTMX or AJAX endpoint — returns audience count for current filter."""
     audience_type = request.form.get("audience_type", "all")
-    if audience_type not in ("all", "tag", "location", "random", "show", "tier"):
+    if audience_type not in ("all", "tag", "location", "random", "show", "tier", "compound"):
         audience_type = "all"
     audience_filter = request.form.get("audience_filter", "").strip()
     sample_pct = _safe_int(request.form.get("audience_sample_pct"), 100, 1, 100)
@@ -556,9 +556,9 @@ def save_draft():
     if channel not in ("twilio", "slicktext"):
         channel = "twilio"
     audience_type = request.form.get("audience_type", "all")
-    if audience_type not in ("all", "tag", "location", "random", "show", "tier"):
+    if audience_type not in ("all", "tag", "location", "random", "show", "tier", "compound"):
         audience_type = "all"
-    audience_filter = (request.form.get("audience_filter") or "").strip()[:200]
+    audience_filter = (request.form.get("audience_filter") or "").strip()[:2000]
     sample_pct = _safe_int(request.form.get("audience_sample_pct"), 100, 1, 100)
     media_url = (request.form.get("media_url") or "").strip()[:1000]
     link_url  = (request.form.get("link_url")  or "").strip()[:2000]
@@ -710,9 +710,9 @@ def send_now(draft_id: int):
     if channel not in ("twilio", "slicktext"):
         channel = "twilio"
     audience_type = request.form.get("audience_type") or draft.get("audience_type") or "all"
-    if audience_type not in ("all", "tag", "location", "random", "show"):
+    if audience_type not in ("all", "tag", "location", "random", "show", "tier", "compound"):
         audience_type = "all"
-    audience_filter = (request.form.get("audience_filter") or draft.get("audience_filter") or "").strip()[:200]
+    audience_filter = (request.form.get("audience_filter") or draft.get("audience_filter") or "").strip()[:2000]
     sample_pct = _safe_int(request.form.get("audience_sample_pct"), int(draft.get("audience_sample_pct") or 100), 1, 100)
     # Preserve fields not present in the send-now form so the auto-save doesn't wipe them
     media_url          = (request.form.get("media_url")          or draft.get("media_url")          or "").strip()
