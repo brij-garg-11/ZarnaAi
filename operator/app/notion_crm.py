@@ -79,6 +79,47 @@ def _update_page(page_id: str, properties: dict) -> bool:
         return False
 
 
+def _create_database(parent_page_id: str, title: str, properties: dict) -> Optional[str]:
+    """Create a Notion database as a child of a page. Returns the database ID or None."""
+    try:
+        resp = requests.post(
+            f"{NOTION_API}/databases",
+            headers=_headers(),
+            json={
+                "parent": {"type": "page_id", "page_id": parent_page_id},
+                "title": [{"type": "text", "text": {"content": title}}],
+                "properties": properties,
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        db_id = resp.json().get("id")
+        logger.info("notion_crm: created database '%s' (%s) in page %s", title, db_id, parent_page_id)
+        return db_id
+    except Exception:
+        logger.exception("notion_crm: failed to create database '%s' in page %s", title, parent_page_id)
+        return None
+
+
+def _query_database(database_id: str, filter_payload: Optional[dict] = None) -> list:
+    """Query a Notion database. Returns list of page objects."""
+    try:
+        body = {}
+        if filter_payload:
+            body["filter"] = filter_payload
+        resp = requests.post(
+            f"{NOTION_API}/databases/{database_id}/query",
+            headers=_headers(),
+            json=body,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+    except Exception:
+        logger.exception("notion_crm: failed to query database %s", database_id)
+        return []
+
+
 def _find_page_by_slug(database_id: str, slug: str) -> Optional[str]:
     """Return the Notion page ID for a given slug, or None."""
     try:
@@ -160,6 +201,144 @@ def _detail_page_children(config: dict, account_type: str) -> list:
     return blocks
 
 
+_MONTHLY_DB_PROPS = {
+    "Month":           {"title": {}},
+    "Messages":        {"number": {"format": "number"}},
+    "AI Replies":      {"number": {"format": "number"}},
+    "AI Cost ($)":     {"number": {"format": "dollar"}},
+    "SMS Cost ($)":    {"number": {"format": "dollar"}},
+    "Phone ($)":       {"number": {"format": "dollar"}},
+    "Total Cost ($)":  {"number": {"format": "dollar"}},
+    "Net Margin ($)":  {"number": {"format": "dollar"}},
+    "Blasts":          {"number": {"format": "number"}},
+    "Fans Reached":    {"number": {"format": "number"}},
+    "Cost Exact":      {"checkbox": {}},
+}
+
+
+def _get_or_create_monthly_db(page_id: str, db_conn) -> Optional[str]:
+    """
+    Return the Notion database ID for the monthly cost history embedded in a client page.
+    Creates the database on first call and caches the ID in bot_configs.
+    """
+    # Ensure columns exist (idempotent — safe to run on every call)
+    try:
+        with db_conn.cursor() as cur:
+            cur.execute("ALTER TABLE bot_configs ADD COLUMN IF NOT EXISTS notion_page_id TEXT DEFAULT NULL")
+            cur.execute("ALTER TABLE bot_configs ADD COLUMN IF NOT EXISTS notion_monthly_db_id TEXT DEFAULT NULL")
+        db_conn.commit()
+    except Exception:
+        db_conn.rollback()
+
+    # Check cache
+    try:
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT notion_monthly_db_id FROM bot_configs WHERE notion_page_id = %s",
+                (page_id,),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                return row[0]
+    except Exception:
+        db_conn.rollback()
+
+    # Scan the page's child blocks for an existing Monthly Cost History database
+    existing_db_id: Optional[str] = None
+    try:
+        resp = requests.get(
+            f"{NOTION_API}/blocks/{page_id}/children?page_size=50",
+            headers=_headers(),
+            timeout=15,
+        )
+        resp.raise_for_status()
+        for block in resp.json().get("results", []):
+            if block.get("type") == "child_database":
+                title = block.get("child_database", {}).get("title", "")
+                if "Monthly Cost History" in title:
+                    existing_db_id = block["id"]
+                    break
+    except Exception:
+        logger.exception("notion_crm: failed to scan page children for %s", page_id)
+
+    db_id = existing_db_id or _create_database(page_id, "📅 Monthly Cost History", _MONTHLY_DB_PROPS)
+
+    # Persist to bot_configs
+    if db_id:
+        try:
+            with db_conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE bot_configs SET notion_monthly_db_id = %s WHERE notion_page_id = %s",
+                    (db_id, page_id),
+                )
+            db_conn.commit()
+        except Exception:
+            db_conn.rollback()
+            logger.exception("notion_crm: failed to cache notion_monthly_db_id")
+
+    return db_id
+
+
+def sync_monthly_cost_row(
+    page_id: str,
+    month_label: str,       # e.g. "April 2026"
+    month_key: str,         # e.g. "2026-04"  (for filtering)
+    messages: int,
+    ai_replies: int,
+    ai_cost: float,
+    sms_cost: float,
+    total_cost: float,
+    net_margin: float,
+    blasts: int,
+    fans_reached: int,
+    cost_exact: bool,
+    db_conn,
+) -> bool:
+    """
+    Upsert one row in the client's embedded Monthly Cost History database.
+    Matches on the month_label title; creates if absent, patches if found.
+    """
+    monthly_db_id = _get_or_create_monthly_db(page_id, db_conn)
+    if not monthly_db_id:
+        return False
+
+    props = {
+        "Month":          {"title": _rich_text(month_label)},
+        "Messages":       {"number": messages},
+        "AI Replies":     {"number": ai_replies},
+        "AI Cost ($)":    {"number": round(ai_cost, 4)},
+        "SMS Cost ($)":   {"number": round(sms_cost, 4)},
+        "Phone ($)":      {"number": PHONE_RENTAL_MONTHLY},
+        "Total Cost ($)": {"number": round(total_cost, 2)},
+        "Net Margin ($)": {"number": round(net_margin, 2)},
+        "Blasts":         {"number": blasts},
+        "Fans Reached":   {"number": fans_reached},
+        "Cost Exact":     {"checkbox": cost_exact},
+    }
+
+    # Find existing row for this month
+    existing = _query_database(
+        monthly_db_id,
+        filter_payload={"property": "Month", "title": {"equals": month_label}},
+    )
+
+    if existing:
+        return _update_page(existing[0]["id"], props)
+
+    try:
+        resp = requests.post(
+            f"{NOTION_API}/pages",
+            headers=_headers(),
+            json={"parent": {"database_id": monthly_db_id}, "properties": props},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return True
+    except Exception:
+        logger.exception("notion_crm: failed to create monthly row for %s / %s", page_id, month_label)
+        return False
+
+
 def create_customer_in_notion(
     user_id: int,
     email: str,
@@ -231,7 +410,8 @@ def create_customer_async(user_id: int, email: str, account_type: str, slug: str
 
 def sync_customer_costs(slug: str, account_type: str, conn) -> bool:
     """
-    Update cost and metrics columns for a customer's Notion page.
+    Update cost and metrics columns for a customer's Notion page,
+    and upsert the current month into their embedded Monthly Cost History database.
     Called by the daily sync script.
     """
     import psycopg2.extras
@@ -362,7 +542,50 @@ def sync_customer_costs(slug: str, account_type: str, conn) -> bool:
             if last_show:
                 update_props["Last Show"] = {"date": {"start": last_show.isoformat()}}
 
-        return _update_page(page_id, update_props)
+        ok = _update_page(page_id, update_props)
+
+        # Upsert current month into the embedded Monthly Cost History database
+        from datetime import date
+        today = date.today()
+        month_key   = today.strftime("%Y-%m")
+        month_label = today.strftime("%B %Y")   # e.g. "April 2026"
+
+        # ai_replies = total assistant messages this month
+        ai_replies_month = ai_row["total_cnt"] if account_type == "performer" else msgs_month
+        ai_fully_exact   = (untracked == 0) if account_type == "performer" else False
+        sms_exact        = sms_cost_row >= 0
+
+        # blasts / fans this month
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur2:
+                cur2.execute(
+                    """SELECT COUNT(*) AS blasts, COALESCE(SUM(sent_count), 0) AS fans
+                       FROM blast_drafts
+                       WHERE status='sent' AND sent_at >= DATE_TRUNC('month', NOW())"""
+                )
+                brow = cur2.fetchone()
+                blasts_month     = int(brow["blasts"] or 0)
+                fans_month       = int(brow["fans"] or 0)
+        except Exception:
+            blasts_month = fans_month = 0
+
+        sync_monthly_cost_row(
+            page_id      = page_id,
+            month_label  = month_label,
+            month_key    = month_key,
+            messages     = msgs_month,
+            ai_replies   = ai_replies_month,
+            ai_cost      = est_ai_cost,
+            sms_cost     = est_sms_cost,
+            total_cost   = total_cost,
+            net_margin   = net_margin,
+            blasts       = blasts_month,
+            fans_reached = fans_month,
+            cost_exact   = ai_fully_exact and sms_exact,
+            db_conn      = conn,
+        )
+
+        return ok
 
     except Exception:
         logger.exception("notion_crm: sync_customer_costs failed for %s", slug)
