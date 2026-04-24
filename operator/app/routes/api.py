@@ -3658,6 +3658,40 @@ def api_onboarding_submit():
         except Exception:
             logger.warning("onboarding_submit: notion_crm import failed — skipping", exc_info=True)
 
+        # Fire async universal-bot provisioning pipeline.
+        #   Only for performer accounts today — business (SMB) accounts use a
+        #   separate tenant-scoped code path (smb_bot_config) that doesn't
+        #   need a creator_configs / creator_embeddings row.
+        # Runs in a background thread so the API response isn't blocked by
+        # Gemini calls + embedding batches (can take 30-60s).
+        if account_type == "performer":
+            try:
+                import threading
+                from ..provisioning import provision_new_creator
+
+                provisioning_form = {
+                    "display_name":   display_name,
+                    "bio":            bio,
+                    "tone":           tone,
+                    "sms_keyword":    slug.upper()[:14],
+                    "account_type":   account_type,
+                    "website_url":    website_url,
+                    "podcast_url":    podcast_url,
+                    "media_urls":     media_urls,
+                    "extra_context":  extra_context,
+                    "uploaded_files": [],
+                }
+                thread = threading.Thread(
+                    target=provision_new_creator,
+                    args=(user["id"], slug, provisioning_form),
+                    name=f"provision-{slug}",
+                    daemon=True,
+                )
+                thread.start()
+                logger.info("onboarding_submit: provisioning thread started for slug=%s", slug)
+            except Exception:
+                logger.exception("onboarding_submit: could not start provisioning thread")
+
         return jsonify(success=True, creator_slug=slug, account_type=account_type)
 
     except Exception:
@@ -3667,3 +3701,82 @@ def api_onboarding_submit():
         except Exception:
             pass
         return jsonify(success=False, error="Failed to save — please try again."), 500
+
+
+@api_bp.route("/api/provisioning/status")
+@login_required
+def api_provisioning_status():
+    """
+    Polling endpoint used by the onboarding UI after Step 4 submits.
+
+    Returns the current state of the universal-bot provisioning pipeline
+    for the logged-in user's slug (or the slug being impersonated).
+
+    Response:
+      {
+        "status":        "pending" | "in_progress" | "live" | "failed",
+        "phone_number":  "+1..." | null,
+        "error_message": "..." | null,      // only when status == "failed"
+        "creator_slug":  "haley"
+      }
+
+    States:
+      pending      — row exists, pipeline hasn't started yet (or was rolled
+                     back). Shouldn't happen in the happy path; shown just
+                     in case.
+      in_progress  — background thread is running (phone → config → ingest)
+      live         — bot is ready; fan texts will be answered
+      failed       — pipeline raised; inspect error_message for the traceback
+    """
+    from flask import session
+    user = current_user()
+
+    slug = None
+    if user.get("is_super_admin") and session.get("viewing_as"):
+        slug = session["viewing_as"]
+    else:
+        slug = user.get("creator_slug")
+
+    if not slug:
+        return jsonify(
+            status="pending",
+            phone_number=None,
+            error_message=None,
+            creator_slug=None,
+        )
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT bc.provisioning_status, bc.error_message, ou.phone_number
+                FROM bot_configs bc
+                LEFT JOIN operator_users ou ON ou.id = bc.operator_user_id
+                WHERE bc.creator_slug=%s
+                """,
+                (slug,),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        return jsonify(
+            status="pending",
+            phone_number=None,
+            error_message=None,
+            creator_slug=slug,
+        )
+
+    raw_status, err, phone_number = row
+    status = (raw_status or "pending").lower()
+    if status not in ("pending", "in_progress", "live", "failed"):
+        status = "pending"
+
+    return jsonify(
+        status=status,
+        phone_number=phone_number,
+        error_message=(err if status == "failed" else None),
+        creator_slug=slug,
+    )

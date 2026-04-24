@@ -38,3 +38,12 @@ ngrok
 
 # Logs
 *.log
+
+# Frontend sub-repo — has its own .git/ and its own deploy pipeline.
+# Tracked and pushed from its own repository, NEVER from this one.
+lovable-frontend/
+
+# Local debugging one-offs — keep out of the main repo.
+# (Promote to a real test if reused — don't let these ride along.)
+scripts/debug_*.py
+scripts/audit_winning_corpus.py

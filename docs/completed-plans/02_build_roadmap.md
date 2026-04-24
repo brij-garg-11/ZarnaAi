@@ -21,15 +21,13 @@ _Operational process — no new code needed. Run quarterly._
 - [ ] Prior snapshot stays available for rollback if quality drops
 - [ ] Next run due: ~Jul 2026
 
-### Step 8 — Compound Segment Builder (Pillar 4)
-_Real new work — backend + UI_
-- [ ] Add AND/OR filter logic to `get_audience_phones()` in `operator/app/queries.py`
-- [ ] Update blast audience picker UI in `operator/app/templates/blast.html`
-- [ ] Example: fans tagged `longtime-fan` AND in `New York` AND signed up for a live show
-- [ ] Test: compound filter fan count matches manual DB query
+### Step 8 — Compound Segment Builder (Pillar 4) ✅ Done Apr 21, 2026
+- `_build_compound_clauses()` in `queries.py` — AND logic for tier/tag/location
+- `count_audience()` + `get_audience_phones()` handle `audience_type='compound'` with JSON filter
+- `blast.html` — "Compound" audience button; add/remove filter rows; serialised to JSON on submit
+- Tested: compound superfan count (142) matches direct tier query ✅
 
-### Step 10 — Frequency UX in Audience View (Pillar 4)
-_Builds on fan tiers (already running)_
-- [ ] Add `fan_tier` and `last_blasted_at` columns to the audience view in `operator/app/templates/audience.html`
-- [ ] Backend query to pull tier + last blast date per fan
-- [ ] Test: open audience view → verify columns display correctly
+### Step 10 — Frequency UX in Audience View (Pillar 4) ✅ Done Apr 21, 2026
+- `GET /api/audience/frequency` — per-tier fan count, last blast date, avg days-since + 50 recently blasted fans
+- `audience.html` — "Blast Frequency" section: tier cards with colour-coded staleness + recently-blasted fan table
+- Tested: live queries against prod DB return correct tier/date data ✅

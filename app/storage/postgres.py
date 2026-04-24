@@ -404,10 +404,25 @@ _SMB_OUTREACH_MIGRATIONS = (
 class PostgresStorage(BaseStorage):
     """Thread-safe Postgres storage using a connection pool."""
 
-    def __init__(self, dsn: str, minconn: int = 2, maxconn: int = 50):
+    def __init__(
+        self,
+        dsn: str,
+        minconn: int = 2,
+        maxconn: int = 50,
+        creator_slug: Optional[str] = None,
+    ):
         self._pool = ThreadedConnectionPool(minconn, maxconn, dsn)
+        # Per-instance slug for stamping new contact rows. Without this,
+        # every PostgresStorage() would fall back to the process-global
+        # CREATOR_SLUG env var (defaulting to 'zarna'), so a Marcus brain
+        # would silently tag its fans with creator_slug='zarna' on first
+        # inbound SMS. That corrupts the contacts.creator_slug column that
+        # get_top_performing_replies() and other slug-scoped queries rely
+        # on, leaking Marcus's fans into Zarna's learning pool and vice
+        # versa. Default keeps legacy single-tenant behavior working.
+        self._creator_slug = (creator_slug or _CREATOR_SLUG or "zarna").strip().lower()
         self._ensure_tables()
-        logger.info("PostgresStorage initialised")
+        logger.info("PostgresStorage initialised (creator_slug=%s)", self._creator_slug)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -478,7 +493,7 @@ class PostgresStorage(BaseStorage):
                         VALUES (%s, %s, %s)
                         ON CONFLICT (phone_number) DO NOTHING
                         """,
-                        (phone_number, source, _CREATOR_SLUG),
+                        (phone_number, source, self._creator_slug),
                     )
         finally:
             self._release(conn)
@@ -835,26 +850,37 @@ class PostgresStorage(BaseStorage):
         conn = self._acquire()
         try:
             with conn.cursor() as cur:
-                # 1. Organic examples from real conversations
+                # 1. Organic examples from real conversations.
+                # CRITICAL multi-tenant scoping: messages.phone_number is the
+                # FAN's number, not the bot's, and the messages table has no
+                # creator_slug column of its own. We resolve which creator a
+                # message belongs to by joining contacts (which IS slug-scoped
+                # — every contact row carries the creator_slug they texted in
+                # to). Without this JOIN, every non-Zarna brain inherits
+                # Zarna's high-engagement replies as few-shot examples,
+                # leaking her voice (Shalabh / kids / chai / MIL) into other
+                # creators' prompts.
                 cur.execute(
                     """
-                    SELECT text
-                    FROM   messages
-                    WHERE  role               = 'assistant'
-                      AND  intent             = %s
-                      AND  tone_mode          = %s
-                      AND  did_user_reply     = TRUE
-                      AND  msg_source IS DISTINCT FROM 'blast'
-                      AND  reply_length_chars BETWEEN 40 AND 380
-                      AND  source IS DISTINCT FROM 'blast'
-                      AND  text NOT LIKE '%%zarnagarg.com%%'
-                      AND  text NOT LIKE '%%amazon.com%%'
-                      AND  text NOT LIKE '%%youtube.com%%'
-                    ORDER BY COALESCE(msgs_after_this, 1) DESC,
-                             reply_delay_seconds ASC NULLS LAST
+                    SELECT m.text
+                    FROM   messages m
+                    JOIN   contacts c ON c.phone_number = m.phone_number
+                    WHERE  c.creator_slug      = %s
+                      AND  m.role              = 'assistant'
+                      AND  m.intent            = %s
+                      AND  m.tone_mode         = %s
+                      AND  m.did_user_reply    = TRUE
+                      AND  m.msg_source IS DISTINCT FROM 'blast'
+                      AND  m.reply_length_chars BETWEEN 40 AND 380
+                      AND  m.source IS DISTINCT FROM 'blast'
+                      AND  m.text NOT LIKE '%%zarnagarg.com%%'
+                      AND  m.text NOT LIKE '%%amazon.com%%'
+                      AND  m.text NOT LIKE '%%youtube.com%%'
+                    ORDER BY COALESCE(m.msgs_after_this, 1) DESC,
+                             m.reply_delay_seconds ASC NULLS LAST
                     LIMIT %s
                     """,
-                    (intent, tone_mode, limit),
+                    (creator_slug, intent, tone_mode, limit),
                 )
                 organic = [r[0] for r in cur.fetchall()]
 

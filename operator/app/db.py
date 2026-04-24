@@ -281,6 +281,52 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_cotw_tenant_week ON smb_customer_of_the_week (tenant_slug, week_of DESC)",
         "CREATE INDEX IF NOT EXISTS idx_cotw_phone ON smb_customer_of_the_week (phone_number)",
 
+        # ── Universal Bot Pipeline: personality configs + RAG embeddings ───
+        # creator_configs: personality JSON per creator. Lives in Postgres (not
+        # disk) so it survives Railway redeploys. Replaces the old pattern of
+        # writing creator_config/<slug>.json files at provisioning time.
+        """
+        CREATE TABLE IF NOT EXISTS creator_configs (
+            id           BIGSERIAL PRIMARY KEY,
+            creator_slug TEXT UNIQUE NOT NULL,
+            config_json  JSONB NOT NULL DEFAULT '{}',
+            created_at   TIMESTAMPTZ DEFAULT NOW(),
+            updated_at   TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_cc_slug ON creator_configs(creator_slug)",
+
+        # creator_embeddings: multi-tenant RAG chunks. Scoped by creator_slug —
+        # every retrieval query filters WHERE creator_slug = %s, making cross-
+        # creator leakage impossible. Requires pgvector extension (enable via
+        # `CREATE EXTENSION IF NOT EXISTS vector;` in Railway Postgres console).
+        #
+        # Dimension = 3072 to match gemini-embedding-001 (the model used by
+        # scripts/build_embeddings.py and already baked into training_data/).
+        # The HNSW halfvec index supports up to 4000 dimensions — ivfflat does
+        # not work above ~2000, which is why we cast to halfvec for the index.
+        """
+        CREATE TABLE IF NOT EXISTS creator_embeddings (
+            id           BIGSERIAL PRIMARY KEY,
+            creator_slug TEXT NOT NULL,
+            chunk_text   TEXT NOT NULL,
+            source       TEXT NOT NULL DEFAULT 'general',
+            embedding    vector(3072),
+            created_at   TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_ce_slug ON creator_embeddings(creator_slug)",
+        """
+        CREATE INDEX IF NOT EXISTS idx_ce_embedding_hnsw
+            ON creator_embeddings
+            USING hnsw ((embedding::halfvec(3072)) halfvec_cosine_ops)
+        """,
+
+        # Provisioning status tracking on bot_configs — surfaces pipeline
+        # failures to the frontend (e.g. scraper broke, Gemini rate-limited).
+        "ALTER TABLE bot_configs ADD COLUMN IF NOT EXISTS error_message TEXT",
+        "ALTER TABLE bot_configs ADD COLUMN IF NOT EXISTS provisioning_status TEXT DEFAULT NULL",
+
         # ── Data-cleanup on every startup ──────────────────────────────────
         # 1. Clear /tmp-based image URLs (ephemeral Railway filesystem, gone on redeploy)
         "UPDATE blast_drafts SET media_url='' WHERE media_url LIKE '%/operator/blast/uploads/%'",

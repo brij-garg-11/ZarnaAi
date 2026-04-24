@@ -56,12 +56,23 @@ class ZarnaBrain:
     touching this class.
     """
 
-    def __init__(self, storage: BaseStorage, retriever: BaseRetriever):
+    def __init__(
+        self,
+        storage: BaseStorage,
+        retriever: BaseRetriever,
+        slug: str | None = None,
+    ):
         self.storage = storage
         self.retriever = retriever
-        # Load creator config once at startup — None means all callers use their
-        # hardcoded Zarna defaults, so behaviour is unchanged on failure.
-        self.creator_config: CreatorConfig | None = load_creator(CREATOR_SLUG)
+        # Resolve the effective slug: explicit arg (multi-tenant caller),
+        # otherwise fall back to the process-wide CREATOR_SLUG env var so
+        # Zarna's singleton brain in main.py keeps working unchanged.
+        self.slug: str = (slug or CREATOR_SLUG or "zarna").strip().lower()
+        # Load creator config for THIS brain's slug — critical for multi-tenant:
+        # without this, every non-Zarna brain would inherit Zarna's prompt
+        # blocks (style/voice/tone/guardrails) even though its retriever was
+        # correctly pointed at the right slug's embeddings.
+        self.creator_config: CreatorConfig | None = load_creator(self.slug)
         if self.creator_config:
             _logger.info(
                 "ZarnaBrain: loaded CreatorConfig slug=%s name=%r",
@@ -71,7 +82,7 @@ class ZarnaBrain:
         else:
             _logger.info(
                 "ZarnaBrain: no CreatorConfig loaded for slug=%r — using all hardcoded defaults",
-                CREATOR_SLUG,
+                self.slug,
             )
 
     def handle_incoming_message(self, phone_number: str, message_text: str, quiz_context: Optional[str] = None, blast_context: Optional[str] = None) -> str:
@@ -169,9 +180,26 @@ class ZarnaBrain:
         })
         if intent and intent.value in _LEARNING_INTENTS:
             try:
+                # Scope to THIS brain's slug — without this, Zarna's
+                # high-engagement replies (Shalabh / chai / MIL lines) get
+                # injected as few-shot examples into every other creator's
+                # prompt, polluting their voice. PostgresStorage already
+                # supports the kwarg; default still 'zarna' for legacy callers.
                 winning_examples = self.storage.get_top_performing_replies(
-                    intent.value, str(tone_mode) if tone_mode else ""
+                    intent.value,
+                    str(tone_mode) if tone_mode else "",
+                    creator_slug=self.slug,
                 ) or None
+            except TypeError:
+                # InMemoryStorage / older shims don't take creator_slug — fall
+                # back so we don't crash; multi-tenant correctness still holds
+                # because those backends don't have shared engagement data.
+                try:
+                    winning_examples = self.storage.get_top_performing_replies(
+                        intent.value, str(tone_mode) if tone_mode else ""
+                    ) or None
+                except Exception:
+                    pass
             except Exception:
                 pass  # learning is best-effort, never block a reply
 
@@ -287,25 +315,67 @@ class ZarnaBrain:
             pass  # Memory update is best-effort; never block a reply
 
 
-def create_brain() -> ZarnaBrain:
+def create_brain(slug: Optional[str] = None) -> ZarnaBrain:
     """
     Factory that wires up the default production dependencies.
     Uses PostgresStorage when DATABASE_URL is set (production on Railway),
     falls back to InMemoryStorage for local dev without a database.
-    """
-    from app.retrieval.embedding import EmbeddingRetriever
 
+    Retrieval selection:
+      - If `slug` is a NEW creator (not 'zarna'): always use PgRetriever(slug).
+        These creators' chunks only exist in the creator_embeddings table.
+      - If `slug` is 'zarna' OR None: default to the legacy EmbeddingRetriever
+        (file-backed) so Zarna's reply quality is unchanged from production.
+        Flip PG_RETRIEVER_FOR_ZARNA=1 in the environment to exercise
+        PgRetriever('zarna') with Zarna's source weights — the Phase 5
+        migration (scripts/migrate_zarna_to_pg.py) must have been applied
+        first, and quality verified via the Phase 5 comparison test.
+    """
     database_url = os.getenv("DATABASE_URL", "")
     if database_url:
         from app.storage.postgres import PostgresStorage
         # Railway injects postgres:// but psycopg2 requires postgresql://
         dsn = database_url.replace("postgres://", "postgresql://", 1)
-        storage = PostgresStorage(dsn=dsn)
+        # Pass slug so save_contact() stamps new fans with the correct
+        # creator_slug — without this, Marcus's fans would be tagged
+        # 'zarna' via the module-global fallback, poisoning Zarna's
+        # engagement pool and starving Marcus's winning_examples.
+        storage = PostgresStorage(dsn=dsn, creator_slug=slug)
     else:
         from app.storage.memory import InMemoryStorage
         storage = InMemoryStorage()
 
+    _use_pg_for_zarna = os.getenv("PG_RETRIEVER_FOR_ZARNA", "0").strip().lower() in ("1", "true", "on", "yes")
+    _is_zarna_path = (slug is None) or (slug == "zarna")
+
+    if _is_zarna_path and not _use_pg_for_zarna:
+        # Legacy path — unchanged behaviour for Zarna in production.
+        from app.retrieval.embedding import EmbeddingRetriever
+        retriever = EmbeddingRetriever()
+    elif _is_zarna_path and _use_pg_for_zarna:
+        # PgRetriever('zarna') WITH Zarna's hand-tuned source weights so
+        # reply quality matches EmbeddingRetriever's ranking.
+        from app.retrieval.pg_retriever import PgRetriever
+        from app.retrieval.source_weights import (
+            load_podcast_transcript_ids,
+            zarna_weight_fn,
+        )
+        weight_fn = zarna_weight_fn(
+            podcast_transcript_ids=load_podcast_transcript_ids(),
+            podcast_mode=os.getenv("PODCAST_TRANSCRIPTS_MODE", "exclude"),
+            monday_mode=os.getenv("MONDAY_MOTIVATION_MODE", "include"),
+        )
+        retriever = PgRetriever("zarna", weight_fn=weight_fn)
+    else:
+        # New creator — Postgres is the only source of truth. No
+        # hand-tuned weights yet (they're creator-specific); raw pgvector
+        # ordering is fine until we have engagement data to rank with.
+        from app.retrieval.pg_retriever import PgRetriever
+        retriever = PgRetriever(slug)
+
     return ZarnaBrain(
         storage=storage,
-        retriever=EmbeddingRetriever(),
+        retriever=retriever,
+        slug=slug,  # CRITICAL: drives load_creator() so multi-tenant brains
+                    # use their own personality config, not Zarna's defaults.
     )

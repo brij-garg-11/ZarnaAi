@@ -95,32 +95,106 @@ def _build_from_dict(slug: str, data: dict) -> CreatorConfig:
 # Public loader
 # ---------------------------------------------------------------------------
 
-def load_creator(slug: str) -> Optional[CreatorConfig]:
+def _load_from_db(slug: str) -> Optional[dict]:
     """
-    Load a CreatorConfig from creator_config/<slug>.json.
+    Pull the config_json blob from the creator_configs Postgres table.
 
-    Returns None if the file is not found or cannot be parsed — callers
-    must fall back to their own hardcoded defaults in that case.
-    Debug logs make it easy to trace which config was picked up at startup.
+    This is the path that matters for dynamically provisioned creators:
+    their config is written to Postgres by operator/app/provisioning/
+    config_writer.py and never lands on disk. Zarna's legacy file still
+    wins when present (see load_creator below) so her deploy is unchanged
+    if DATABASE_URL or the table happens to be unavailable.
+
+    Returns None on any failure (missing env var, connection error, no
+    matching row, malformed JSON) — caller falls back to hardcoded defaults.
     """
-    path = os.path.join(_CONFIG_DIR, f"{slug}.json")
-    if not os.path.exists(path):
-        _LOGGER.debug(
-            "CreatorConfig[%s]: config file not found at %s — all callers will use hardcoded defaults",
-            slug,
-            path,
-        )
+    dsn = os.getenv("DATABASE_URL", "")
+    if not dsn:
         return None
-
     try:
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
+        import psycopg2
+    except ImportError:
+        _LOGGER.debug("CreatorConfig[%s]: psycopg2 unavailable — skipping DB lookup", slug)
+        return None
+    try:
+        conn = psycopg2.connect(dsn.replace("postgres://", "postgresql://", 1))
+        conn.autocommit = True
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT config_json FROM creator_configs WHERE creator_slug = %s",
+                    (slug,),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
     except Exception as exc:
         _LOGGER.warning(
-            "CreatorConfig[%s]: failed to parse %s (%s) — using hardcoded defaults",
-            slug,
-            path,
-            exc,
+            "CreatorConfig[%s]: DB lookup failed (%s) — will fall back to file or defaults",
+            slug, exc,
+        )
+        return None
+    if not row or not row[0]:
+        return None
+    data = row[0]
+    # psycopg2 normally returns JSONB as a dict already, but some setups
+    # (older psycopg versions, missing extensions) return a str. Handle both.
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception as exc:
+            _LOGGER.warning(
+                "CreatorConfig[%s]: DB row had non-JSON config_json (%s)", slug, exc,
+            )
+            return None
+    if not isinstance(data, dict):
+        _LOGGER.warning(
+            "CreatorConfig[%s]: DB config_json is not an object (got %s)",
+            slug, type(data).__name__,
+        )
+        return None
+    return data
+
+
+def load_creator(slug: str) -> Optional[CreatorConfig]:
+    """
+    Load a CreatorConfig for the given slug.
+
+    Lookup order:
+      1. creator_config/<slug>.json on disk (Zarna's authoritative source
+         today — unchanged behaviour for her deployment).
+      2. creator_configs Postgres table (dynamically provisioned creators
+         never have a file, their config only exists here).
+
+    Returns None only if BOTH sources miss or fail — callers must then
+    fall back to their hardcoded defaults. Debug/warning logs make the
+    picked source obvious at startup.
+    """
+    path = os.path.join(_CONFIG_DIR, f"{slug}.json")
+    data: Optional[dict] = None
+    source = ""
+
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            source = f"file:{path}"
+        except Exception as exc:
+            _LOGGER.warning(
+                "CreatorConfig[%s]: failed to parse %s (%s) — trying DB fallback",
+                slug, path, exc,
+            )
+
+    if data is None:
+        db_data = _load_from_db(slug)
+        if db_data is not None:
+            data = db_data
+            source = "db:creator_configs"
+
+    if data is None:
+        _LOGGER.debug(
+            "CreatorConfig[%s]: no file at %s and no DB row — callers will use hardcoded defaults",
+            slug, path,
         )
         return None
 
@@ -129,17 +203,16 @@ def load_creator(slug: str) -> Optional[CreatorConfig]:
     except Exception as exc:
         _LOGGER.warning(
             "CreatorConfig[%s]: failed to build config from %s (%s) — using hardcoded defaults",
-            slug,
-            path,
-            exc,
+            slug, source, exc,
         )
         return None
 
     _LOGGER.debug(
-        "CreatorConfig[%s]: loaded OK — name=%r tickets=%r merch=%r book=%r youtube=%r "
+        "CreatorConfig[%s]: loaded OK from %s — name=%r tickets=%r merch=%r book=%r youtube=%r "
         "name_variants=%d shalabh_names=%d mil_answers=%d family_roast_names=%d "
         "guardrails=%s voice_lock=%s style=%s tone_examples=%s",
         slug,
+        source,
         config.name,
         config.links.tickets,
         config.links.merch,

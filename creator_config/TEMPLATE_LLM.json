@@ -1,0 +1,30 @@
+{
+  "_schema_note": "Machine-fillable blank schema for config_writer.py. Gemini receives this + the creator's onboarding form data and returns a populated copy. The existing TEMPLATE.json is a separate file — that one is for humans manually onboarding a client. This one has no instructions, just the structure Gemini replaces.",
+
+  "slug": "",
+  "display_name": "",
+  "description": "",
+  "voice_style": "",
+  "sms_keyword": "",
+
+  "links": {
+    "tickets": "",
+    "merch": "",
+    "book": "",
+    "youtube": "",
+    "book_title": "",
+    "book_phrases": []
+  },
+
+  "name_variants": [],
+  "shalabh_names": [],
+  "mil_answers": [],
+  "family_roast_names": [],
+
+  "banned_words": [],
+
+  "hard_fact_guardrails_text": "",
+  "voice_lock_rules_text": "",
+  "style_rules_text": "",
+  "tone_examples_text": ""
+}

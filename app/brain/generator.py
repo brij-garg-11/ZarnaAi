@@ -361,14 +361,31 @@ def _build_prompt(
     sell_variant: Optional[str] = None,
     creator_config: "Optional[CreatorConfig]" = None,
 ) -> str:
-    # Resolve creator-specific values — config wins, hardcoded fallback otherwise.
-    _slug = creator_config.slug if creator_config else "zarna"
-    _creator_name = (creator_config.name if creator_config and creator_config.name else _ZARNA_NAME)
-    _tickets = (creator_config.links.tickets if creator_config and creator_config.links.tickets else _ZARNA_TICKETS)
-    _merch = (creator_config.links.merch if creator_config and creator_config.links.merch else _ZARNA_MERCH)
-    _book_url = (creator_config.links.book if creator_config and creator_config.links.book else _ZARNA_BOOK)
-    _youtube = (creator_config.links.youtube if creator_config and creator_config.links.youtube else _ZARNA_YOUTUBE)
-    _book_title = (creator_config.links.book_title if creator_config and creator_config.links.book_title else _ZARNA_BOOK_TITLE)
+    # Resolve creator-specific values.
+    #
+    # IMPORTANT — fallback semantics:
+    #   - If creator_config is None, we're serving Zarna's legacy path; fall
+    #     back to every _ZARNA_* constant so behaviour is byte-for-byte
+    #     identical to before the universal pipeline existed.
+    #   - If creator_config IS provided, use ITS values verbatim — even when
+    #     empty. Empty string means "this creator has no such link" and we
+    #     MUST NOT leak Zarna's URLs into another creator's prompt.
+    if creator_config:
+        _slug = creator_config.slug or "creator"
+        _creator_name = creator_config.name or _ZARNA_NAME
+        _tickets = creator_config.links.tickets
+        _merch = creator_config.links.merch
+        _book_url = creator_config.links.book
+        _youtube = creator_config.links.youtube
+        _book_title = creator_config.links.book_title
+    else:
+        _slug = "zarna"
+        _creator_name = _ZARNA_NAME
+        _tickets = _ZARNA_TICKETS
+        _merch = _ZARNA_MERCH
+        _book_url = _ZARNA_BOOK
+        _youtube = _ZARNA_YOUTUBE
+        _book_title = _ZARNA_BOOK_TITLE
 
     # Prompt text blocks — use config version when non-empty, otherwise the Python constant.
     _guardrails = (
@@ -431,9 +448,9 @@ def _build_prompt(
     # show tickets, clips, etc. Force the GENERAL path so the context is never ignored.
     if quiz_context:
         quiz_block = f"\n{quiz_context}\n"
-        return f"""You are writing as an AI comedy assistant inspired by Zarna Garg's public comedic voice.
+        return f"""You are writing as an AI comedy assistant inspired by {_creator_name}'s public comedic voice.
 
-Background knowledge about Zarna (use to make responses richer and more specific — never recite this as facts, always find the funny angle):
+Background knowledge about {_creator_name} (use to make responses richer and more specific — never recite this as facts, always find the funny angle):
 {context}
 
 {_guardrails}
@@ -443,9 +460,9 @@ Background knowledge about Zarna (use to make responses richer and more specific
 {_style}"""
 
     if intent == Intent.JOKE:
-        return f"""You are writing as an AI comedy assistant inspired by Zarna Garg's public comedic voice.
+        return f"""You are writing as an AI comedy assistant inspired by {_creator_name}'s public comedic voice.
 
-Background knowledge about Zarna (use to make jokes richer and more specific — never recite this as facts):
+Background knowledge about {_creator_name} (use to make jokes richer and more specific — never recite this as facts):
 {context}
 
 {_guardrails}
@@ -530,9 +547,9 @@ Never use the word "honey" or "darling". No profanity. No homophobic language. K
 
     # GREETING — fan is saying hi or opening the conversation
     if intent == Intent.GREETING:
-        return f"""You are writing as an AI comedy assistant inspired by Zarna Garg's public comedic voice.
+        return f"""You are writing as an AI comedy assistant inspired by {_creator_name}'s public comedic voice.
 
-Background knowledge about Zarna (use to make responses richer — never recite as facts):
+Background knowledge about {_creator_name} (use to make responses richer — never recite as facts):
 {context}
 
 {_guardrails}
@@ -541,16 +558,16 @@ Background knowledge about Zarna (use to make responses richer — never recite 
 {_examples}
 {examples_text}{memory_text}{history_text}Fan greeting: {user_message}
 {_style}
-Critical for this message: welcome them warmly in Zarna's voice — sharp, high-energy, never generic.
+Critical for this message: welcome them warmly in {_creator_name}'s voice — sharp, high-energy, never generic.
 Max 2 sentences. If this is clearly their very first message and you have nothing to riff on yet, a
 short curious question is fine. If they've already shared something or the conversation has context,
 just land a sharp welcoming line and let it breathe — don't force a question."""
 
     # FEEDBACK — fan is reacting, laughing, praising, or answering a quiz bit
     if intent == Intent.FEEDBACK:
-        return f"""You are writing as an AI comedy assistant inspired by Zarna Garg's public comedic voice.
+        return f"""You are writing as an AI comedy assistant inspired by {_creator_name}'s public comedic voice.
 
-Background knowledge about Zarna (use to make responses richer — never recite as facts):
+Background knowledge about {_creator_name} (use to make responses richer — never recite as facts):
 {context}
 
 {_guardrails}
@@ -559,7 +576,7 @@ Background knowledge about Zarna (use to make responses richer — never recite 
 {_examples}
 {examples_text}{memory_text}{history_text}Fan reaction: {user_message}
 {_style}
-Critical for this message: the fan is reacting — laughing, agreeing, or answering one of Zarna's bits.
+Critical for this message: the fan is reacting — laughing, agreeing, or answering one of {_creator_name}'s bits.
 Acknowledge it in ONE punchy line (sharp, in-character, not generic "You got it!").
 Then either drop a sharp second line that lands the moment, OR — if you haven't asked a question
 recently — pivot with one short hook. Never just validate and stop, but don't force a question every
@@ -572,9 +589,9 @@ Keep it to 2 sentences max."""
 
     # QUESTION — fan asked Zarna something directly; answer first, then flip it back
     if intent == Intent.QUESTION:
-        return f"""You are writing as an AI comedy assistant inspired by Zarna Garg's public comedic voice.
+        return f"""You are writing as an AI comedy assistant inspired by {_creator_name}'s public comedic voice.
 
-Background knowledge about Zarna (use to make responses richer and more specific — never recite this as facts, always find the funny angle):
+Background knowledge about {_creator_name} (use to make responses richer and more specific — never recite this as facts, always find the funny angle):
 {context}
 
 {_guardrails}
@@ -587,9 +604,9 @@ Critical for this message: answer the question directly in plain language first 
 
     # PERSONAL — fan shared something about themselves; roast it, then invite more
     if intent == Intent.PERSONAL:
-        return f"""You are writing as an AI comedy assistant inspired by Zarna Garg's public comedic voice.
+        return f"""You are writing as an AI comedy assistant inspired by {_creator_name}'s public comedic voice.
 
-Background knowledge about Zarna (use to make responses richer and more specific — never recite this as facts, always find the funny angle):
+Background knowledge about {_creator_name} (use to make responses richer and more specific — never recite this as facts, always find the funny angle):
 {context}
 
 {_guardrails}
@@ -598,13 +615,13 @@ Background knowledge about Zarna (use to make responses richer and more specific
 {_examples}
 {examples_text}{memory_text}{history_text}{blast_ctx_block}Fan shares: {user_message}
 {_style}
-Critical for this message: riff on what they shared — find the funny or warm angle in their specific detail. A follow-up question is optional — only if it genuinely earns its place and you haven't asked one recently. Often just landing the joke or observation is the better move. Default to ending on a period. Do not pivot to Zarna's life unless they asked."""
+Critical for this message: riff on what they shared — find the funny or warm angle in their specific detail. A follow-up question is optional — only if it genuinely earns its place and you haven't asked one recently. Often just landing the joke or observation is the better move. Default to ending on a period. Do not pivot to {_creator_name}'s life unless they asked."""
 
     # GENERAL
     quiz_block = f"\n{quiz_context}\n" if quiz_context else ""
-    return f"""You are writing as an AI comedy assistant inspired by Zarna Garg's public comedic voice.
+    return f"""You are writing as an AI comedy assistant inspired by {_creator_name}'s public comedic voice.
 
-Background knowledge about Zarna (use to make responses richer and more specific — never recite this as facts, always find the funny angle):
+Background knowledge about {_creator_name} (use to make responses richer and more specific — never recite this as facts, always find the funny angle):
 {context}
 
 {_guardrails}
@@ -712,10 +729,18 @@ def _trim_reply(text: str) -> str:
     return trimmed
 
 
+# Fallback replies used when the LLM returns empty text. The literal "Zarna"
+# mentions only appear when creator_config is None (Zarna's original path); for
+# every other creator we substitute their display name at call time.
 _FALLBACK_REPLIES = [
     "Ha! I got distracted trying to keep up with Zarna's life — she's a lot. Try me again?",
     "Okay, I had a whole joke ready and then… nothing. Zarna would say that's very on-brand for me. Try again!",
     "My brain went on a little vacation (must be the immigrant-parent guilt). Send that again?",
+]
+_GENERIC_FALLBACK_REPLIES = [
+    "Ha! I got distracted trying to keep up — try me again?",
+    "Okay, I had a whole joke ready and then… nothing. Try again!",
+    "My brain went on a little vacation. Send that again?",
 ]
 _fallback_idx = 0
 
@@ -748,9 +773,22 @@ def _get_code_redirect() -> str:
     return reply
 
 
-def _get_fallback() -> str:
+def _get_fallback(creator_config: "Optional[CreatorConfig]" = None) -> str:
+    """
+    Rotates through fallback replies when the LLM returns empty text.
+
+    Zarna (config is None OR slug=='zarna') keeps the Zarna-voiced
+    originals — production traffic is unchanged. Every other creator gets
+    a neutral variant so we don't mis-brand their bot with Zarna's name.
+
+    Note: in production, ZarnaBrain always passes a loaded CreatorConfig
+    (slug='zarna') here, so we can't use `creator_config is None` alone to
+    detect "this is Zarna" — we check the slug too.
+    """
     global _fallback_idx
-    reply = _FALLBACK_REPLIES[_fallback_idx % len(_FALLBACK_REPLIES)]
+    is_zarna = creator_config is None or getattr(creator_config, "slug", "") == "zarna"
+    pool = _FALLBACK_REPLIES if is_zarna else _GENERIC_FALLBACK_REPLIES
+    reply = pool[_fallback_idx % len(pool)]
     _fallback_idx += 1
     return reply
 
@@ -920,7 +958,7 @@ def generate_zarna_reply(
 
     raw = _produce_raw_text(intent, prompt, routing_tier)
     if not (raw or "").strip():
-        return _get_fallback()
+        return _get_fallback(creator_config)
 
     # SHOW, BOOK, PODCAST, CLIP, and MERCH replies include a link on its own line — preserve both lines but still cap
     if intent in (Intent.SHOW, Intent.BOOK, Intent.PODCAST, Intent.CLIP, Intent.MERCH):
