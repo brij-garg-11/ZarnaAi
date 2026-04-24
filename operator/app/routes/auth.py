@@ -628,7 +628,22 @@ def google_callback():
                 return redirect(f"{frontend_url}/onboarding")
             return redirect(f"{frontend_url}/dashboard")
 
-        # No existing account — check for a pending invite first
+        # Before invite / signup flows: check if this email belongs to an account
+        # that was explicitly deactivated (e.g. removed from a team). We never
+        # allow deactivated accounts to re-activate themselves — only an admin
+        # re-invite can restore access.
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                "SELECT id, is_active FROM operator_users WHERE email=%s",
+                (email,),
+            )
+            existing_any = cur.fetchone()
+
+        if existing_any and not existing_any["is_active"]:
+            conn.close()
+            return redirect(f"{frontend_url}/login?error=not_authorized")
+
+        # No existing active account — check for a pending invite first
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute(
                 """SELECT * FROM operator_invites
@@ -639,7 +654,9 @@ def google_callback():
             invite = cur.fetchone()
 
         if invite:
-            # Scenario 2: invited user — auto-provision from invite
+            # Scenario 2: invited user — auto-provision from invite.
+            # Only inserts a fresh row; never re-activates a deactivated account
+            # (that case is caught above).
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -648,7 +665,7 @@ def google_callback():
                                 account_type, creator_slug, last_login_at)
                            VALUES (%s, %s, '', FALSE, TRUE, %s, %s, NOW())
                            ON CONFLICT (email) DO UPDATE
-                           SET is_active=TRUE, account_type=%s, creator_slug=%s,
+                           SET account_type=%s, creator_slug=%s,
                                name=%s, last_login_at=NOW()
                            RETURNING id""",
                         (email, name, invite["account_type"], invite["creator_slug"],
@@ -674,19 +691,27 @@ def google_callback():
             return redirect(f"{frontend_url}/dashboard")
 
         if is_signup:
-            # Scenario 3: brand-new self-serve signup via Google
+            # Scenario 3: brand-new self-serve signup via Google.
+            # Only creates a genuinely new row — never re-activates a deactivated
+            # account (that case is caught above).
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         """INSERT INTO operator_users
                                (email, name, password_hash, is_owner, is_active, last_login_at)
                            VALUES (%s, %s, '', FALSE, TRUE, NOW())
-                           ON CONFLICT (email) DO UPDATE
-                           SET is_active=TRUE, name=%s, last_login_at=NOW()
+                           ON CONFLICT (email) DO NOTHING
                            RETURNING id""",
-                        (email, name, name),
+                        (email, name),
                     )
-                    new_id = cur.fetchone()[0]
+                    row = cur.fetchone()
+                    if not row:
+                        # Conflict means account exists — we shouldn't reach here
+                        # because existing active accounts are handled in Scenario 1
+                        # and deactivated ones are blocked above. Be safe and deny.
+                        conn.close()
+                        return redirect(f"{frontend_url}/login?error=not_authorized")
+                    new_id = row[0]
             session["operator_user_id"] = new_id
             session.permanent = True
             conn.close()

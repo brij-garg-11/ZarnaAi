@@ -3911,6 +3911,14 @@ def team_remove_member(member_id):
                        WHERE id=%s AND is_super_admin=FALSE""",
                     (member_id,),
                 )
+                # Cancel any outstanding invites for this user on this project so
+                # they can't use a pending invite to re-join immediately.
+                cur.execute(
+                    """DELETE FROM operator_invites
+                       WHERE creator_slug=%s
+                         AND email=(SELECT email FROM operator_users WHERE id=%s)""",
+                    (slug, member_id),
+                )
         return jsonify(success=True)
     finally:
         conn.close()
