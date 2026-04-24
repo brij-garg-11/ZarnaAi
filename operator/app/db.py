@@ -327,6 +327,100 @@ def init_db():
         "ALTER TABLE bot_configs ADD COLUMN IF NOT EXISTS error_message TEXT",
         "ALTER TABLE bot_configs ADD COLUMN IF NOT EXISTS provisioning_status TEXT DEFAULT NULL",
 
+        # ── Billing / Stripe / Credits ─────────────────────────────────────
+        # plan_tier: 'trial' for new signups; set to paid tier name by Stripe webhook.
+        # trial_credits_remaining: only used while plan_tier='trial' — hard stopped at 0.
+        # Paid plans get credits_included from operator_credit_usage instead.
+        "ALTER TABLE operator_users ADD COLUMN IF NOT EXISTS plan_tier TEXT DEFAULT 'trial'",
+        "ALTER TABLE operator_users ADD COLUMN IF NOT EXISTS billing_cycle TEXT DEFAULT 'monthly'",
+        "ALTER TABLE operator_users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT DEFAULT NULL",
+        "ALTER TABLE operator_users ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT DEFAULT NULL",
+        "ALTER TABLE operator_users ADD COLUMN IF NOT EXISTS billing_cycle_anchor TIMESTAMPTZ DEFAULT NULL",
+        "ALTER TABLE operator_users ADD COLUMN IF NOT EXISTS trial_credits_remaining INT DEFAULT 1000",
+        "ALTER TABLE operator_users ADD COLUMN IF NOT EXISTS trial_started_at TIMESTAMPTZ DEFAULT NULL",
+        "CREATE INDEX IF NOT EXISTS idx_operator_users_stripe_customer ON operator_users(stripe_customer_id) WHERE stripe_customer_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS idx_operator_users_stripe_subscription ON operator_users(stripe_subscription_id) WHERE stripe_subscription_id IS NOT NULL",
+
+        # operator_credit_usage: monthly roll-up of credits consumed per user.
+        # Primary read path for /api/billing/status — kept separate from
+        # credit_events so the status endpoint doesn't aggregate thousands of
+        # rows on every page load.
+        """
+        CREATE TABLE IF NOT EXISTS operator_credit_usage (
+            id                 BIGSERIAL PRIMARY KEY,
+            operator_user_id   BIGINT NOT NULL REFERENCES operator_users(id) ON DELETE CASCADE,
+            creator_slug       TEXT NOT NULL,
+            period_start       DATE NOT NULL,
+            period_end         DATE,
+            credits_used       INT NOT NULL DEFAULT 0,
+            credits_included   INT NOT NULL DEFAULT 0,
+            boosters_purchased INT NOT NULL DEFAULT 0,
+            overage_credits    INT NOT NULL DEFAULT 0,
+            updated_at         TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE (operator_user_id, period_start)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_ocu_user ON operator_credit_usage(operator_user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_ocu_slug ON operator_credit_usage(creator_slug)",
+
+        # credit_events: granular audit log of every credit grant/consumption.
+        # Enables per-user reporting ("where did my credits go?") and Stripe
+        # reconciliation (match invoice to plan_reset event).
+        """
+        CREATE TABLE IF NOT EXISTS credit_events (
+            id               BIGSERIAL PRIMARY KEY,
+            operator_user_id BIGINT NOT NULL REFERENCES operator_users(id) ON DELETE CASCADE,
+            creator_slug     TEXT NOT NULL,
+            kind             TEXT NOT NULL,
+            credits          INT NOT NULL,
+            source_id        TEXT DEFAULT NULL,
+            created_at       TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_credit_events_user ON credit_events(operator_user_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_credit_events_slug ON credit_events(creator_slug, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_credit_events_kind ON credit_events(kind)",
+
+        # ── Team members (dedicated table, replaces ad-hoc creator_slug sharing) ──
+        # tenant_slug = the owner's creator_slug. Multiple operator_users rows
+        # can belong to the same tenant. Enforced seat limit by plan_tier.
+        """
+        CREATE TABLE IF NOT EXISTS team_members (
+            id           BIGSERIAL PRIMARY KEY,
+            tenant_slug  TEXT NOT NULL,
+            user_id      BIGINT NOT NULL REFERENCES operator_users(id) ON DELETE CASCADE,
+            role         TEXT NOT NULL DEFAULT 'member',
+            invited_at   TIMESTAMPTZ DEFAULT NOW(),
+            accepted_at  TIMESTAMPTZ,
+            UNIQUE (tenant_slug, user_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_team_members_tenant ON team_members(tenant_slug)",
+        "CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id)",
+
+        # Backfill: every existing operator_users row with a creator_slug becomes
+        # a team_members row. Owner is the user whose id matches the slug's
+        # bot_configs.operator_user_id; everyone else with the same slug is a
+        # member. INSERT ... ON CONFLICT makes this idempotent.
+        """
+        INSERT INTO team_members (tenant_slug, user_id, role, invited_at, accepted_at)
+        SELECT u.creator_slug, u.id,
+               CASE WHEN u.id = bc.operator_user_id THEN 'owner' ELSE 'member' END,
+               u.created_at,
+               u.created_at
+        FROM   operator_users u
+        LEFT JOIN bot_configs bc ON bc.creator_slug = u.creator_slug
+        WHERE  u.creator_slug IS NOT NULL
+          AND  u.creator_slug <> ''
+        ON CONFLICT (tenant_slug, user_id) DO NOTHING
+        """,
+
+        # ── Smart Send: engagement score on contacts ──────────────────────
+        # Recomputed nightly based on reply recency, session depth, click activity.
+        # Used by /api/contacts/engaged?top=N for the Smart Send audience selector.
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS engagement_score INT DEFAULT 0",
+        "CREATE INDEX IF NOT EXISTS idx_contacts_engagement ON contacts(engagement_score DESC) WHERE engagement_score > 0",
+
         # ── Data-cleanup on every startup ──────────────────────────────────
         # 1. Clear /tmp-based image URLs (ephemeral Railway filesystem, gone on redeploy)
         "UPDATE blast_drafts SET media_url='' WHERE media_url LIKE '%/operator/blast/uploads/%'",

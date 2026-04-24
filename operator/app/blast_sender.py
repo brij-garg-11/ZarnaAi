@@ -23,12 +23,37 @@ def execute_blast(draft_id: int):
         mark_blast_sent,
         mark_blast_cancelled,
     )
+    from .billing.credits import consume_credit, count_segments, KIND_BLAST_SENT, check_send_quota
 
     logger.info("=== BLAST WORKER starting for draft %s ===", draft_id)
     draft = get_blast_draft(draft_id)
     if not draft:
         logger.error("Blast draft %s not found in DB", draft_id)
         return
+
+    # Resolve the owning operator_user so we can charge credits to the right
+    # account (and respect plan enforcement). created_by is the user's email.
+    blast_owner_user_id: int | None = None
+    blast_owner_slug: str | None = None
+    try:
+        from .db import get_conn as _gc
+        _owner_conn = _gc()
+        with _owner_conn.cursor() as _oc:
+            _oc.execute(
+                """
+                SELECT id, creator_slug FROM operator_users
+                WHERE LOWER(email) = LOWER(%s)
+                LIMIT 1
+                """,
+                (draft.get("created_by") or "",),
+            )
+            _row = _oc.fetchone()
+            if _row:
+                blast_owner_user_id = _row[0]
+                blast_owner_slug = _row[1]
+        _owner_conn.close()
+    except Exception:
+        logger.warning("execute_blast: could not resolve owner for draft %s", draft_id, exc_info=True)
 
     media_url          = (draft.get("media_url") or "").strip()
     tracked_link_slug  = (draft.get("tracked_link_slug") or "").strip()
@@ -110,6 +135,20 @@ def execute_blast(draft_id: int):
             if ok:
                 sent += 1
                 sent_phones.append(phone)
+                # Charge credits to the blast owner (per recipient, per segment).
+                # MMS gets a flat 3-credit charge handled by count_segments.
+                if blast_owner_user_id:
+                    try:
+                        segments = count_segments(fan_body, has_media=bool(media_url))
+                        consume_credit(
+                            user_id=blast_owner_user_id,
+                            slug=blast_owner_slug,
+                            kind=KIND_BLAST_SENT,
+                            credits=segments,
+                            source_id=f"blast:{draft_id}",
+                        )
+                    except Exception:
+                        logger.warning("consume_credit failed for blast %s recipient", draft_id, exc_info=True)
                 # Save a messages row so link_clicked_1h can be tracked per fan
                 if tracked_link_slug:
                     _save_blast_message(phone, fan_body)
@@ -132,6 +171,24 @@ def execute_blast(draft_id: int):
                     return
             except Exception as _ce:
                 logger.warning("Cancellation check failed (non-fatal): %s", _ce)
+
+            # Credit check: if the blast owner has blown through their quota
+            # (trial = 0 remaining, paid = past soft-grace ceiling), stop here
+            # rather than continuing to rack up overage.
+            if blast_owner_user_id:
+                try:
+                    allowed, qstatus = check_send_quota(
+                        user_id=blast_owner_user_id, requested=1,
+                    )
+                    if not allowed:
+                        logger.warning(
+                            "=== BLAST %s STOPPED: credit limit hit at %s/%s (trial=%s) ===",
+                            draft_id, sent, total, qstatus.get("is_trial"),
+                        )
+                        mark_blast_sent(draft_id, sent, failed, total)
+                        return
+                except Exception:
+                    logger.warning("mid-send credit check failed (non-fatal)", exc_info=True)
 
     mark_blast_sent(draft_id, sent, failed, total)
     logger.info("=== BLAST %s DONE: %s sent, %s failed of %s ===", draft_id, sent, failed, len(phones))

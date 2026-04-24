@@ -189,6 +189,14 @@ def audience():
             for tier in tier_order
         ],
         total_profiled=stats.get("profiled_fans", 0),
+        messages_by_day=[
+            {"date": d, "count": c}
+            for d, c in stats.get("messages_by_day", [])
+        ],
+        messages_by_hour=[
+            {"hour": h, "count": c}
+            for h, c in enumerate(stats.get("messages_by_hour", []))
+        ],
     )
 
 
@@ -556,6 +564,30 @@ def api_inbox_send(phone_last4):
     if len(text) > 1600:
         return jsonify(success=False, error="Message too long (max 1600 chars)."), 400
 
+    # ── Credit gate ─────────────────────────────────────────────────────
+    # Estimate segments for this message so the soft-grace decision uses the
+    # actual credit cost, not just "1". Callers with MMS (images) go through
+    # the blast flow, not this endpoint.
+    from ..billing.credits import check_send_quota, count_segments
+    segments = count_segments(text, has_media=False)
+
+    user = current_user()
+    try:
+        allowed, status = check_send_quota(user_id=user["id"], requested=segments)
+        if not allowed:
+            return jsonify(
+                success=False,
+                error="credit_limit_exceeded",
+                message=(
+                    "You're out of credits. Upgrade to keep sending."
+                    if status.get("is_trial")
+                    else "You're past the overage limit. Buy a booster or upgrade."
+                ),
+                status=status,
+            ), 402
+    except Exception:
+        logger.exception("api_inbox_send: credit gate failed — allowing send (fail-open)")
+
     # Resolve the full phone number from last-4
     try:
         conn = get_conn()
@@ -588,6 +620,18 @@ def api_inbox_send(phone_last4):
     except Exception as e:
         logger.exception("api_inbox_send: send failed for ***%s", phone_last4)
         return jsonify(success=False, error=f"Send failed: {e}"), 500
+
+    # Consume credits after successful send
+    try:
+        from ..billing.credits import consume_credit, KIND_SMS_OUTBOUND
+        consume_credit(
+            user_id=user["id"],
+            kind=KIND_SMS_OUTBOUND,
+            credits=segments,
+            source_id=f"inbox:{phone_last4}",
+        )
+    except Exception:
+        logger.warning("api_inbox_send: consume_credit failed (send succeeded)", exc_info=True)
 
     # Log to messages table so it shows in thread history
     sent_at = datetime.now(timezone.utc)
@@ -736,6 +780,66 @@ CADENCE_DAYS = {"superfan": 5, "engaged": 7, "lurker": 14, "dormant": 30}
 TIER_LABELS  = {"superfan": "Superfan ⭐", "engaged": "Engaged ✅", "lurker": "Lurker 💬", "dormant": "Dormant 😴"}
 
 
+@api_bp.route("/api/blasts/<int:draft_id>", methods=["GET"])
+@login_required
+def api_get_blast(draft_id):
+    """
+    Return a single blast draft by id.
+
+    Used by the Lovable frontend when a draft is deep-linked (e.g. from a live
+    show's "Blast Message" button) and hasn't loaded yet via the /api/blasts
+    list endpoint.
+    """
+    user = current_user()
+    if not _user_owns_draft(draft_id, user):
+        return jsonify(success=False, error="Not found."), 404
+    try:
+        conn = get_conn()
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, name, status, body, channel,
+                       audience_type, audience_filter, audience_sample_pct,
+                       media_url, link_url, tracked_link_slug, blast_context_note,
+                       sent_count, failed_count, total_recipients,
+                       scheduled_at, sent_at, created_at
+                FROM   blast_drafts
+                WHERE  id=%s
+                """,
+                (draft_id,),
+            )
+            row = cur.fetchone()
+        conn.close()
+        if not row:
+            return jsonify(success=False, error="Not found."), 404
+        d = dict(row)
+        draft = {
+            "id": d["id"],
+            "name": d.get("name") or "Untitled",
+            "status": d["status"],
+            "body": d.get("body", ""),
+            "channel": d.get("channel", "twilio"),
+            "audience_type": d.get("audience_type"),
+            "audience_filter": d.get("audience_filter"),
+            "audience_sample_pct": d.get("audience_sample_pct"),
+            "media_url": d.get("media_url", ""),
+            "link_url": d.get("link_url", ""),
+            "tracked_link_slug": d.get("tracked_link_slug", ""),
+            "blast_context_note": d.get("blast_context_note", ""),
+            "sent_count": d.get("sent_count", 0),
+            "failed_count": d.get("failed_count", 0),
+            "total_recipients": d.get("total_recipients", 0),
+            "scheduled_at": d["scheduled_at"].isoformat() if d.get("scheduled_at") else None,
+            "sent_at": d["sent_at"].isoformat() if d.get("sent_at") else None,
+            "created_at": d["created_at"].isoformat() if d.get("created_at") else None,
+        }
+        return jsonify(success=True, draft=draft)
+    except Exception:
+        logger.exception("api_get_blast: failed for id=%s", draft_id)
+        return jsonify(success=False, error="Failed to load draft"), 500
+
+
 @api_bp.route("/api/blasts/tier-counts")
 @login_required
 def api_blast_tier_counts():
@@ -776,6 +880,58 @@ def api_blast_tier_counts():
         for tier, cadence in CADENCE_DAYS.items()
     ]
     return jsonify(success=True, tiers=tiers)
+
+
+@api_bp.route("/api/contacts/engaged")
+@login_required
+def api_contacts_engaged():
+    """Top-N most-engaged contacts for Smart Send audience picking.
+
+    Query: ?top=100 (clamped to 5000)
+    Returns: { success, count, contacts: [{ phone_number, fan_tier, engagement_score, last_replied_at }] }
+    """
+    from ..engagement import top_engaged
+
+    user = current_user()
+    from flask import session
+    if user.get("is_super_admin"):
+        slug = session.get("viewing_as") or user.get("creator_slug")
+    else:
+        slug = user.get("creator_slug")
+
+    try:
+        limit = int(request.args.get("top", "100"))
+    except (TypeError, ValueError):
+        limit = 100
+
+    try:
+        contacts = top_engaged(slug=slug, limit=limit)
+        return jsonify(success=True, count=len(contacts), contacts=contacts)
+    except Exception:
+        logger.exception("api_contacts_engaged: failed")
+        return jsonify(success=False, error="Failed to load engaged contacts"), 500
+
+
+@api_bp.route("/api/admin/engagement/recompute", methods=["POST"])
+@login_required
+def api_engagement_recompute():
+    """Admin-only trigger to recompute engagement scores.
+
+    Normally run via cron nightly, but this endpoint lets an operator kick
+    off a refresh on demand (e.g. right after a big blast).
+    """
+    from ..engagement import recompute_all
+
+    user = current_user()
+    if not user.get("is_super_admin"):
+        return jsonify(error="Admin only"), 403
+
+    try:
+        count = recompute_all()
+        return jsonify(success=True, rows_updated=count)
+    except Exception as e:
+        logger.exception("api_engagement_recompute: failed")
+        return jsonify(success=False, error=str(e)), 500
 
 
 @api_bp.route("/api/blasts/smart-send-preview", methods=["POST"])
@@ -938,7 +1094,7 @@ def api_save_blast(draft_id):
     if channel not in ("twilio", "slicktext"):
         channel = "twilio"
     audience_type = data.get("audience_type", "all")
-    if audience_type not in ("all", "tag", "location", "random", "show", "tier"):
+    if audience_type not in ("all", "tag", "location", "random", "show", "tier", "engaged"):
         audience_type = "all"
     audience_filter = (data.get("audience_filter") or "").strip()[:200]
     sample_pct = max(1, min(100, int(data.get("sample_pct", 100) or 100)))
@@ -1033,7 +1189,7 @@ def api_blast_preview_count():
     from ..queries import count_audience
     data = request.get_json(silent=True) or {}
     audience_type = data.get("audience_type", "all")
-    if audience_type not in ("all", "tag", "location", "random", "show", "tier"):
+    if audience_type not in ("all", "tag", "location", "random", "show", "tier", "engaged"):
         audience_type = "all"
     audience_filter = (data.get("audience_filter") or "").strip()
     sample_pct = max(1, min(100, int(data.get("sample_pct", 100) or 100)))
@@ -1112,11 +1268,33 @@ def api_blast_send(draft_id):
 
     if channel not in ("twilio", "slicktext"):
         channel = "twilio"
-    if audience_type not in ("all", "tag", "location", "random", "show", "tier"):
+    if audience_type not in ("all", "tag", "location", "random", "show", "tier", "engaged"):
         audience_type = "all"
 
     if not body:
         return jsonify(success=False, error="Message body is required before sending."), 400
+
+    # Credit gate: block trial accounts that are at zero and paid accounts past
+    # the soft-grace ceiling. A real per-recipient consume_credit runs inside
+    # blast_sender.py, so the worst case here is we block when there are zero
+    # credits left (or <= overage ceiling for paid).
+    try:
+        from ..billing.credits import check_send_quota, count_segments
+        segs = count_segments(body, has_media=bool(media_url))
+        allowed, status = check_send_quota(user_id=user["id"], requested=segs)
+        if not allowed:
+            reason = "trial_credits_exhausted" if status.get("is_trial") else "credit_limit_exceeded"
+            return jsonify(
+                success=False,
+                error=reason,
+                message=("You're out of trial credits. Upgrade to keep sending."
+                         if status.get("is_trial")
+                         else "You've reached your credit limit. Buy a booster or upgrade."),
+                upgrade_url="/plans",
+                status=status,
+            ), 402
+    except Exception:
+        logger.warning("api_blast_send: credit gate check failed (allowing send)", exc_info=True)
 
     # Persist latest UI state so execute_blast reads fresh values from DB
     if data:
@@ -2042,182 +2220,125 @@ def update_user():
         conn.close()
 
 
-# Plan definitions: name → monthly credit allotment (None = unlimited)
-_PLAN_CREDITS = {
-    "starter": 3200,
-    "growth":  6200,
-    "pro":     12500,
-    "scale":   25200,
-    "custom":  None,   # unlimited
-}
-
-# Credit booster packs (UI-only until Stripe is wired)
-_CREDIT_BOOSTERS = [
-    {"credits": 1000,  "price_usd": 9,  "label": "+1,000 credits"},
-    {"credits": 2500,  "price_usd": 19, "label": "+2,500 credits"},
-    {"credits": 5000,  "price_usd": 35, "label": "+5,000 credits"},
-    {"credits": 10000, "price_usd": 59, "label": "+10,000 credits"},
-]
-
-
 @api_bp.route("/api/billing/status")
 @login_required
 def billing_status():
     """
-    Monthly credit usage summary — segment-based billing.
+    Billing + credit summary for the current user.
 
-    Credits are counted by SMS segments (not flat messages):
-      - Fan inbound / AI reply ≤ 160 chars  → 1 credit
-      - AI reply 161-306 chars              → 2 credits
-      - AI reply 307-459 chars              → 3 credits (etc.)
-      - Text blast                          → CEIL(body_length / 160) × fans_reached
-      - MMS blast (media attached)          → 3 × fans_reached
+    Reads from operator_credit_usage (period totals) + operator_users (plan tier)
+    + Stripe price IDs (booster catalog). See billing/credits.py for the real
+    consumption logic — this endpoint is read-only.
 
-    Returns credits_used, credits_total (null = unlimited), plan_name, and breakdown stats.
+    Returns:
+      plan_name, plan_label, is_trial,
+      credits_used, credits_total, credits_included, credits_remaining,
+      credits_warning, overage_credits,
+      period_start, period_end,
+      boosters (static catalog),
+      replies_this_month, blasts_this_month, fans_reached_this_month
     """
     import psycopg2.extras
     from datetime import date
+
+    from ..billing.credits import get_credit_status
+    from ..billing.plans import BOOSTERS, ALL_PLANS
 
     user = current_user()
     slug = user.get("creator_slug") or ""
     account_type = user.get("account_type") or "performer"
     month = date.today().strftime("%Y-%m")
 
+    status = get_credit_status(user_id=user["id"])
+    plan_tier = status.get("plan_tier") or "trial"
+    plan = ALL_PLANS.get(plan_tier)
+    plan_label = plan.label if plan else (
+        "Free Trial" if plan_tier == "trial"
+        else plan_tier.replace("_", " ").title()
+    )
+
+    # Static booster catalog — order + prices from plans.py
+    boosters = [
+        {
+            "key": b.key,
+            "credits": b.credits,
+            "price_usd": b.price_usd,
+            "label": b.label,
+        }
+        for b in BOOSTERS.values()
+    ]
+
+    # Activity breakdown (AI replies + blasts) — approximate, month-to-date.
+    # Kept separate from credit totals so UI can show "where credits went".
+    replies_this_month = 0
+    blasts_this_month = 0
+    fans_reached_count = 0
     try:
         conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            # Fetch plan info for this user
-            cur.execute(
-                """SELECT plan_name, monthly_credits
-                   FROM operator_users
-                   WHERE creator_slug=%s AND is_active=TRUE
-                   LIMIT 1""",
-                (slug,),
-            )
-            plan_row = cur.fetchone()
-            plan_name      = (plan_row["plan_name"] if plan_row else "starter") or "starter"
-            credits_total  = plan_row["monthly_credits"] if plan_row else _PLAN_CREDITS.get(plan_name, 3200)
-
-            if account_type == "performer":
-                # Conversation credits — segment-based:
-                #   fan message : CEIL(LENGTH(text) / 160)   (avg ~52 chars = always 1)
-                #   AI reply    : CEIL(reply_length_chars / 160)  (avg ~154 chars, some = 2)
-                # Unicode/emoji messages use 70-char single / 67-char multi thresholds,
-                # but for billing we use the conservative 160/153 GSM-7 limits.
+            if account_type == "performer" and slug:
                 cur.execute(
-                    """SELECT
-                          COUNT(*) FILTER (WHERE m.role='assistant') AS ai_replies,
-                          COUNT(*) FILTER (WHERE m.ai_cost_usd IS NOT NULL) AS tracked_cnt,
-                          COALESCE(SUM(m.ai_cost_usd), 0) AS exact_ai_cost,
-                          -- segments: use reply_length_chars for AI replies (pre-computed),
-                          -- fall back to LENGTH(text) for fan messages
-                          COALESCE(SUM(
-                              GREATEST(1, CEIL(
-                                  COALESCE(m.reply_length_chars, LENGTH(m.text), 1)::float / 160
-                              ))
-                          ), 0) AS convo_credits
+                    """SELECT COUNT(*) AS cnt
                        FROM messages m
                        JOIN contacts c ON c.phone_number = m.phone_number
-                       WHERE c.creator_slug=%s
+                       WHERE c.creator_slug = %s
+                         AND m.role = 'assistant'
                          AND m.created_at >= DATE_TRUNC('month', NOW())""",
                     (slug,),
                 )
-                msg_row            = cur.fetchone()
-                convo_credits      = int(msg_row["convo_credits"] or 0)
-                replies_this_month = msg_row["ai_replies"]
-                untracked_cnt      = replies_this_month - msg_row["tracked_cnt"]
-                ai_cost            = round(float(msg_row["exact_ai_cost"]) + untracked_cnt * 0.004, 4)
-                ai_cost_fully_exact = (untracked_cnt == 0)
+                r = cur.fetchone()
+                replies_this_month = int(r["cnt"]) if r else 0
 
-                # Blast credits — segment-based:
-                #   MMS blast (media_url set) → 3 credits per fan
-                #   Text-only blast           → CEIL(LENGTH(body) / 160) credits per fan
                 cur.execute(
-                    """SELECT
-                          COUNT(*) AS blasts,
-                          COALESCE(SUM(sent_count), 0) AS fans_reached,
-                          COALESCE(SUM(
-                              sent_count * CASE
-                                  WHEN media_url IS NOT NULL THEN 3
-                                  ELSE GREATEST(1, CEIL(LENGTH(body)::float / 160))
-                              END
-                          ), 0) AS blast_credits
-                       FROM blast_drafts
-                       WHERE status='sent'
-                         AND sent_at >= DATE_TRUNC('month', NOW())""",
+                    """SELECT COUNT(*) AS blasts,
+                              COALESCE(SUM(sent_count), 0) AS fans_reached
+                       FROM   blast_drafts
+                       WHERE  status = 'sent'
+                         AND  sent_at >= DATE_TRUNC('month', NOW())
+                         AND  LOWER(created_by) = LOWER(%s)""",
+                    (user.get("email") or "",),
                 )
-                blast_row          = cur.fetchone()
-                blast_credits      = int(blast_row["blast_credits"] or 0)
-                blasts_this_month  = int(blast_row["blasts"] or 0)
-                fans_reached_count = int(blast_row["fans_reached"] or 0)
-
-                # Total credits = conversation segments + blast segments
-                credits_used = convo_credits + blast_credits
-
-                # SMS cost (internal, not shown to client)
-                cur.execute(
-                    """SELECT COALESCE(SUM(inbound_cost_usd + outbound_cost_usd), -1) AS sms_cost
-                       FROM sms_cost_log
-                       WHERE creator_slug=%s AND TO_CHAR(log_date,'YYYY-MM')=%s""",
-                    (slug, month),
-                )
-                sms_row  = cur.fetchone()
-                sms_cost = float(sms_row["sms_cost"]) if sms_row["sms_cost"] >= 0 else None
-                total_cost = round(
-                    1.15 + ai_cost +
-                    (sms_cost if sms_cost is not None else replies_this_month * 0.0079), 2
-                )
-
-            else:
-                # Business account
+                b = cur.fetchone()
+                if b:
+                    blasts_this_month = int(b["blasts"] or 0)
+                    fans_reached_count = int(b["fans_reached"] or 0)
+            elif account_type == "business" and slug:
                 cur.execute(
                     """SELECT COUNT(*) AS cnt FROM smb_messages
                        WHERE tenant_slug=%s AND role='assistant'
                          AND created_at >= DATE_TRUNC('month', NOW())""",
                     (slug,),
                 )
-                replies_this_month  = cur.fetchone()["cnt"]
-                credits_used        = replies_this_month * 2  # rough: 1 in + 1 out
-                blasts_this_month   = 0
-                blast_credits       = 0
-                fans_reached_count  = 0
-                ai_cost             = None
-                sms_cost            = None
-                total_cost          = round(1.15 + replies_this_month * 0.004 +
-                                            replies_this_month * 0.0079, 2)
-                ai_cost_fully_exact = False
-
+                r = cur.fetchone()
+                replies_this_month = int(r["cnt"]) if r else 0
         conn.close()
+    except Exception:
+        logger.warning("billing_status: activity breakdown failed for slug=%s", slug, exc_info=True)
 
-        # Warning thresholds (null credits_total = unlimited, no warning)
-        credits_warning = None
-        if credits_total:
-            remaining = credits_total - credits_used
-            pct_remaining = remaining / credits_total if credits_total else 1
-            if pct_remaining <= 0.10:
-                credits_warning = "critical"
-            elif pct_remaining <= 0.20:
-                credits_warning = "low"
-
+    try:
         return jsonify(
             slug=slug,
             month=month,
-            plan_name=plan_name,
-            credits_used=credits_used,
-            credits_total=credits_total,        # null = unlimited
-            credits_warning=credits_warning,    # null | "low" | "critical"
-            boosters=_CREDIT_BOOSTERS,
+            plan_name=plan_tier,
+            plan_label=plan_label,
+            billing_cycle=(plan and "monthly") or None,
+            is_trial=status.get("is_trial", False),
+            credits_used=status.get("used", 0),
+            credits_total=status.get("total", 0),
+            credits_included=status.get("included", 0),
+            credits_remaining=status.get("remaining", 0),
+            credits_warning=status.get("warning"),
+            overage_credits=status.get("overage", 0),
+            boosters_purchased=status.get("boosters_purchased", 0),
+            period_start=status.get("period_start"),
+            period_end=status.get("period_end"),
+            boosters=boosters,
             replies_this_month=replies_this_month,
             blasts_this_month=blasts_this_month,
-            fans_reached_this_month=fans_reached_count,  # actual people, not segment-weighted
-            blast_credits=blast_credits,        # segment-weighted credits from blasts
-            ai_cost_usd=ai_cost,
-            sms_cost_usd=sms_cost,
-            total_cost_usd=total_cost,
-            cost_exact=(ai_cost_fully_exact and sms_cost is not None),
+            fans_reached_this_month=fans_reached_count,
         )
     except Exception:
-        logger.exception("billing_status: failed for slug=%s", slug)
+        logger.exception("billing_status: response build failed for slug=%s", slug)
         return jsonify(error="internal error"), 500
 
 
@@ -2275,6 +2396,13 @@ def business_stats():
             )
             messages_week = cur.fetchone()[0]
 
+            cur.execute(
+                """SELECT COUNT(*) FROM smb_messages
+                   WHERE tenant_slug=%s AND DATE(created_at) = CURRENT_DATE""",
+                (slug,),
+            )
+            messages_today = cur.fetchone()[0]
+
             cur.execute("SELECT COUNT(*) FROM smb_blasts WHERE tenant_slug=%s", (slug,))
             total_blasts = cur.fetchone()[0]
 
@@ -2294,6 +2422,7 @@ def business_stats():
             active_subscribers=active_subscribers,
             total_messages=total_messages,
             inbound_messages=inbound_messages,
+            messages_today=messages_today,
             messages_week=messages_week,
             total_blasts=total_blasts,
             messages_by_day=messages_by_day,
@@ -2878,7 +3007,16 @@ def change_password():
                 (user["id"],),
             )
             row = cur.fetchone()
-            if not row or not check_password_hash(row["password_hash"], current_pw):
+            if not row:
+                return jsonify(error="Account not found"), 404
+            stored_hash = row["password_hash"] or ""
+            # OAuth-only accounts (Google signups) have an empty password_hash
+            # and must set a password via the forgot-password flow first.
+            if not stored_hash:
+                return jsonify(
+                    error="This account signed in with Google. Use 'Forgot password' to set a password first.",
+                ), 400
+            if not check_password_hash(stored_hash, current_pw):
                 return jsonify(error="Current password is incorrect"), 401
 
         new_hash = generate_password_hash(new_pw)
@@ -2916,7 +3054,6 @@ def delete_blast(blast_id):
                 return jsonify(error="Cannot delete a blast that is currently sending. Cancel it first."), 409
         with conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM blast_recipients WHERE blast_draft_id=%s", (blast_id,))
                 cur.execute("DELETE FROM blast_drafts WHERE id=%s", (blast_id,))
         return jsonify(success=True)
     except Exception:
@@ -3273,8 +3410,10 @@ def admin_current_project():
 def team_members():
     """
     List all members and pending invites for the current project.
-    Super-admins see the project they're currently viewing.
-    Regular users see their own project.
+
+    Backed by the `team_members` table (one row per user-in-tenant with an
+    explicit role). Pending invites still live in `operator_invites` until
+    the invitee completes signup.
     """
     user = current_user()
     from flask import session
@@ -3290,13 +3429,20 @@ def team_members():
     try:
         import psycopg2.extras
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            # Active members
             cur.execute(
-                """SELECT id, email, name, account_type, is_super_admin,
-                          last_login_at, created_at
-                   FROM operator_users
-                   WHERE creator_slug=%s AND is_active=TRUE
-                   ORDER BY created_at""",
+                """
+                SELECT u.id, u.email, u.name, u.account_type, u.is_super_admin,
+                       u.last_login_at, u.created_at, tm.role, tm.accepted_at
+                FROM   team_members tm
+                JOIN   operator_users u ON u.id = tm.user_id
+                WHERE  tm.tenant_slug = %s
+                  AND  u.is_active = TRUE
+                ORDER BY
+                    CASE tm.role WHEN 'owner' THEN 0
+                                 WHEN 'admin' THEN 1
+                                 ELSE 2 END,
+                    u.created_at
+                """,
                 (slug,),
             )
             members = [
@@ -3305,6 +3451,7 @@ def team_members():
                     "email": r["email"],
                     "name": r["name"] or "",
                     "account_type": r["account_type"],
+                    "role": r["role"] or "member",
                     "is_super_admin": bool(r["is_super_admin"]),
                     "last_login_at": r["last_login_at"].isoformat() if r["last_login_at"] else None,
                     "status": "active",
@@ -3312,7 +3459,6 @@ def team_members():
                 for r in cur.fetchall()
             ]
 
-            # Pending invites (not yet accepted)
             cur.execute(
                 """SELECT id, email, account_type, created_at
                    FROM operator_invites
@@ -3326,6 +3472,7 @@ def team_members():
                     "email": r["email"],
                     "name": "",
                     "account_type": r["account_type"],
+                    "role": "member",
                     "is_super_admin": False,
                     "last_login_at": None,
                     "status": "pending",
@@ -3333,7 +3480,28 @@ def team_members():
                 for r in cur.fetchall()
             ]
 
-        return jsonify(members=members + invites, slug=slug)
+            # Surface seat limit so the UI can show "3 of 4 used" correctly.
+            cur.execute(
+                "SELECT plan_tier FROM operator_users WHERE creator_slug=%s AND id=( "
+                "SELECT user_id FROM team_members WHERE tenant_slug=%s AND role='owner' LIMIT 1)",
+                (slug, slug),
+            )
+            owner_row = cur.fetchone()
+            owner_plan = owner_row["plan_tier"] if owner_row else "trial"
+
+        try:
+            from ..billing.plans import get_plan_seats
+            seats_limit = get_plan_seats(owner_plan)
+        except Exception:
+            seats_limit = 1
+
+        return jsonify(
+            members=members + invites,
+            slug=slug,
+            plan_tier=owner_plan,
+            seats_limit=seats_limit,  # None = unlimited
+            seats_used=len(members) + len(invites),
+        )
     finally:
         conn.close()
 
@@ -3408,15 +3576,48 @@ def team_invite():
     try:
         with conn:
             with conn.cursor() as cur:
-                # Check if already an active member
+                # Seat enforcement — check plan tier's seat limit vs current
+                # members + pending invites. None = unlimited.
                 cur.execute(
-                    "SELECT id FROM operator_users WHERE email=%s AND creator_slug=%s AND is_active=TRUE",
-                    (email, slug),
+                    "SELECT plan_tier FROM operator_users WHERE id=( "
+                    "SELECT user_id FROM team_members WHERE tenant_slug=%s AND role='owner' LIMIT 1)",
+                    (slug,),
+                )
+                owner_row = cur.fetchone()
+                owner_plan = owner_row[0] if owner_row else "trial"
+                try:
+                    from ..billing.plans import get_plan_seats
+                    seats_limit = get_plan_seats(owner_plan)
+                except Exception:
+                    seats_limit = 1
+
+                if seats_limit is not None:
+                    cur.execute(
+                        """SELECT
+                              (SELECT COUNT(*) FROM team_members tm
+                               JOIN operator_users u ON u.id = tm.user_id
+                               WHERE tm.tenant_slug=%s AND u.is_active=TRUE)
+                            + (SELECT COUNT(*) FROM operator_invites
+                               WHERE creator_slug=%s AND accepted_at IS NULL
+                                 AND email <> %s)""",
+                        (slug, slug, email),
+                    )
+                    used = cur.fetchone()[0] or 0
+                    if used >= seats_limit:
+                        return jsonify(
+                            error="seat_limit_reached",
+                            message=f"Your plan includes {seats_limit} seat(s). Upgrade to add more teammates.",
+                            upgrade_url="/plans",
+                        ), 402
+
+                cur.execute(
+                    "SELECT u.id FROM team_members tm JOIN operator_users u ON u.id=tm.user_id "
+                    "WHERE tm.tenant_slug=%s AND lower(u.email)=lower(%s) AND u.is_active=TRUE",
+                    (slug, email),
                 )
                 if cur.fetchone():
                     return jsonify(error="This person is already a team member"), 409
 
-                # Upsert invite
                 cur.execute(
                     """INSERT INTO operator_invites (email, creator_slug, account_type, invited_by)
                        VALUES (%s, %s, %s, %s)
@@ -3469,7 +3670,12 @@ def team_revoke_invite(invite_id):
 @api_bp.route("/api/team/members/<int:member_id>", methods=["DELETE"])
 @login_required
 def team_remove_member(member_id):
-    """Remove an active team member (deactivate their account)."""
+    """Remove an active team member.
+
+    Owners cannot be removed via this endpoint (they must transfer ownership
+    first or cancel the project). Everyone else gets their team_members row
+    dropped and their operator_users record deactivated.
+    """
     user = current_user()
     from flask import session
     slug = session.get("viewing_as") if user.get("is_super_admin") else user.get("creator_slug")
@@ -3482,12 +3688,24 @@ def team_remove_member(member_id):
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """UPDATE operator_users SET is_active=FALSE
-                       WHERE id=%s AND creator_slug=%s AND is_super_admin=FALSE""",
-                    (member_id, slug),
+                    "SELECT role FROM team_members WHERE tenant_slug=%s AND user_id=%s",
+                    (slug, member_id),
                 )
-                if cur.rowcount == 0:
-                    return jsonify(error="Member not found or cannot be removed"), 404
+                row = cur.fetchone()
+                if not row:
+                    return jsonify(error="Member not found"), 404
+                if row[0] == "owner":
+                    return jsonify(error="Owner cannot be removed"), 400
+
+                cur.execute(
+                    "DELETE FROM team_members WHERE tenant_slug=%s AND user_id=%s",
+                    (slug, member_id),
+                )
+                cur.execute(
+                    """UPDATE operator_users SET is_active=FALSE, creator_slug=NULL
+                       WHERE id=%s AND is_super_admin=FALSE""",
+                    (member_id,),
+                )
         return jsonify(success=True)
     finally:
         conn.close()
@@ -3651,6 +3869,33 @@ def api_onboarding_submit():
         conn.close()
         logger.info("onboarding_submit: user=%s slug=%s type=%s", user["email"], slug, account_type)
 
+        # Seed 1,000 free trial credits for this newly-onboarded user so they
+        # can immediately start sending. Stripe checkout later replaces the
+        # trial with a paid plan via the billing webhook.
+        try:
+            from ..billing.credits import seed_trial_credits
+            seed_trial_credits(user_id=user["id"], slug=slug)
+        except Exception:
+            logger.exception("onboarding_submit: seed_trial_credits failed (non-fatal)")
+
+        # Ensure this user is the 'owner' in team_members (backfill covers
+        # existing users; new users miss the db.py backfill block).
+        try:
+            tm_conn = get_conn()
+            with tm_conn:
+                with tm_conn.cursor() as tm_cur:
+                    tm_cur.execute(
+                        """
+                        INSERT INTO team_members (tenant_slug, user_id, role, invited_at, accepted_at)
+                        VALUES (%s, %s, 'owner', NOW(), NOW())
+                        ON CONFLICT (tenant_slug, user_id) DO UPDATE SET role='owner'
+                        """,
+                        (slug, user["id"]),
+                    )
+            tm_conn.close()
+        except Exception:
+            logger.exception("onboarding_submit: team_members seed failed (non-fatal)")
+
         # Fire async Notion CRM record creation
         try:
             from ..notion_crm import create_customer_async
@@ -3780,3 +4025,66 @@ def api_provisioning_status():
         error_message=(err if status == "failed" else None),
         creator_slug=slug,
     )
+
+
+@api_bp.route("/api/provisioning/retry", methods=["POST"])
+@login_required
+def api_provisioning_retry():
+    """Kick off provisioning again after a failure.
+
+    Only valid when the current slug's bot_configs row is in status='failed'.
+    Re-fires the same background thread used by onboarding_submit so the UI
+    "Retry" button actually restarts the pipeline instead of just refetching
+    status.
+    """
+    from flask import session
+    import threading
+    user = current_user()
+
+    if user.get("is_super_admin") and session.get("viewing_as"):
+        slug = session["viewing_as"]
+    else:
+        slug = user.get("creator_slug")
+
+    if not slug:
+        return jsonify(success=False, error="no_slug"), 400
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT bc.provisioning_status, bc.config_json, ou.id
+                FROM   bot_configs bc
+                LEFT   JOIN operator_users ou ON ou.id = bc.operator_user_id
+                WHERE  bc.creator_slug=%s
+                """,
+                (slug,),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        return jsonify(success=False, error="no_bot_config"), 404
+
+    current_status, config_json, user_id = row
+    if (current_status or "").lower() in ("in_progress", "live"):
+        return jsonify(success=False, error="provisioning_already_running"), 409
+
+    try:
+        from ..provisioning import provision_new_creator
+        import json as _json
+        config = config_json if isinstance(config_json, dict) else _json.loads(config_json or "{}")
+        thread = threading.Thread(
+            target=provision_new_creator,
+            args=(user_id or user["id"], slug, config),
+            name=f"provision-retry-{slug}",
+            daemon=True,
+        )
+        thread.start()
+        logger.info("api_provisioning_retry: restarted provisioning for slug=%s", slug)
+        return jsonify(success=True, status="in_progress", creator_slug=slug)
+    except Exception:
+        logger.exception("api_provisioning_retry: failed to start thread")
+        return jsonify(success=False, error="retry_failed"), 500

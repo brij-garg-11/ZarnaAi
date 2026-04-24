@@ -590,6 +590,15 @@ def google_callback():
                         "UPDATE operator_invites SET accepted_at=NOW() WHERE id=%s",
                         (invite["id"],),
                     )
+                    # Register the newly-accepted user in team_members so seat
+                    # counting + role checks work from their first login.
+                    cur.execute(
+                        """INSERT INTO team_members (tenant_slug, user_id, role, invited_at, accepted_at)
+                           VALUES (%s, %s, 'member', %s, NOW())
+                           ON CONFLICT (tenant_slug, user_id) DO UPDATE
+                           SET accepted_at = NOW()""",
+                        (invite["creator_slug"], new_id, invite["created_at"]),
+                    )
             session["operator_user_id"] = new_id
             session.permanent = True
             conn.close()

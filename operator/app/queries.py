@@ -149,6 +149,23 @@ def count_audience(audience_type: str, audience_filter: str, sample_pct: int = 1
                     )
                 except Exception:
                     cur.execute("SELECT 0")
+            elif audience_type == "engaged":
+                # Smart Send: top-N most engaged contacts. audience_filter
+                # holds the desired N (defaults to 100 if blank).
+                try:
+                    n = max(1, min(5000, int(audience_filter or 100)))
+                except (ValueError, TypeError):
+                    n = 100
+                cur.execute(
+                    """SELECT COUNT(*) FROM (
+                         SELECT phone_number FROM contacts
+                         WHERE engagement_score > 0
+                           AND phone_number NOT LIKE 'whatsapp:%%'
+                         ORDER BY engagement_score DESC
+                         LIMIT %s
+                       ) sub""",
+                    (n,),
+                )
             else:
                 cur.execute("SELECT COUNT(DISTINCT phone_number) FROM contacts")
             total = cur.fetchone()[0]
@@ -206,6 +223,19 @@ def get_audience_phones(audience_type: str, audience_filter: str, sample_pct: in
                     )
                 except Exception:
                     cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE FALSE")
+            elif audience_type == "engaged":
+                try:
+                    n = max(1, min(5000, int(audience_filter or 100)))
+                except (ValueError, TypeError):
+                    n = 100
+                cur.execute(
+                    """SELECT phone_number FROM contacts
+                       WHERE engagement_score > 0
+                         AND phone_number NOT LIKE 'whatsapp:%%'
+                       ORDER BY engagement_score DESC
+                       LIMIT %s""",
+                    (n,),
+                )
             else:
                 cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE phone_number NOT LIKE 'whatsapp:%'")
 

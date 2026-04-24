@@ -21,8 +21,25 @@ def init_scheduler(app):
         id="process_scheduled_blasts",
         replace_existing=True,
     )
+    _scheduler.add_job(
+        _recompute_engagement,
+        trigger="cron",
+        hour=7,
+        minute=0,
+        id="recompute_engagement",
+        replace_existing=True,
+    )
     _scheduler.start()
     logger.info("Operator scheduler started")
+
+
+def _recompute_engagement():
+    try:
+        from .engagement import recompute_all
+        count = recompute_all()
+        logger.info("Nightly engagement recompute complete: %s contacts updated", count)
+    except Exception as e:
+        logger.exception("Engagement recompute failed: %s", e)
 
 
 def _process_scheduled_blasts():

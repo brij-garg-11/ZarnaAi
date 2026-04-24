@@ -281,6 +281,7 @@ def _process_slicktext_message(phone_number: str, message_text: str, quiz_contex
             logging.info("No reply for ...%s (conversation ender or empty)", phone_number[-4:])
             return
         slicktext.send_reply(phone_number, reply)
+        _consume_message_credits(reply, message_text, source=f"slicktext:{phone_number[-4:]}")
     finally:
         ai_reply_leave()
 
@@ -404,8 +405,101 @@ def _process_twilio_message(phone_number: str, message_text: str, quiz_context: 
             logging.info("No Twilio reply for ...%s (conversation ender or empty)", phone_number[-4:])
             return
         twilio.send_reply(phone_number, reply)
+        _consume_message_credits(reply, message_text, source=f"twilio:{phone_number[-4:]}")
     finally:
         ai_reply_leave()
+
+
+def _consume_message_credits(outbound_text: str, inbound_text: str, *, source: str) -> None:
+    """Charge the brain's creator_slug for 1 inbound + N outbound segments.
+
+    Writes directly to operator_credit_usage + credit_events so the main app
+    doesn't need to import the operator package (they share a top-level
+    'app/' directory name — a direct sys.path insert would shadow imports).
+
+    Fail-open: never blocks message processing — billing is secondary to replies.
+    """
+    slug = getattr(brain, "slug", None) or "zarna"
+    if not slug:
+        return
+
+    import math as _math
+
+    def _segments(text: str) -> int:
+        if not text:
+            return 1
+        length = len(text)
+        if any(ord(c) > 127 for c in text):
+            return 1 if length <= 70 else max(1, _math.ceil(length / 67))
+        return 1 if length <= 160 else max(1, _math.ceil(length / 153))
+
+    outbound_credits = _segments(outbound_text)
+
+    try:
+        from app.utils.sms_segments import count_sms_segments  # type: ignore
+        outbound_credits = count_sms_segments(outbound_text, has_media=False)
+    except Exception:
+        pass
+
+    try:
+        from app.admin_auth import get_db_connection  # type: ignore
+        conn = get_db_connection()
+        if conn is None:
+            return
+        with conn:
+            with conn.cursor() as cur:
+                # Resolve user_id for this slug (owner preferred)
+                cur.execute(
+                    """
+                    SELECT u.id, u.plan_tier, u.trial_credits_remaining
+                    FROM   operator_users u
+                    LEFT JOIN team_members tm
+                           ON tm.user_id = u.id AND tm.tenant_slug = %s
+                    WHERE  u.creator_slug = %s
+                    ORDER BY CASE WHEN tm.role = 'owner' THEN 0 ELSE 1 END, u.id
+                    LIMIT 1
+                    """,
+                    (slug, slug),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return
+                user_id, plan_tier, _trial_left = row
+                total_credits = 1 + outbound_credits  # 1 inbound + N outbound
+
+                if plan_tier == "trial":
+                    cur.execute(
+                        """UPDATE operator_users
+                           SET trial_credits_remaining = GREATEST(0, trial_credits_remaining - %s)
+                           WHERE id=%s""",
+                        (total_credits, user_id),
+                    )
+
+                cur.execute(
+                    """
+                    INSERT INTO operator_credit_usage
+                        (operator_user_id, creator_slug, period_start, credits_included, credits_used)
+                    VALUES (%s, %s, CURRENT_DATE, 0, %s)
+                    ON CONFLICT (operator_user_id, period_start)
+                    DO UPDATE SET credits_used = operator_credit_usage.credits_used + EXCLUDED.credits_used,
+                                  updated_at = NOW()
+                    """,
+                    (user_id, slug, total_credits),
+                )
+
+                cur.execute(
+                    """
+                    INSERT INTO credit_events
+                        (operator_user_id, creator_slug, kind, credits, source_id)
+                    VALUES (%s, %s, 'sms_inbound', -1, %s),
+                           (%s, %s, 'sms_outbound', %s, %s)
+                    """,
+                    (user_id, slug, source,
+                     user_id, slug, -outbound_credits, source),
+                )
+        conn.close()
+    except Exception:
+        logging.warning("consume_message_credits: DB write failed for slug=%s", slug)
 
 
 @app.route("/twilio/webhook", methods=["POST"])

@@ -68,6 +68,7 @@ def create_app() -> Flask:
     from .routes.team import team_bp
     from .routes.smb_portal import smb_portal_bp
     from .routes.api import api_bp
+    from .routes.billing import billing_bp
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(shows_bp)
@@ -75,6 +76,7 @@ def create_app() -> Flask:
     app.register_blueprint(team_bp)
     app.register_blueprint(smb_portal_bp)
     app.register_blueprint(api_bp)
+    app.register_blueprint(billing_bp)
 
     # ── CSRF protection for state-changing API requests ────────────────────
     # All /api/* POST/PUT/PATCH/DELETE requests must originate from an allowed
@@ -82,7 +84,10 @@ def create_app() -> Flask:
     # requests from the Railway host itself are also permitted.
     # This rejects any cross-site request forgery attempt where a malicious
     # page tries to trigger a credentialed POST to our API.
-    _CSRF_EXEMPT_PATHS = {"/api/auth/google/callback"}
+    # /api/billing/webhook is exempt because it's a server-to-server call from
+    # Stripe — they never send an Origin header, and we authenticate via
+    # Stripe-Signature instead.
+    _CSRF_EXEMPT_PATHS = {"/api/auth/google/callback", "/api/billing/webhook"}
     _CSRF_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
     _ALLOWED_ORIGIN_PATTERNS = [
         re.compile(r"^https?://localhost(:\d+)?$"),
