@@ -193,10 +193,13 @@ _QUIZ_MIGRATIONS = (
         blast_draft_id BIGINT,
         context_note   TEXT NOT NULL,
         created_at     TIMESTAMPTZ DEFAULT NOW(),
-        expires_at     TIMESTAMPTZ
+        expires_at     TIMESTAMPTZ,
+        creator_slug   TEXT DEFAULT NULL
     )
     """,
+    "ALTER TABLE blast_context_sessions ADD COLUMN IF NOT EXISTS creator_slug TEXT DEFAULT NULL",
     "CREATE INDEX IF NOT EXISTS idx_blast_context_sessions_active ON blast_context_sessions (expires_at, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_blast_context_sessions_slug_active ON blast_context_sessions (creator_slug, expires_at, created_at)",
 )
 
 # Idempotent alters + audit log (runs after base live_shows DDL).

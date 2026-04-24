@@ -137,6 +137,19 @@ def execute_blast(draft_id: int):
     total = len(phones)
     mark_blast_started(draft_id, total)
 
+    # Create the blast_context_sessions row NOW — before the send loop — so
+    # fans who reply while the blast is still in-flight (often the fastest
+    # repliers!) already have the AI context in place. Previously this ran
+    # only after the loop finished, leaving a multi-minute dead zone on
+    # large sends. creator_slug is stamped so get_active_blast_context() can
+    # do tenant-scoped lookups and never leak across creators.
+    _extra_note = (draft.get("blast_context_note") or "").strip()
+    if body:
+        _combined = f"The blast message that was sent: \"{body}\""
+        if _extra_note:
+            _combined += f"\n\nAdditional context from the operator: {_extra_note}"
+        _create_blast_context_session(draft_id, _combined, creator_slug=blast_owner_slug)
+
     sent = 0
     failed = 0
     sent_phones: list[str] = []
@@ -243,16 +256,8 @@ def execute_blast(draft_id: int):
             correct_answer=draft["quiz_correct_answer"],
         )
 
-    # Always create a blast_context_sessions row so inbound replies get AI context.
-    # The context includes the blast body so the AI knows what was sent, plus any
-    # optional operator note for additional background.
-    blast_body = (draft.get("body") or "").strip()
-    extra_note = (draft.get("blast_context_note") or "").strip()
-    if blast_body:
-        combined = f"The blast message that was sent: \"{blast_body}\""
-        if extra_note:
-            combined += f"\n\nAdditional context from the operator: {extra_note}"
-        _create_blast_context_session(draft_id, combined)
+    # (Blast context session is created BEFORE the send loop above so replies
+    # during the send window are already covered — no post-loop insert here.)
 
     # Update tracked_links.sent_to with the number of recipients this blast reached
     if tracked_link_slug and sent > 0:
@@ -306,8 +311,24 @@ def _create_quiz_session(
         logger.exception("_create_quiz_session failed: %s", e)
 
 
-def _create_blast_context_session(blast_draft_id: int, context_note: str) -> None:
-    """Insert a blast_context_sessions row so inbound replies get soft AI context."""
+def _create_blast_context_session(
+    blast_draft_id: int,
+    context_note: str,
+    creator_slug: str | None = None,
+) -> None:
+    """Insert a blast_context_sessions row so inbound replies get soft AI context.
+
+    creator_slug should always be provided for tenant isolation — without it
+    every tenant's fans would race to see whichever row is globally most
+    recent. We keep it optional to stay backward-compatible with any legacy
+    caller, but log a WARNING so we notice in Railway.
+    """
+    if not creator_slug:
+        logger.warning(
+            "_create_blast_context_session: draft %s has no creator_slug — "
+            "row will be globally visible (cross-tenant leak risk)",
+            blast_draft_id,
+        )
     try:
         from .db import get_conn
         conn = get_conn()
@@ -316,15 +337,15 @@ def _create_blast_context_session(blast_draft_id: int, context_note: str) -> Non
                 cur.execute(
                     """
                     INSERT INTO blast_context_sessions
-                      (blast_draft_id, context_note, expires_at)
-                    VALUES (%s, %s, NOW() + INTERVAL '24 hours')
+                      (blast_draft_id, context_note, creator_slug, expires_at)
+                    VALUES (%s, %s, %s, NOW() + INTERVAL '24 hours')
                     """,
-                    (blast_draft_id, context_note),
+                    (blast_draft_id, context_note, creator_slug),
                 )
         conn.close()
         logger.info(
-            "_create_blast_context_session: created for blast_draft_id=%s",
-            blast_draft_id,
+            "_create_blast_context_session: created for blast_draft_id=%s slug=%r",
+            blast_draft_id, creator_slug,
         )
     except Exception as e:
         logger.exception("_create_blast_context_session failed: %s", e)

@@ -155,6 +155,24 @@ def init_db():
         """,
         "CREATE INDEX IF NOT EXISTS idx_blast_context_sessions_active ON blast_context_sessions (expires_at, created_at)",
 
+        # ── Multi-tenant scoping on blast_context_sessions ────────────────
+        # Early prod was single-tenant so this table was unscoped. Once more
+        # than one creator could send a blast, get_active_blast_context()
+        # would return whichever tenant's row was most recent — leaking
+        # e.g. Zarna's pop-quiz into a WSCC fan's reply. Add creator_slug,
+        # backfill from the originating draft (falling back to 'zarna' for
+        # truly orphaned legacy rows), and index it for the scoped read.
+        "ALTER TABLE blast_context_sessions ADD COLUMN IF NOT EXISTS creator_slug TEXT DEFAULT NULL",
+        """
+        UPDATE blast_context_sessions s
+        SET    creator_slug = COALESCE(d.creator_slug, s.creator_slug)
+        FROM   blast_drafts d
+        WHERE  d.id = s.blast_draft_id
+          AND  (s.creator_slug IS NULL OR s.creator_slug = '')
+        """,
+        "UPDATE blast_context_sessions SET creator_slug='zarna' WHERE creator_slug IS NULL OR creator_slug=''",
+        "CREATE INDEX IF NOT EXISTS idx_blast_context_sessions_slug_active ON blast_context_sessions (creator_slug, expires_at, created_at)",
+
         # ── Analytics columns on blast_drafts ──────────────────────────────
         # started_at: recorded before the send loop begins so reply attribution
         # uses the blast START time, not the end time (sent_at).

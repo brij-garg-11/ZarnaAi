@@ -364,13 +364,21 @@ def slicktext_webhook():
         logging.exception("Quiz intercept failed — continuing with normal AI reply")
 
     # Check for active blast context — soft background framing if no quiz is active.
+    # The Zarna performer webhook only ever handles traffic for Zarna's Twilio
+    # / SlickText numbers (SMB tenants are firewalled and routed to the SMB
+    # blueprint), so the performer slug is always "zarna". ZARNA_CREATOR_SLUG
+    # is an env-level escape hatch for staging / future multi-performer setups.
     blast_ctx = None
     if not quiz_ctx:
         try:
-            context_note = get_active_blast_context()
+            zarna_slug = os.getenv("ZARNA_CREATOR_SLUG", "zarna")
+            context_note = get_active_blast_context(creator_slug=zarna_slug)
             if context_note:
                 blast_ctx = build_blast_context_prompt(context_note)
-                logging.info("Blast context injected for ...%s", phone_number[-4:] if phone_number else "?")
+                logging.info(
+                    "Blast context injected for ...%s (slug=%s)",
+                    phone_number[-4:] if phone_number else "?", zarna_slug,
+                )
         except Exception:
             logging.exception("Blast context lookup failed — continuing with normal AI reply")
 
@@ -614,13 +622,18 @@ def twilio_webhook():
         logging.exception("Quiz intercept failed — continuing with normal AI reply")
 
     # Check for active blast context — soft background framing if no quiz is active.
+    # (See /webhook/slicktext above for why we always use the Zarna slug here.)
     blast_ctx = None
     if not quiz_ctx:
         try:
-            context_note = get_active_blast_context()
+            zarna_slug = os.getenv("ZARNA_CREATOR_SLUG", "zarna")
+            context_note = get_active_blast_context(creator_slug=zarna_slug)
             if context_note:
                 blast_ctx = build_blast_context_prompt(context_note)
-                logging.info("Blast context injected for ...%s", phone_number[-4:] if phone_number else "?")
+                logging.info(
+                    "Blast context injected for ...%s (slug=%s)",
+                    phone_number[-4:] if phone_number else "?", zarna_slug,
+                )
         except Exception:
             logging.exception("Blast context lookup failed — continuing with normal AI reply")
 

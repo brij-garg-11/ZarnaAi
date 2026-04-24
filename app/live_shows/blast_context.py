@@ -6,6 +6,13 @@ is created in the operator DB. On every inbound fan message within the 24h windo
 get_active_blast_context() returns the most recent active note so it can be injected
 softly into the AI prompt as background framing (not an override — the AI just knows
 what the blast was about and can respond more intelligently).
+
+Multi-tenant note
+-----------------
+Every active row is tagged with the creator_slug of the tenant that sent the
+blast. Callers MUST pass creator_slug so a WSCC fan's reply cannot pick up
+Zarna's context (and vice-versa). The unscoped path is kept for backward
+compat but emits a WARNING so stray callers show up in Railway logs.
 """
 
 from __future__ import annotations
@@ -25,26 +32,50 @@ def _conn():
     return psycopg2.connect(url.replace("postgres://", "postgresql://", 1))
 
 
-def get_active_blast_context() -> Optional[str]:
+def get_active_blast_context(creator_slug: Optional[str] = None) -> Optional[str]:
     """
-    Return the context_note from the most recent active blast_context_sessions row, or None.
+    Return the context_note from the most recent active blast_context_sessions row.
 
     Active = not yet expired (or no expiry set).
+
+    creator_slug: when provided, restrict the lookup to that tenant. This is
+    the correct call path for any production webhook. The unscoped branch is
+    only kept so older code paths don't crash — it is NEVER safe in a
+    multi-tenant deployment because it returns whichever row is globally
+    most recent.
     """
     c = _conn()
     if not c:
         return None
     try:
         with c.cursor() as cur:
-            cur.execute(
-                """
-                SELECT context_note
-                FROM   blast_context_sessions
-                WHERE  (expires_at IS NULL OR expires_at > NOW())
-                ORDER BY created_at DESC
-                LIMIT 1
-                """
-            )
+            if creator_slug:
+                cur.execute(
+                    """
+                    SELECT context_note
+                    FROM   blast_context_sessions
+                    WHERE  (expires_at IS NULL OR expires_at > NOW())
+                      AND  creator_slug = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (creator_slug,),
+                )
+            else:
+                _logger.warning(
+                    "get_active_blast_context called without creator_slug — "
+                    "this is cross-tenant unsafe and should only happen during "
+                    "legacy code paths. Fix the caller to pass a slug."
+                )
+                cur.execute(
+                    """
+                    SELECT context_note
+                    FROM   blast_context_sessions
+                    WHERE  (expires_at IS NULL OR expires_at > NOW())
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """
+                )
             row = cur.fetchone()
             return row[0] if row else None
     except Exception:

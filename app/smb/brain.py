@@ -344,6 +344,23 @@ def _conversational_reply(
         if blast_context:
             prompt += blast_context + "\n"
 
+    # Also pull any active blast_context_sessions row scoped to this tenant.
+    # That's the table the Lovable dashboard's "Blast Type" helper writes into
+    # (Pop Quiz / Contest / Q&A templates live there). Without this the SMB
+    # inbound path was silently dropping the context an operator typed in.
+    try:
+        from app.live_shows.blast_context import (
+            get_active_blast_context,
+            build_blast_context_prompt,
+        )
+        slug = getattr(tenant, "slug", None)
+        if slug:
+            note = get_active_blast_context(creator_slug=slug)
+            if note:
+                prompt += build_blast_context_prompt(note) + "\n"
+    except Exception:
+        logger.debug("SMB brain: blast_context_sessions lookup failed", exc_info=True)
+
     # Add recent conversation so the AI can follow the thread
     if history:
         convo_lines = "\n".join(
