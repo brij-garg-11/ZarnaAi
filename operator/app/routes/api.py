@@ -2249,6 +2249,23 @@ def billing_status():
     account_type = user.get("account_type") or "performer"
     month = date.today().strftime("%Y-%m")
 
+    # Fetch stripe_customer_id — not included in current_user() to keep that
+    # query light, so grab it separately here.
+    stripe_customer_id = None
+    try:
+        _sc_conn = get_conn()
+        with _sc_conn.cursor() as _cur:
+            _cur.execute(
+                "SELECT stripe_customer_id FROM operator_users WHERE id=%s",
+                (user["id"],),
+            )
+            _scr = _cur.fetchone()
+            if _scr:
+                stripe_customer_id = _scr[0]
+        _sc_conn.close()
+    except Exception:
+        pass
+
     status = get_credit_status(user_id=user["id"])
     plan_tier = status.get("plan_tier") or "trial"
     plan = ALL_PLANS.get(plan_tier)
@@ -2328,6 +2345,7 @@ def billing_status():
             billing_cycle=(plan and "monthly") or None,
             is_trial=status.get("is_trial", False),
             unlimited=status.get("unlimited", False),
+            stripe_customer_id=stripe_customer_id,
             credits_used=status.get("used", 0),
             credits_total=status.get("total", 0),
             credits_included=status.get("included", 0),
@@ -3394,16 +3412,54 @@ def admin_exit_project():
 @api_bp.route("/api/admin/current-project")
 @login_required
 def admin_current_project():
-    """Returns which project the super-admin is currently viewing, if any."""
+    """Returns which project the super-admin is currently viewing, if any.
+
+    The frontend (account-type.tsx) expects `viewing_as` to be an object with
+    { slug, display_name, account_type, logo_url, location, subscriber_count }.
+    """
     from flask import session
     user = current_user()
     if not user or not user.get("is_super_admin"):
         return jsonify(viewing_as=None)
     slug = session.get("viewing_as")
-    account_type = session.get("viewing_as_account_type")
+    account_type = session.get("viewing_as_account_type") or "performer"
+    if not slug:
+        return jsonify(viewing_as=None, is_super_admin=True)
+
+    # Enrich with display metadata from bot_configs so the header shows
+    # the project name rather than a raw slug.
+    display_name = slug
+    logo_url = None
+    location = None
+    subscriber_count = None
+    try:
+        _conn = get_conn()
+        with _conn.cursor() as _cur:
+            _cur.execute(
+                """SELECT bc.display_name, bc.logo_url, ou.location
+                   FROM bot_configs bc
+                   LEFT JOIN operator_users ou ON ou.id = bc.operator_user_id
+                   WHERE bc.creator_slug = %s LIMIT 1""",
+                (slug,),
+            )
+            _row = _cur.fetchone()
+            if _row:
+                display_name = _row[0] or slug
+                logo_url = _row[1]
+                location = _row[2]
+        _conn.close()
+    except Exception:
+        pass
+
     return jsonify(
-        viewing_as=slug,
-        viewing_as_account_type=account_type,
+        viewing_as={
+            "slug": slug,
+            "display_name": display_name,
+            "account_type": account_type,
+            "logo_url": logo_url,
+            "location": location,
+            "subscriber_count": subscriber_count,
+        },
         is_super_admin=True,
     )
 
