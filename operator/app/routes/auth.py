@@ -623,9 +623,11 @@ def google_callback():
                         (user["id"],),
                     )
             conn.close()
-            # If they have no creator_slug yet, they still need onboarding
+            # No bot yet — send them to the home page where they'll see the
+            # site with a "Log out" button and a "Create a bot" CTA.
+            # Onboarding only starts when they choose to click that.
             if not user.get("creator_slug"):
-                return redirect(f"{frontend_url}/onboarding")
+                return redirect(f"{frontend_url}/")
             return redirect(f"{frontend_url}/dashboard")
 
         # Check for a pending invite first — this is the legitimate re-entry path
@@ -706,7 +708,7 @@ def google_callback():
             session["operator_user_id"] = new_id
             session.permanent = True
             conn.close()
-            return redirect(f"{frontend_url}/onboarding")
+            return redirect(f"{frontend_url}/")
 
         # Unknown user, no invite, not a signup intent
         conn.close()
