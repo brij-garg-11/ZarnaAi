@@ -613,9 +613,50 @@ def google_callback():
             user = cur.fetchone()
 
         if user:
-            # Scenario 1: existing account — log in normally
+            # Scenario 1: existing account — log in normally.
+            # But first check for a pending invite — the user may have been
+            # re-invited to a project after being removed. Existing accounts
+            # skip the invite-only Scenario 2 path, so we handle it here.
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                cur.execute(
+                    """SELECT * FROM operator_invites
+                       WHERE email=%s AND accepted_at IS NULL
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (email,),
+                )
+                pending_invite = cur.fetchone()
+
             session["operator_user_id"] = user["id"]
             session.permanent = True
+
+            if pending_invite:
+                # Accept the invite: restore slug + team membership
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """UPDATE operator_users
+                               SET creator_slug=%s, account_type=%s, last_login_at=NOW()
+                               WHERE id=%s""",
+                            (pending_invite["creator_slug"],
+                             pending_invite["account_type"],
+                             user["id"]),
+                        )
+                        cur.execute(
+                            "UPDATE operator_invites SET accepted_at=NOW() WHERE id=%s",
+                            (pending_invite["id"],),
+                        )
+                        cur.execute(
+                            """INSERT INTO team_members
+                                   (tenant_slug, user_id, role, invited_at, accepted_at)
+                               VALUES (%s, %s, 'member', %s, NOW())
+                               ON CONFLICT (tenant_slug, user_id) DO UPDATE
+                               SET accepted_at=NOW()""",
+                            (pending_invite["creator_slug"], user["id"],
+                             pending_invite["created_at"]),
+                        )
+                conn.close()
+                return redirect(f"{frontend_url}/dashboard")
+
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
