@@ -641,7 +641,7 @@ def google_callback():
 
         if existing_any and not existing_any["is_active"]:
             conn.close()
-            return redirect(f"{frontend_url}/login?error=not_authorized")
+            return redirect(f"{frontend_url}/login?error=access_revoked")
 
         # No existing active account — check for a pending invite first
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
