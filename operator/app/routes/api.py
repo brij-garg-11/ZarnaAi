@@ -3676,13 +3676,22 @@ def team_members():
             ]
 
             # Surface seat limit so the UI can show "3 of 4 used" correctly.
+            # Try owner role first; fall back to any member of this slug so that
+            # grandfathered accounts without an explicit owner row still get
+            # their real plan tier instead of defaulting to "trial".
             cur.execute(
                 "SELECT plan_tier FROM operator_users WHERE creator_slug=%s AND id=( "
                 "SELECT user_id FROM team_members WHERE tenant_slug=%s AND role='owner' LIMIT 1)",
                 (slug, slug),
             )
             owner_row = cur.fetchone()
-            owner_plan = owner_row["plan_tier"] if owner_row else "trial"
+            if not owner_row:
+                cur.execute(
+                    "SELECT plan_tier FROM operator_users WHERE creator_slug=%s LIMIT 1",
+                    (slug,),
+                )
+                owner_row = cur.fetchone()
+            owner_plan = (owner_row["plan_tier"] if owner_row else None) or "trial"
 
         try:
             from ..billing.plans import get_plan_seats
@@ -3768,13 +3777,22 @@ def team_invite():
             with conn.cursor() as cur:
                 # Seat enforcement — check plan tier's seat limit vs current
                 # members + pending invites. None = unlimited.
+                # Try owner role first; fall back to any user with this slug so
+                # that grandfathered accounts without an explicit owner row
+                # still get their real plan tier instead of defaulting to "trial".
                 cur.execute(
                     "SELECT plan_tier FROM operator_users WHERE id=( "
                     "SELECT user_id FROM team_members WHERE tenant_slug=%s AND role='owner' LIMIT 1)",
                     (slug,),
                 )
                 owner_row = cur.fetchone()
-                owner_plan = owner_row[0] if owner_row else "trial"
+                if not owner_row:
+                    cur.execute(
+                        "SELECT plan_tier FROM operator_users WHERE creator_slug=%s LIMIT 1",
+                        (slug,),
+                    )
+                    owner_row = cur.fetchone()
+                owner_plan = (owner_row[0] if owner_row else None) or "trial"
                 try:
                     from ..billing.plans import get_plan_seats
                     seats_limit = get_plan_seats(owner_plan)
