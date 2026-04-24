@@ -110,36 +110,69 @@ def get_overview_stats(creator_slug: str = "") -> dict:
 
 # ── Audience count (no PII) ────────────────────────────────────────────────
 
-def count_audience(audience_type: str, audience_filter: str, sample_pct: int = 100) -> int:
-    """Count how many subscribers match the given filters — no phones returned."""
+def _slug_clause(slug: str | None, table_alias: str = "") -> tuple[str, list]:
+    """Return a ('AND <alias>creator_slug = %s', [slug]) pair when ``slug`` is
+    set, otherwise ('', []). ``table_alias`` is optional (e.g. 'c.' for a
+    joined query). Keeps multi-tenant filtering DRY across the audience
+    helpers below."""
+    if not slug:
+        return "", []
+    prefix = f"{table_alias}" if table_alias else ""
+    return f" AND {prefix}creator_slug = %s", [slug]
+
+
+def count_audience(
+    audience_type: str,
+    audience_filter: str,
+    sample_pct: int = 100,
+    creator_slug: str | None = None,
+) -> int:
+    """Count how many subscribers match the given filters — no phones returned.
+
+    ``creator_slug`` scopes the query to a single tenant. ``None`` returns
+    cross-tenant totals (super-admin only)."""
+    slug_sql, slug_params = _slug_clause(creator_slug)
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             if audience_type == "tag" and audience_filter:
                 cur.execute(
-                    "SELECT COUNT(DISTINCT phone_number) FROM contacts WHERE %s = ANY(fan_tags)",
-                    (audience_filter.lower(),),
+                    "SELECT COUNT(DISTINCT phone_number) FROM contacts "
+                    "WHERE %s = ANY(fan_tags)" + slug_sql,
+                    tuple([audience_filter.lower(), *slug_params]),
                 )
             elif audience_type == "location" and audience_filter:
                 cur.execute(
-                    "SELECT COUNT(DISTINCT phone_number) FROM contacts WHERE LOWER(fan_location) LIKE %s",
-                    (f"%{audience_filter.lower()}%",),
+                    "SELECT COUNT(DISTINCT phone_number) FROM contacts "
+                    "WHERE LOWER(fan_location) LIKE %s" + slug_sql,
+                    tuple([f"%{audience_filter.lower()}%", *slug_params]),
                 )
             elif audience_type == "show" and audience_filter:
                 try:
                     show_id = int(audience_filter)
-                    cur.execute(
-                        "SELECT COUNT(DISTINCT phone_number) FROM live_show_signups WHERE show_id = %s",
-                        (show_id,),
-                    )
+                    # Signups join through live_shows to enforce slug match.
+                    if creator_slug:
+                        cur.execute(
+                            """SELECT COUNT(DISTINCT lss.phone_number)
+                               FROM   live_show_signups lss
+                               JOIN   live_shows ls ON ls.id = lss.show_id
+                               WHERE  lss.show_id = %s AND ls.creator_slug = %s""",
+                            (show_id, creator_slug),
+                        )
+                    else:
+                        cur.execute(
+                            "SELECT COUNT(DISTINCT phone_number) FROM live_show_signups WHERE show_id = %s",
+                            (show_id,),
+                        )
                 except (ValueError, TypeError):
                     cur.execute("SELECT 0")
             elif audience_type == "tier" and audience_filter:
                 valid_tiers = {"superfan", "engaged", "lurker", "dormant"}
                 if audience_filter.lower() in valid_tiers:
                     cur.execute(
-                        "SELECT COUNT(DISTINCT phone_number) FROM contacts WHERE fan_tier = %s",
-                        (audience_filter.lower(),),
+                        "SELECT COUNT(DISTINCT phone_number) FROM contacts "
+                        "WHERE fan_tier = %s" + slug_sql,
+                        tuple([audience_filter.lower(), *slug_params]),
                     )
                 else:
                     cur.execute("SELECT 0")
@@ -147,7 +180,7 @@ def count_audience(audience_type: str, audience_filter: str, sample_pct: int = 1
                 import json
                 try:
                     filters = json.loads(audience_filter)
-                    clauses, params = _build_compound_clauses(filters)
+                    clauses, params = _build_compound_clauses(filters, creator_slug=creator_slug)
                     cur.execute(
                         f"SELECT COUNT(DISTINCT phone_number) FROM contacts WHERE {' AND '.join(clauses)}",
                         params,
@@ -166,13 +199,17 @@ def count_audience(audience_type: str, audience_filter: str, sample_pct: int = 1
                          SELECT phone_number FROM contacts
                          WHERE engagement_score > 0
                            AND phone_number NOT LIKE 'whatsapp:%%'
+                         """ + slug_sql + """
                          ORDER BY engagement_score DESC
                          LIMIT %s
                        ) sub""",
-                    (n,),
+                    tuple([*slug_params, n]),
                 )
             else:
-                cur.execute("SELECT COUNT(DISTINCT phone_number) FROM contacts")
+                cur.execute(
+                    "SELECT COUNT(DISTINCT phone_number) FROM contacts WHERE TRUE" + slug_sql,
+                    tuple(slug_params),
+                )
             total = cur.fetchone()[0]
 
         if audience_type == "random" and 0 < sample_pct < 100:
@@ -182,8 +219,17 @@ def count_audience(audience_type: str, audience_filter: str, sample_pct: int = 1
         conn.close()
 
 
-def get_audience_phones(audience_type: str, audience_filter: str, sample_pct: int = 100) -> list[str]:
-    """Fetch phone numbers for blast — internal use only, never sent to frontend."""
+def get_audience_phones(
+    audience_type: str,
+    audience_filter: str,
+    sample_pct: int = 100,
+    creator_slug: str | None = None,
+) -> list[str]:
+    """Fetch phone numbers for blast — internal use only, never sent to frontend.
+
+    ``creator_slug`` restricts recipients to the caller's tenant. ``None`` keeps
+    the historical cross-tenant behaviour (super-admin only)."""
+    slug_sql, slug_params = _slug_clause(creator_slug)
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -191,29 +237,41 @@ def get_audience_phones(audience_type: str, audience_filter: str, sample_pct: in
 
             if audience_type == "tag" and audience_filter:
                 cur.execute(
-                    "SELECT DISTINCT phone_number FROM contacts WHERE %s = ANY(fan_tags) AND phone_number NOT LIKE 'whatsapp:%%'",
-                    (audience_filter.lower(),),
+                    "SELECT DISTINCT phone_number FROM contacts "
+                    "WHERE %s = ANY(fan_tags) AND phone_number NOT LIKE 'whatsapp:%%'" + slug_sql,
+                    tuple([audience_filter.lower(), *slug_params]),
                 )
             elif audience_type == "location" and audience_filter:
                 cur.execute(
-                    "SELECT DISTINCT phone_number FROM contacts WHERE LOWER(fan_location) LIKE %s AND phone_number NOT LIKE 'whatsapp:%%'",
-                    (f"%{audience_filter.lower()}%",),
+                    "SELECT DISTINCT phone_number FROM contacts "
+                    "WHERE LOWER(fan_location) LIKE %s AND phone_number NOT LIKE 'whatsapp:%%'" + slug_sql,
+                    tuple([f"%{audience_filter.lower()}%", *slug_params]),
                 )
             elif audience_type == "show" and audience_filter:
                 try:
                     show_id = int(audience_filter)
-                    cur.execute(
-                        "SELECT DISTINCT phone_number FROM live_show_signups WHERE show_id = %s",
-                        (show_id,),
-                    )
+                    if creator_slug:
+                        cur.execute(
+                            """SELECT DISTINCT lss.phone_number
+                               FROM   live_show_signups lss
+                               JOIN   live_shows ls ON ls.id = lss.show_id
+                               WHERE  lss.show_id = %s AND ls.creator_slug = %s""",
+                            (show_id, creator_slug),
+                        )
+                    else:
+                        cur.execute(
+                            "SELECT DISTINCT phone_number FROM live_show_signups WHERE show_id = %s",
+                            (show_id,),
+                        )
                 except (ValueError, TypeError):
                     cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE FALSE")
             elif audience_type == "tier" and audience_filter:
                 valid_tiers = {"superfan", "engaged", "lurker", "dormant"}
                 if audience_filter.lower() in valid_tiers:
                     cur.execute(
-                        "SELECT DISTINCT phone_number FROM contacts WHERE fan_tier = %s AND phone_number NOT LIKE 'whatsapp:%%'",
-                        (audience_filter.lower(),),
+                        "SELECT DISTINCT phone_number FROM contacts "
+                        "WHERE fan_tier = %s AND phone_number NOT LIKE 'whatsapp:%%'" + slug_sql,
+                        tuple([audience_filter.lower(), *slug_params]),
                     )
                 else:
                     cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE FALSE")
@@ -221,7 +279,7 @@ def get_audience_phones(audience_type: str, audience_filter: str, sample_pct: in
                 import json
                 try:
                     filters = json.loads(audience_filter)
-                    clauses, params = _build_compound_clauses(filters)
+                    clauses, params = _build_compound_clauses(filters, creator_slug=creator_slug)
                     cur.execute(
                         f"SELECT DISTINCT phone_number FROM contacts WHERE {' AND '.join(clauses)}",
                         params,
@@ -237,12 +295,17 @@ def get_audience_phones(audience_type: str, audience_filter: str, sample_pct: in
                     """SELECT phone_number FROM contacts
                        WHERE engagement_score > 0
                          AND phone_number NOT LIKE 'whatsapp:%%'
+                       """ + slug_sql + """
                        ORDER BY engagement_score DESC
                        LIMIT %s""",
-                    (n,),
+                    tuple([*slug_params, n]),
                 )
             else:
-                cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE phone_number NOT LIKE 'whatsapp:%'")
+                cur.execute(
+                    "SELECT DISTINCT phone_number FROM contacts "
+                    "WHERE phone_number NOT LIKE 'whatsapp:%'" + slug_sql,
+                    tuple(slug_params),
+                )
 
             phones = [r[0] for r in cur.fetchall() if r[0] not in optout_set]
 
@@ -255,14 +318,21 @@ def get_audience_phones(audience_type: str, audience_filter: str, sample_pct: in
         conn.close()
 
 
-def _build_compound_clauses(filters: list[dict]) -> tuple[list[str], list]:
+def _build_compound_clauses(
+    filters: list[dict],
+    creator_slug: str | None = None,
+) -> tuple[list[str], list]:
     """
     Convert a list of filter dicts into SQL WHERE clauses (AND logic).
     Each filter: {"type": "tier"|"tag"|"location", "value": "..."}
-    Returns (clauses, params) — always includes the whatsapp exclusion.
+    Returns (clauses, params) — always includes the whatsapp exclusion and,
+    when ``creator_slug`` is provided, a tenant scope.
     """
     clauses = ["phone_number NOT LIKE 'whatsapp:%%'"]
     params: list = []
+    if creator_slug:
+        clauses.append("creator_slug = %s")
+        params.append(creator_slug)
     valid_tiers = {"superfan", "engaged", "lurker", "dormant"}
     for f in filters:
         ftype = (f.get("type") or "").strip()
@@ -288,15 +358,25 @@ def _get_optouts(cur) -> set:
 
 # ── Audience tags list ──────────────────────────────────────────────────────
 
-def get_all_tags() -> list[str]:
+def get_all_tags(creator_slug: str | None = None) -> list[str]:
+    """Distinct fan_tags visible to the caller. Tenant-scoped when
+    ``creator_slug`` is provided."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT DISTINCT UNNEST(fan_tags) as tag FROM contacts
-                WHERE fan_tags IS NOT NULL AND fan_tags != '{}'
-                ORDER BY tag
-            """)
+            if creator_slug:
+                cur.execute("""
+                    SELECT DISTINCT UNNEST(fan_tags) as tag FROM contacts
+                    WHERE fan_tags IS NOT NULL AND fan_tags != '{}'
+                      AND creator_slug = %s
+                    ORDER BY tag
+                """, (creator_slug,))
+            else:
+                cur.execute("""
+                    SELECT DISTINCT UNNEST(fan_tags) as tag FROM contacts
+                    WHERE fan_tags IS NOT NULL AND fan_tags != '{}'
+                    ORDER BY tag
+                """)
             return [r[0] for r in cur.fetchall()]
     finally:
         conn.close()
@@ -304,32 +384,52 @@ def get_all_tags() -> list[str]:
 
 # ── Blast drafts ───────────────────────────────────────────────────────────
 
-def list_blast_drafts() -> list[dict]:
+def list_blast_drafts(creator_slug: str | None = None) -> list[dict]:
+    """Return recent blast drafts.
+
+    When ``creator_slug`` is provided, results are scoped to that tenant so
+    team members only see their own project's drafts. ``None`` returns
+    everything — intended for super-admin / cross-tenant views.
+    """
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute("""
+            base = """
                 SELECT id, name, body, channel, audience_type, audience_filter,
                        audience_sample_pct, status, scheduled_at, sent_at,
                        sent_count, failed_count, total_recipients, created_by, created_at,
+                       COALESCE(creator_slug, '')          AS creator_slug,
                        COALESCE(media_url, '')             AS media_url,
                        COALESCE(link_url, '')              AS link_url,
                        COALESCE(tracked_link_slug, '')     AS tracked_link_slug,
                        COALESCE(is_quiz, FALSE)            AS is_quiz,
                        COALESCE(quiz_correct_answer, '')   AS quiz_correct_answer,
                        COALESCE(blast_context_note, '')    AS blast_context_note
-                FROM blast_drafts ORDER BY updated_at DESC LIMIT 100
-            """)
+                FROM blast_drafts
+            """
+            if creator_slug:
+                cur.execute(base + " WHERE creator_slug = %s ORDER BY updated_at DESC LIMIT 100",
+                            (creator_slug,))
+            else:
+                cur.execute(base + " ORDER BY updated_at DESC LIMIT 100")
             return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
 
 
-def get_blast_draft(draft_id: int) -> dict | None:
+def get_blast_draft(draft_id: int, creator_slug: str | None = None) -> dict | None:
+    """Fetch one draft. If ``creator_slug`` is provided, returns None for
+    drafts belonging to a different tenant."""
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute("SELECT * FROM blast_drafts WHERE id = %s", (draft_id,))
+            if creator_slug:
+                cur.execute(
+                    "SELECT * FROM blast_drafts WHERE id = %s AND creator_slug = %s",
+                    (draft_id, creator_slug),
+                )
+            else:
+                cur.execute("SELECT * FROM blast_drafts WHERE id = %s", (draft_id,))
             row = cur.fetchone()
             return dict(row) if row else None
     finally:
@@ -342,6 +442,7 @@ def save_blast_draft(*, name: str, body: str, channel: str, audience_type: str,
                      tracked_link_slug: str = "",
                      is_quiz: bool = False, quiz_correct_answer: str = "",
                      blast_context_note: str = "",
+                     creator_slug: str | None = None,
                      draft_id: int | None = None) -> int:
     conn = get_conn()
     try:
@@ -366,11 +467,13 @@ def save_blast_draft(*, name: str, body: str, channel: str, audience_type: str,
                         INSERT INTO blast_drafts
                           (name, body, channel, audience_type, audience_filter,
                            audience_sample_pct, media_url, link_url, tracked_link_slug,
-                           is_quiz, quiz_correct_answer, blast_context_note, status, created_by)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'draft',%s) RETURNING id
+                           is_quiz, quiz_correct_answer, blast_context_note, status,
+                           created_by, creator_slug)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'draft',%s,%s) RETURNING id
                     """, (name, body, channel, audience_type, audience_filter, sample_pct,
                           media_url, link_url, tracked_link_slug,
-                          is_quiz, quiz_correct_answer, blast_context_note, created_by))
+                          is_quiz, quiz_correct_answer, blast_context_note,
+                          created_by, (creator_slug or None)))
                     return cur.fetchone()[0]
     finally:
         conn.close()

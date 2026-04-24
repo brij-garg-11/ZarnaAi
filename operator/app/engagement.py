@@ -95,20 +95,31 @@ def top_engaged(*, slug: Optional[str] = None, limit: int = 100) -> list[dict]:
     try:
         import psycopg2.extras
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            # contacts has no creator_slug column in this codebase, so the
-            # caller's slug just scopes us to "all" for now. If/when multi-
-            # tenant contact tables land this switches to a WHERE slug=%s.
-            cur.execute(
-                """
-                SELECT phone_number, fan_tier, engagement_score, last_replied_at
-                FROM   contacts
-                WHERE  engagement_score > 0
-                  AND  phone_number NOT LIKE 'whatsapp:%%'
-                ORDER  BY engagement_score DESC, last_replied_at DESC NULLS LAST
-                LIMIT  %s
-                """,
-                (limit,),
-            )
+            if slug:
+                cur.execute(
+                    """
+                    SELECT phone_number, fan_tier, engagement_score, last_replied_at
+                    FROM   contacts
+                    WHERE  engagement_score > 0
+                      AND  phone_number NOT LIKE 'whatsapp:%%'
+                      AND  creator_slug = %s
+                    ORDER  BY engagement_score DESC, last_replied_at DESC NULLS LAST
+                    LIMIT  %s
+                    """,
+                    (slug, limit),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT phone_number, fan_tier, engagement_score, last_replied_at
+                    FROM   contacts
+                    WHERE  engagement_score > 0
+                      AND  phone_number NOT LIKE 'whatsapp:%%'
+                    ORDER  BY engagement_score DESC, last_replied_at DESC NULLS LAST
+                    LIMIT  %s
+                    """,
+                    (limit,),
+                )
             return [
                 {
                     "phone_number": r["phone_number"],

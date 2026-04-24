@@ -8,7 +8,7 @@ All routes return JSON — no HTML rendering.
 from pathlib import Path
 
 from flask import Blueprint, jsonify, request
-from ..routes.auth import login_required, current_user, resolve_slug
+from ..routes.auth import login_required, current_user, resolve_slug, get_authorized_slugs
 
 _BUSINESS_CONFIGS_DIR = Path(__file__).parent.parent / "business_configs"
 from ..queries import get_overview_stats, list_shows, list_blast_drafts, get_all_tags
@@ -133,10 +133,14 @@ def shows_list():
 @api_bp.route("/api/blasts")
 @login_required
 def blasts_list():
-    """List recent blast drafts with their send stats."""
+    """List recent blast drafts with their send stats (tenant-scoped)."""
+    user = current_user() or {}
+    slug = None if user.get("is_super_admin") else (user.get("creator_slug") or None)
+    if not user.get("is_super_admin") and not slug:
+        return jsonify(drafts=[], tags=[], total=0)
     try:
-        drafts = list_blast_drafts()
-        tags = get_all_tags()
+        drafts = list_blast_drafts(creator_slug=slug)
+        tags = get_all_tags(creator_slug=slug)
     except Exception:
         logger.exception("api: failed to list blasts")
         drafts, tags = [], []
@@ -236,12 +240,22 @@ def api_cost_breakdown():
     Returns exact AI cost (from messages.ai_cost_usd), SMS cost (from sms_cost_log),
     and phone rental for a given creator and calendar month.
     Falls back to flat estimates for any source not yet populated.
+
+    Authorization: a non-super-admin may only request cost data for a slug
+    they are explicitly authorized for (their own creator_slug, or a tenant
+    they belong to via team_members). Anything else 403s — prevents an IDOR
+    leak of another tenant's billing data.
     """
     import psycopg2.extras
+    user = current_user() or {}
     slug  = request.args.get("slug", "").strip().lower()
     month = request.args.get("month", "").strip()  # e.g. "2026-04"
     if not slug:
         return jsonify(error="slug is required"), 400
+    if not user.get("is_super_admin"):
+        allowed = get_authorized_slugs(user.get("id"), user.get("creator_slug"))
+        if slug not in {s.lower() for s in allowed}:
+            return jsonify(error="forbidden"), 403
     if not month:
         from datetime import date
         month = date.today().strftime("%Y-%m")
@@ -348,12 +362,21 @@ def audience_frequency():
     Step 10 — Blast frequency view.
     Returns per-tier fan counts + when each tier was last blasted,
     plus the 50 most recently blasted fans with tier and days-since.
+
+    Tenant-scoped: a team member only sees frequency stats for fans that
+    belong to their project (``contacts.creator_slug == user.creator_slug``).
     """
+    user = current_user() or {}
+    is_super = bool(user.get("is_super_admin"))
+    slug = None if is_super else (user.get("creator_slug") or None)
+    if not is_super and not slug:
+        return jsonify(tiers=[], recent_blasted=[])
     try:
         conn = get_conn()
         import psycopg2.extras
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            # Tier counts + last blast date per tier
+            slug_sql = " AND c.creator_slug = %s" if slug else ""
+            slug_params: tuple = (slug,) if slug else ()
             cur.execute("""
                 SELECT
                     c.fan_tier,
@@ -366,15 +389,15 @@ def audience_frequency():
                 LEFT JOIN blast_recipients br ON br.phone_number = c.phone_number
                 WHERE c.fan_tier IS NOT NULL
                   AND c.phone_number NOT LIKE 'whatsapp:%%'
+                """ + slug_sql + """
                 GROUP BY c.fan_tier
                 ORDER BY CASE c.fan_tier
                     WHEN 'superfan' THEN 1 WHEN 'engaged' THEN 2
                     WHEN 'lurker'   THEN 3 WHEN 'dormant' THEN 4
                     ELSE 5 END
-            """)
+            """, slug_params)
             tier_rows = cur.fetchall()
 
-            # 50 fans with most recent blast date (for the frequency table)
             cur.execute("""
                 SELECT
                     RIGHT(c.phone_number, 4)                                AS phone_last4,
@@ -385,10 +408,11 @@ def audience_frequency():
                 FROM contacts c
                 JOIN blast_recipients br ON br.phone_number = c.phone_number
                 WHERE c.phone_number NOT LIKE 'whatsapp:%%'
+                """ + slug_sql + """
                 GROUP BY c.phone_number, c.fan_tier, c.fan_tags
                 ORDER BY last_blasted_at DESC
                 LIMIT 50
-            """)
+            """, slug_params)
             fan_rows = cur.fetchall()
         conn.close()
 
@@ -801,6 +825,7 @@ def api_show_blast_init(show_id):
             link_url="",
             tracked_link_slug="",
             created_by=user["email"] if user else "",
+            creator_slug=(user.get("creator_slug") if user else None),
             draft_id=None,
         )
         return jsonify(
@@ -1004,6 +1029,9 @@ def api_smart_send_preview():
                 )
                 all_phones = {r[0] for r in cur.fetchall()} - optouts
 
+                # Cadence join must be tenant-scoped on both sides — a fan
+                # that Zarna's project blasted yesterday should not suppress
+                # another tenant's send today, and vice versa.
                 cur.execute(
                     """
                     SELECT DISTINCT br.phone_number
@@ -1011,9 +1039,11 @@ def api_smart_send_preview():
                     JOIN   blast_drafts bd ON bd.id = br.blast_id
                     JOIN   contacts c ON c.phone_number = br.phone_number
                     WHERE  c.fan_tier = %s
+                      AND  c.creator_slug = %s
+                      AND  bd.creator_slug = %s
                       AND  br.sent_at >= NOW() - (%s || ' days')::INTERVAL
                     """,
-                    (tier, str(cadence)),
+                    (tier, _slug_ssp, _slug_ssp, str(cadence)),
                 )
                 recently_blasted = {r[0] for r in cur.fetchall()}
 
@@ -1042,19 +1072,42 @@ def api_smart_send_preview():
 def _user_owns_draft(draft_id: int, user: dict) -> bool:
     """
     Returns True if the current user is allowed to operate on this blast draft.
-    Super-admins pass unconditionally. Regular users must match created_by email.
+
+    Authorization model (post multi-tenant migration):
+      • Super-admins pass unconditionally.
+      • Everyone else must belong to the draft's tenant — i.e. the draft's
+        ``creator_slug`` must match the caller's ``creator_slug``. Team
+        members (admin / member) can therefore view, edit, send, schedule,
+        cancel and delete every draft inside their project, not just the
+        drafts they personally created.
+
+    Legacy rows with a NULL/empty ``creator_slug`` fall back to the prior
+    email-based ``created_by`` check so pre-migration data stays accessible
+    to the original author while the backfill propagates.
     """
     if user.get("is_super_admin"):
         return True
     try:
         conn = get_conn()
         with conn.cursor() as cur:
-            cur.execute("SELECT created_by FROM blast_drafts WHERE id=%s", (draft_id,))
+            cur.execute(
+                "SELECT creator_slug, created_by FROM blast_drafts WHERE id=%s",
+                (draft_id,),
+            )
             row = cur.fetchone()
         conn.close()
         if not row:
             return False
-        return (row[0] or "").lower() == (user.get("email") or "").lower()
+        draft_slug = (row[0] or "").lower()
+        created_by = (row[1] or "").lower()
+        user_slug = (user.get("creator_slug") or "").lower()
+        user_email = (user.get("email") or "").lower()
+
+        if draft_slug:
+            return bool(user_slug) and draft_slug == user_slug
+        if created_by:
+            return created_by == user_email
+        return True
     except Exception:
         logger.exception("_user_owns_draft check failed for draft_id=%s", draft_id)
         return False
@@ -1121,6 +1174,7 @@ def api_create_blast():
             audience_filter="",
             sample_pct=100,
             created_by=user["email"] if user else "",
+            creator_slug=(user.get("creator_slug") if user else None),
         )
         return jsonify(success=True, draft_id=draft_id)
     except Exception as e:
@@ -1170,6 +1224,7 @@ def api_save_blast(draft_id):
             link_url=link_url, tracked_link_slug=tracked_link_slug,
             blast_context_note=blast_context_note,
             created_by=user["email"] if user else "",
+            creator_slug=(user.get("creator_slug") if user else None),
             draft_id=draft_id,
         )
         tracked_url = ""
@@ -1247,8 +1302,10 @@ def api_blast_preview_count():
         audience_type = "all"
     audience_filter = (data.get("audience_filter") or "").strip()
     sample_pct = max(1, min(100, int(data.get("sample_pct", 100) or 100)))
+    user = current_user() or {}
+    slug = None if user.get("is_super_admin") else (user.get("creator_slug") or None)
     try:
-        count = count_audience(audience_type, audience_filter, sample_pct)
+        count = count_audience(audience_type, audience_filter, sample_pct, creator_slug=slug)
         return jsonify(success=True, count=count)
     except Exception as e:
         logger.exception("api_blast_preview_count error")
@@ -1360,6 +1417,7 @@ def api_blast_send(draft_id):
                 link_url=link_url, tracked_link_slug=tracked_link_slug,
                 blast_context_note=blast_context_note,
                 created_by=user["email"] if user else "",
+                creator_slug=(user.get("creator_slug") if user else None),
                 draft_id=draft_id,
             )
             logger.info("api_blast_send: auto-saved draft %s channel=%s before send", draft_id, channel)
@@ -2385,14 +2443,17 @@ def billing_status():
                 r = cur.fetchone()
                 replies_this_month = int(r["cnt"]) if r else 0
 
+                # Scope monthly activity to the whole project (every team
+                # member's blasts count toward the project's totals) rather
+                # than the signed-in user's personal outbox.
                 cur.execute(
                     """SELECT COUNT(*) AS blasts,
                               COALESCE(SUM(sent_count), 0) AS fans_reached
                        FROM   blast_drafts
                        WHERE  status = 'sent'
                          AND  sent_at >= DATE_TRUNC('month', NOW())
-                         AND  LOWER(created_by) = LOWER(%s)""",
-                    (user.get("email") or "",),
+                         AND  creator_slug = %s""",
+                    (slug,),
                 )
                 b = cur.fetchone()
                 if b:

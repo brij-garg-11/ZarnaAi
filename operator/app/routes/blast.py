@@ -58,10 +58,14 @@ def _get_tier_counts() -> dict:
 @login_required
 def blast_index():
     _reset_stuck_sending_drafts()
-    drafts = list_blast_drafts()
-    tags = get_all_tags()
     cu = current_user() or {}
     slug = None if cu.get("is_super_admin") else (cu.get("creator_slug") or None)
+    drafts = list_blast_drafts(creator_slug=slug) if slug else (
+        list_blast_drafts() if cu.get("is_super_admin") else []
+    )
+    tags = get_all_tags(creator_slug=slug) if slug else (
+        get_all_tags() if cu.get("is_super_admin") else []
+    )
     shows = list_shows(creator_slug=slug) if slug else (list_shows() if cu.get("is_super_admin") else [])
     return render_template(
         "blast.html",
@@ -102,7 +106,7 @@ def _reset_stuck_sending_drafts():
 @login_required
 def blast_new():
     """Auto-create a blank draft and open the compose form immediately."""
-    user = current_user()
+    user = current_user() or {}
     new_id = save_blast_draft(
         name="Untitled draft",
         body="",
@@ -110,7 +114,8 @@ def blast_new():
         audience_type="all",
         audience_filter="",
         sample_pct=100,
-        created_by=user["email"] if user else "",
+        created_by=user.get("email") or "",
+        creator_slug=user.get("creator_slug") or None,
     )
     return redirect(url_for("blast.blast_compose", draft_id=new_id))
 
@@ -135,7 +140,8 @@ def blast_new_for_show(show_id: int):
         audience_type="show",
         audience_filter=str(show_id),
         sample_pct=100,
-        created_by=user["email"] if user else "",
+        created_by=(user.get("email") if user else "") or "",
+        creator_slug=(user.get("creator_slug") if user else None),
     )
     return redirect(url_for("blast.blast_compose", draft_id=new_id))
 
@@ -143,13 +149,17 @@ def blast_new_for_show(show_id: int):
 @blast_bp.route("/operator/blast/<int:draft_id>")
 @login_required
 def blast_compose(draft_id: int):
-    tags = get_all_tags()
     cu = current_user() or {}
     slug = None if cu.get("is_super_admin") else (cu.get("creator_slug") or None)
+    tags = get_all_tags(creator_slug=slug) if slug else (
+        get_all_tags() if cu.get("is_super_admin") else []
+    )
     shows = list_shows(creator_slug=slug) if slug else (list_shows() if cu.get("is_super_admin") else [])
-    drafts = list_blast_drafts()
+    drafts = list_blast_drafts(creator_slug=slug) if slug else (
+        list_blast_drafts() if cu.get("is_super_admin") else []
+    )
 
-    active_draft = get_blast_draft(draft_id)
+    active_draft = get_blast_draft(draft_id, creator_slug=slug) if slug else get_blast_draft(draft_id)
     if not active_draft:
         flash("Draft not found.", "error")
         return redirect(url_for("blast.blast_index"))
@@ -158,6 +168,7 @@ def blast_compose(draft_id: int):
         active_draft["audience_type"],
         active_draft["audience_filter"] or "",
         int(active_draft["audience_sample_pct"] or 100),
+        creator_slug=slug,
     )
 
     # Build the full tracked short URL so the template can display it
@@ -536,7 +547,9 @@ def preview_count():
         audience_type = "all"
     audience_filter = request.form.get("audience_filter", "").strip()
     sample_pct = _safe_int(request.form.get("audience_sample_pct"), 100, 1, 100)
-    count = count_audience(audience_type, audience_filter, sample_pct)
+    cu = current_user() or {}
+    slug = None if cu.get("is_super_admin") else (cu.get("creator_slug") or None)
+    count = count_audience(audience_type, audience_filter, sample_pct, creator_slug=slug)
     return f'<span class="count-badge">{count:,} recipients match</span>'
 
 
@@ -601,7 +614,9 @@ def save_draft():
             link_url=link_url, tracked_link_slug=tracked_link_slug,
             is_quiz=is_quiz, quiz_correct_answer=quiz_correct_answer,
             blast_context_note=blast_context_note,
-            created_by=user["email"], draft_id=draft_id,
+            created_by=user["email"],
+            creator_slug=(user.get("creator_slug") if user else None),
+            draft_id=draft_id,
         )
         logger.info("  saved draft id=%s", new_id)
     except Exception as e:
@@ -740,6 +755,7 @@ def send_now(draft_id: int):
         is_quiz=bool(draft.get("is_quiz")),
         quiz_correct_answer=draft.get("quiz_correct_answer") or "",
         blast_context_note=blast_context_note,
+        creator_slug=(user.get("creator_slug") if user else None),
         created_by=user["email"],
         draft_id=draft_id,
     )
@@ -840,7 +856,7 @@ def clone_draft(draft_id: int):
         flash("Draft not found.", "error")
         return redirect(url_for("blast.blast_index"))
 
-    user = current_user()
+    user = current_user() or {}
     new_id = save_blast_draft(
         name=f"{(original['name'] or 'Untitled')} (resend)",
         body=original["body"] or "",
@@ -849,7 +865,8 @@ def clone_draft(draft_id: int):
         audience_filter=original["audience_filter"] or "",
         sample_pct=int(original["audience_sample_pct"] or 100),
         media_url=original.get("media_url") or "",
-        created_by=user["email"] if user else "",
+        created_by=user.get("email") or "",
+        creator_slug=user.get("creator_slug") or None,
     )
     flash("Cloned as a new draft — ready to send.", "success")
     return redirect(url_for("blast.blast_compose", draft_id=new_id))

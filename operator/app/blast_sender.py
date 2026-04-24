@@ -32,25 +32,55 @@ def execute_blast(draft_id: int):
         return
 
     # Resolve the owning operator_user so we can charge credits to the right
-    # account (and respect plan enforcement). created_by is the user's email.
+    # account (and respect plan enforcement).
+    #
+    # Credit attribution is always tenant-level: a team member sending on
+    # behalf of the project should consume the *project owner's* quota, not
+    # their own personal trial allotment. We therefore resolve by the draft's
+    # creator_slug first (finding the owner row in team_members / fallback
+    # to any user on that slug), and only fall back to the author email for
+    # legacy drafts that pre-date the slug column.
     blast_owner_user_id: int | None = None
-    blast_owner_slug: str | None = None
+    blast_owner_slug: str | None = (draft.get("creator_slug") or None)
     try:
         from .db import get_conn as _gc
         _owner_conn = _gc()
         with _owner_conn.cursor() as _oc:
-            _oc.execute(
-                """
-                SELECT id, creator_slug FROM operator_users
-                WHERE LOWER(email) = LOWER(%s)
-                LIMIT 1
-                """,
-                (draft.get("created_by") or "",),
-            )
-            _row = _oc.fetchone()
-            if _row:
-                blast_owner_user_id = _row[0]
-                blast_owner_slug = _row[1]
+            if blast_owner_slug:
+                _oc.execute(
+                    """
+                    SELECT u.id
+                    FROM   operator_users u
+                    JOIN   team_members tm ON tm.user_id = u.id
+                    WHERE  tm.tenant_slug = %s AND tm.role = 'owner'
+                    LIMIT  1
+                    """,
+                    (blast_owner_slug,),
+                )
+                _row = _oc.fetchone()
+                if not _row:
+                    # No explicit owner row — grab any user on the tenant (grandfathered).
+                    _oc.execute(
+                        "SELECT id FROM operator_users WHERE creator_slug=%s LIMIT 1",
+                        (blast_owner_slug,),
+                    )
+                    _row = _oc.fetchone()
+                if _row:
+                    blast_owner_user_id = _row[0]
+            if not blast_owner_user_id:
+                _oc.execute(
+                    """
+                    SELECT id, creator_slug FROM operator_users
+                    WHERE LOWER(email) = LOWER(%s)
+                    LIMIT 1
+                    """,
+                    (draft.get("created_by") or "",),
+                )
+                _row = _oc.fetchone()
+                if _row:
+                    blast_owner_user_id = _row[0]
+                    if not blast_owner_slug:
+                        blast_owner_slug = _row[1]
         _owner_conn.close()
     except Exception:
         logger.warning("execute_blast: could not resolve owner for draft %s", draft_id, exc_info=True)
@@ -80,6 +110,7 @@ def execute_blast(draft_id: int):
         audience_type=draft["audience_type"],
         audience_filter=draft["audience_filter"] or "",
         sample_pct=int(draft["audience_sample_pct"] or 100),
+        creator_slug=blast_owner_slug,
     )
     logger.info("  audience phones count: %d", len(phones))
 

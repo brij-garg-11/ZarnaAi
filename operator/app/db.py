@@ -474,6 +474,23 @@ def init_db():
         "UPDATE live_shows SET created_by='brij@zarnagarg.com' WHERE created_by IS NULL OR created_by=''",
         "CREATE INDEX IF NOT EXISTS idx_live_shows_creator_slug ON live_shows(creator_slug)",
 
+        # ── Multi-tenant ownership on blast_drafts ────────────────────────
+        # Same pattern as live_shows: _user_owns_draft was gating by created_by
+        # email which (a) blocked team members from touching their teammates'
+        # drafts and (b) leaked every tenant's drafts through the unscoped
+        # list_blast_drafts(). Add creator_slug and backfill historical rows
+        # from the author's operator_users row (fallback: 'zarna').
+        "ALTER TABLE blast_drafts ADD COLUMN IF NOT EXISTS creator_slug TEXT DEFAULT NULL",
+        """
+        UPDATE blast_drafts b
+        SET    creator_slug = COALESCE(u.creator_slug, 'zarna')
+        FROM   operator_users u
+        WHERE  LOWER(u.email) = LOWER(b.created_by)
+          AND  (b.creator_slug IS NULL OR b.creator_slug = '')
+        """,
+        "UPDATE blast_drafts SET creator_slug='zarna' WHERE creator_slug IS NULL OR creator_slug=''",
+        "CREATE INDEX IF NOT EXISTS idx_blast_drafts_creator_slug ON blast_drafts(creator_slug)",
+
         # ── Data-cleanup on every startup ──────────────────────────────────
         # 1. Clear /tmp-based image URLs (ephemeral Railway filesystem, gone on redeploy)
         "UPDATE blast_drafts SET media_url='' WHERE media_url LIKE '%/operator/blast/uploads/%'",
