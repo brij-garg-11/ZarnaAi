@@ -338,6 +338,8 @@ def init_db():
         "ALTER TABLE operator_users ADD COLUMN IF NOT EXISTS billing_cycle_anchor TIMESTAMPTZ DEFAULT NULL",
         "ALTER TABLE operator_users ADD COLUMN IF NOT EXISTS trial_credits_remaining INT DEFAULT 1000",
         "ALTER TABLE operator_users ADD COLUMN IF NOT EXISTS trial_started_at TIMESTAMPTZ DEFAULT NULL",
+        "ALTER TABLE operator_users ADD COLUMN IF NOT EXISTS sent_trial_low_alert BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE operator_users ADD COLUMN IF NOT EXISTS sent_trial_exhausted_alert BOOLEAN DEFAULT FALSE",
         "CREATE INDEX IF NOT EXISTS idx_operator_users_stripe_customer ON operator_users(stripe_customer_id) WHERE stripe_customer_id IS NOT NULL",
         "CREATE INDEX IF NOT EXISTS idx_operator_users_stripe_subscription ON operator_users(stripe_subscription_id) WHERE stripe_subscription_id IS NOT NULL",
 

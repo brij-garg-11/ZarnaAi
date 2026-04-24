@@ -324,6 +324,8 @@ def stripe_webhook():
             _handle_checkout_completed(event["data"]["object"])
         elif etype == "invoice.paid":
             _handle_invoice_paid(event["data"]["object"])
+        elif etype in ("invoice.payment_failed", "invoice.payment_action_required"):
+            _handle_payment_failed(event["data"]["object"])
         elif etype == "customer.subscription.updated":
             _handle_subscription_updated(event["data"]["object"])
         elif etype == "customer.subscription.deleted":
@@ -515,3 +517,102 @@ def _handle_subscription_deleted(sub: dict) -> None:
     if not user:
         return
     clear_subscription(user_id=user["id"])
+    _send_billing_email(
+        user_id=user["id"],
+        subject="Your ZarBot subscription has ended",
+        html=(
+            "<p>Your ZarBot subscription was cancelled. Your bot will stop responding "
+            "to new messages until you resubscribe.</p>"
+            "<p><a href='https://zar.bot/plans'>Resubscribe →</a></p>"
+        ),
+        text=(
+            "Your ZarBot subscription was cancelled. Your bot will stop responding "
+            "to new messages until you resubscribe.\n\nResubscribe: https://zar.bot/plans"
+        ),
+    )
+
+
+def _handle_payment_failed(invoice: dict) -> None:
+    """invoice.payment_failed / invoice.payment_action_required.
+
+    Does NOT block the account immediately (Stripe retries automatically via
+    Smart Retries). We notify the user so they can update their card before
+    the subscription cancels.
+    """
+    customer_id = invoice.get("customer")
+    if not customer_id:
+        return
+    user = _lookup_user_by_customer(customer_id)
+    if not user:
+        logger.warning("payment_failed: no user for customer=%s", customer_id)
+        return
+
+    attempt_count = invoice.get("attempt_count", 1)
+    next_payment_attempt = invoice.get("next_payment_attempt")
+    next_str = ""
+    if next_payment_attempt:
+        from datetime import datetime, timezone
+        next_dt = datetime.fromtimestamp(next_payment_attempt, tz=timezone.utc)
+        next_str = f" We'll try again on {next_dt.strftime('%B %d, %Y')}."
+
+    logger.warning(
+        "payment_failed: user_id=%s customer=%s attempt=%s",
+        user["id"], customer_id, attempt_count,
+    )
+    _send_billing_email(
+        user_id=user["id"],
+        subject="Payment failed — please update your card",
+        html=(
+            f"<p>We couldn't process your ZarBot payment (attempt {attempt_count}).{next_str}</p>"
+            "<p>Please update your payment method to keep your bot running:</p>"
+            "<p><a href='https://zar.bot/billing'>Update payment method →</a></p>"
+        ),
+        text=(
+            f"We couldn't process your ZarBot payment (attempt {attempt_count}).{next_str}\n\n"
+            "Update your payment method: https://zar.bot/billing"
+        ),
+    )
+
+
+# ── Billing email helper ───────────────────────────────────────────────────
+
+def _send_billing_email(
+    *,
+    user_id: int,
+    subject: str,
+    html: str,
+    text: str,
+) -> None:
+    """Send a transactional billing email to the user. Never raises."""
+    try:
+        import resend  # type: ignore
+        api_key = os.getenv("RESEND_API_KEY", "").strip()
+        if not api_key:
+            logger.warning("_send_billing_email: RESEND_API_KEY not set — email skipped")
+            return
+        resend.api_key = api_key
+
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT email, name FROM operator_users WHERE id=%s", (user_id,))
+                row = cur.fetchone()
+        finally:
+            conn.close()
+
+        if not row or not row[0]:
+            logger.warning("_send_billing_email: no email for user_id=%s", user_id)
+            return
+
+        to_email = row[0]
+        from_addr = os.getenv("RESEND_FROM", "hello@zar.bot")
+        resend.Emails.send({
+            "from": f"ZarBot <{from_addr}>",
+            "to": [to_email],
+            "subject": subject,
+            "html": html,
+            "text": text,
+        })
+        logger.info("_send_billing_email: sent '%s' to %s", subject, to_email)
+    except Exception:
+        logger.exception("_send_billing_email: failed for user_id=%s subject=%s", user_id, subject)

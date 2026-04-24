@@ -2249,19 +2249,20 @@ def billing_status():
     account_type = user.get("account_type") or "performer"
     month = date.today().strftime("%Y-%m")
 
-    # Fetch stripe_customer_id — not included in current_user() to keep that
-    # query light, so grab it separately here.
+    # Fetch billing fields not included in current_user() to keep that query light.
     stripe_customer_id = None
+    billing_cycle_db = None
     try:
         _sc_conn = get_conn()
         with _sc_conn.cursor() as _cur:
             _cur.execute(
-                "SELECT stripe_customer_id FROM operator_users WHERE id=%s",
+                "SELECT stripe_customer_id, billing_cycle FROM operator_users WHERE id=%s",
                 (user["id"],),
             )
             _scr = _cur.fetchone()
             if _scr:
                 stripe_customer_id = _scr[0]
+                billing_cycle_db = _scr[1]
         _sc_conn.close()
     except Exception:
         pass
@@ -2342,7 +2343,7 @@ def billing_status():
             month=month,
             plan_name=plan_tier,
             plan_label=plan_label,
-            billing_cycle=(plan and "monthly") or None,
+            billing_cycle=billing_cycle_db or (plan and "monthly") or None,
             is_trial=status.get("is_trial", False),
             unlimited=status.get("unlimited", False),
             stripe_customer_id=stripe_customer_id,
@@ -3461,6 +3462,109 @@ def admin_current_project():
             "subscriber_count": subscriber_count,
         },
         is_super_admin=True,
+    )
+
+
+@api_bp.route("/api/admin/billing-overview")
+@login_required
+def admin_billing_overview():
+    """Super-admin only: revenue, subscriber, and trial metrics across all accounts.
+
+    Returns:
+      total_accounts, active_subscriptions, trial_accounts, cancelled_accounts,
+      grandfathered_accounts, mrr_usd (sum of plan monthly prices for active subs),
+      arr_usd (annualised), trial_exhausted_count, recent_upgrades (last 30d),
+      recent_cancellations (last 30d), accounts_by_tier (breakdown).
+    """
+    if not _require_super_admin():
+        return jsonify(error="Super-admin access required"), 403
+
+    conn = get_conn()
+    try:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # Tier breakdown
+            cur.execute("""
+                SELECT plan_tier, COUNT(*) AS cnt
+                FROM   operator_users
+                WHERE  creator_slug IS NOT NULL AND creator_slug <> ''
+                GROUP  BY plan_tier
+                ORDER  BY cnt DESC
+            """)
+            tier_rows = cur.fetchall()
+            by_tier = {r["plan_tier"] or "unknown": int(r["cnt"]) for r in tier_rows}
+
+            # Active paid (has stripe_subscription_id and not cancelled/trial)
+            cur.execute("""
+                SELECT COUNT(*) AS cnt
+                FROM   operator_users
+                WHERE  stripe_subscription_id IS NOT NULL
+                  AND  plan_tier NOT IN ('trial', 'cancelled', 'grandfathered', 'founder', 'internal')
+                  AND  creator_slug IS NOT NULL AND creator_slug <> ''
+            """)
+            active_subs = int((cur.fetchone() or {}).get("cnt", 0))
+
+            # Trial with credits remaining
+            cur.execute("""
+                SELECT COUNT(*) AS cnt
+                FROM   operator_users
+                WHERE  plan_tier = 'trial'
+                  AND  (trial_credits_remaining IS NULL OR trial_credits_remaining > 0)
+                  AND  creator_slug IS NOT NULL AND creator_slug <> ''
+            """)
+            trial_active = int((cur.fetchone() or {}).get("cnt", 0))
+
+            # Trial exhausted
+            cur.execute("""
+                SELECT COUNT(*) AS cnt
+                FROM   operator_users
+                WHERE  plan_tier = 'trial'
+                  AND  trial_credits_remaining IS NOT NULL
+                  AND  trial_credits_remaining <= 0
+                  AND  creator_slug IS NOT NULL AND creator_slug <> ''
+            """)
+            trial_exhausted = int((cur.fetchone() or {}).get("cnt", 0))
+
+            # Cancelled
+            cancelled = int(by_tier.get("cancelled", 0))
+            grandfathered = sum(
+                by_tier.get(t, 0) for t in ("grandfathered", "founder", "internal")
+            )
+            total_accounts = sum(by_tier.values())
+
+            # Recent plan changes (last 30 days from credit_events)
+            cur.execute("""
+                SELECT kind, COUNT(*) AS cnt
+                FROM   credit_events
+                WHERE  kind IN ('plan_changed', 'plan_reset')
+                  AND  created_at >= NOW() - INTERVAL '30 days'
+                GROUP  BY kind
+            """)
+            event_rows = {r["kind"]: int(r["cnt"]) for r in cur.fetchall()}
+
+    finally:
+        conn.close()
+
+    # Estimate MRR from active plans
+    from ..billing.plans import ALL_PLANS
+    mrr = 0
+    for tier, count in by_tier.items():
+        p = ALL_PLANS.get(tier)
+        if p and tier not in ("trial", "cancelled", "grandfathered", "founder", "internal"):
+            mrr += p.monthly_price_usd * count
+
+    return jsonify(
+        total_accounts=total_accounts,
+        active_subscriptions=active_subs,
+        trial_active=trial_active,
+        trial_exhausted=trial_exhausted,
+        cancelled=cancelled,
+        grandfathered=grandfathered,
+        mrr_usd=mrr,
+        arr_usd=mrr * 12,
+        recent_upgrades=event_rows.get("plan_reset", 0),
+        recent_plan_changes=event_rows.get("plan_changed", 0),
+        accounts_by_tier=by_tier,
     )
 
 

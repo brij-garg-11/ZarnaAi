@@ -231,6 +231,35 @@ def _process_smb_message(from_number: str, to_number: str, message_text: str) ->
             from_number[-4:] if from_number else "?",
         )
 
+    # Meter credits for this conversation turn (1 inbound + N outbound segments).
+    # Mirrors the same logic in main.py _consume_message_credits; uses the
+    # operator billing stack directly since the SMB app runs in the same process
+    # as the operator API (unlike the Zarna performer app in main.py).
+    # Fail-open: billing must never stop a reply from being sent.
+    try:
+        import math as _math
+        from app.smb.tenants import get_registry as _smb_registry  # type: ignore
+
+        tenant = _smb_registry().get_by_to(to_number) if to_number else None
+        slug = tenant.slug if tenant else None
+        if slug:
+            def _segs(text: str) -> int:
+                if not text:
+                    return 1
+                n = len(text)
+                if any(ord(c) > 127 for c in text):
+                    return 1 if n <= 70 else max(1, _math.ceil(n / 67))
+                return 1 if n <= 160 else max(1, _math.ceil(n / 153))
+
+            outbound_segs = _segs(reply)
+            from operator.app.billing.credits import consume_credit, KIND_SMS_INBOUND, KIND_SMS_OUTBOUND  # type: ignore
+            source = f"smb:{from_number[-4:] if from_number else '?'}"
+            consume_credit(slug=slug, kind=KIND_SMS_INBOUND, credits=1, source_id=source)
+            consume_credit(slug=slug, kind=KIND_SMS_OUTBOUND, credits=outbound_segs, source_id=source)
+    except Exception:
+        logger.warning("SMB credit metering failed for to_number=...%s",
+                       to_number[-4:] if to_number else "?")
+
 
 # ---------------------------------------------------------------------------
 # Link click tracking  GET /smb/r/<slug>/<link_key>

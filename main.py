@@ -448,10 +448,11 @@ def _consume_message_credits(outbound_text: str, inbound_text: str, *, source: s
             return
         with conn:
             with conn.cursor() as cur:
-                # Resolve user_id for this slug (owner preferred)
+                # Resolve user_id, plan tier, and billing anchor for this slug.
                 cur.execute(
                     """
-                    SELECT u.id, u.plan_tier, u.trial_credits_remaining
+                    SELECT u.id, u.plan_tier, u.trial_credits_remaining,
+                           u.billing_cycle_anchor
                     FROM   operator_users u
                     LEFT JOIN team_members tm
                            ON tm.user_id = u.id AND tm.tenant_slug = %s
@@ -464,7 +465,7 @@ def _consume_message_credits(outbound_text: str, inbound_text: str, *, source: s
                 row = cur.fetchone()
                 if not row:
                     return
-                user_id, plan_tier, _trial_left = row
+                user_id, plan_tier, _trial_left, billing_anchor = row
                 total_credits = 1 + outbound_credits  # 1 inbound + N outbound
 
                 # Grandfathered / founder / internal tiers bypass accounting
@@ -473,6 +474,9 @@ def _consume_message_credits(outbound_text: str, inbound_text: str, *, source: s
                     "grandfathered", "founder", "internal"
                 }
 
+                # Use billing_cycle_anchor as period_start for paid plans so
+                # this path stays aligned with operator/app/billing/credits.py's
+                # _current_period(). Trial + grandfathered fall back to today.
                 if plan_tier == "trial" and not unlimited_tier:
                     cur.execute(
                         """UPDATE operator_users
@@ -482,16 +486,21 @@ def _consume_message_credits(outbound_text: str, inbound_text: str, *, source: s
                     )
 
                 if not unlimited_tier:
+                    if plan_tier != "trial" and billing_anchor:
+                        period_start = billing_anchor.date()
+                    else:
+                        import datetime as _dt
+                        period_start = _dt.date.today()
                     cur.execute(
                         """
                         INSERT INTO operator_credit_usage
                             (operator_user_id, creator_slug, period_start, credits_included, credits_used)
-                        VALUES (%s, %s, CURRENT_DATE, 0, %s)
+                        VALUES (%s, %s, %s, 0, %s)
                         ON CONFLICT (operator_user_id, period_start)
                         DO UPDATE SET credits_used = operator_credit_usage.credits_used + EXCLUDED.credits_used,
                                       updated_at = NOW()
                         """,
-                        (user_id, slug, total_credits),
+                        (user_id, slug, period_start, total_credits),
                     )
 
                 cur.execute(
