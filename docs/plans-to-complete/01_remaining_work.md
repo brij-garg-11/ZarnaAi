@@ -38,17 +38,20 @@ Every item is still `[ ]`. Build in this order:
 - [ ] Warning banner at 80% usage
 - [ ] Full credits breakdown on billing page
 
-## 4. Auto-Provisioning (needs Twilio campaign approval first)
-### Backend
-- [ ] Add `phone_number` column to `operator_users`
-- [ ] Add `TWILIO_MESSAGING_SERVICE_SID` to `.env` and Railway (waiting on campaign approval)
-- [ ] Write `operator/app/provisioning.py` module
-- [ ] Call `provision_tenant()` at end of `api_onboarding_submit`
-- [ ] Add `provisioning_status` column to `bot_configs`
-- [ ] `GET /api/provisioning/status`
+## 4. Auto-Provisioning ✅ COMPLETED (Apr 22, 2026)
+### Backend — DONE
+- [x] `phone_number` column on `operator_users` — already existed
+- [x] `operator/app/provisioning/` module (orchestrator + config_writer + ingestion + notifications + phone)
+- [x] Async `provision_new_creator()` called at end of `api_onboarding_submit` for performer accounts
+- [x] `provisioning_status` + `error_message` columns on `bot_configs`
+- [x] `GET /api/provisioning/status` endpoint live
+- [x] `creator_configs` + `creator_embeddings` (vector 3072, HNSW halfvec index) tables live on Railway
+- [x] Multi-tenant RAG isolation: PgRetriever, slug-scoped contacts, slug-scoped winning examples
+- [ ] Unstub `phone.py` (PROVISIONING_PHONE_MODE=real) — **blocked on Twilio A2P campaign approval**
+- [ ] Per-number routing in `main.py` (phone → slug → brain) — **blocked on Twilio A2P**
 
-### Lovable
-- [ ] Provisioning spinner after onboarding completes
+### Lovable — PENDING (unblocked, can build now)
+- [ ] Provisioning spinner after onboarding completes (polls `GET /api/provisioning/status`)
 - [ ] Show dedicated phone number on dashboard once provisioned
 - [ ] Handle provisioning failure state with retry button
 
