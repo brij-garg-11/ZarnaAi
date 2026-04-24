@@ -171,7 +171,14 @@ def get_plan_credits(tier: str) -> int:
 
 
 def get_plan_seats(tier: str) -> Optional[int]:
-    """Seat limit by plan. None = unlimited. Trial = 1."""
+    """Seat limit by plan. None = unlimited. Trial = 1.
+
+    Grandfathered / founder / internal tiers are always unlimited seats —
+    these are the accounts that pre-date Stripe billing (Zarna, WSCC, etc.)
+    and should never see a paywall of any kind.
+    """
+    if is_unlimited_tier(tier):
+        return None
     if tier == "trial":
         return 1
     plan = ALL_PLANS.get(tier)
