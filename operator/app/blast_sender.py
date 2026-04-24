@@ -151,7 +151,7 @@ def execute_blast(draft_id: int):
                         logger.warning("consume_credit failed for blast %s recipient", draft_id, exc_info=True)
                 # Save a messages row so link_clicked_1h can be tracked per fan
                 if tracked_link_slug:
-                    _save_blast_message(phone, fan_body)
+                    _save_blast_message(phone, fan_body, blast_owner_slug or "")
             else:
                 failed += 1
         except Exception as e:
@@ -299,7 +299,7 @@ def _create_blast_context_session(blast_draft_id: int, context_note: str) -> Non
         logger.exception("_create_blast_context_session failed: %s", e)
 
 
-def _save_blast_message(phone: str, text: str) -> None:
+def _save_blast_message(phone: str, text: str, creator_slug: str = "") -> None:
     """
     Save a single blast message to the shared messages table so
     link_clicked_1h can be tracked per fan.  Uses msg_source='blast'
@@ -312,10 +312,10 @@ def _save_blast_message(phone: str, text: str) -> None:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO messages (phone_number, role, text, has_link, msg_source)
-                    VALUES (%s, 'assistant', %s, TRUE, 'blast')
+                    INSERT INTO messages (phone_number, role, text, has_link, msg_source, creator_slug)
+                    VALUES (%s, 'assistant', %s, TRUE, 'blast', %s)
                     """,
-                    (phone, text),
+                    (phone, text, creator_slug),
                 )
         conn.close()
     except Exception as e:

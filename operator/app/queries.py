@@ -11,7 +11,7 @@ import psycopg2.extras
 
 # ── Stats ──────────────────────────────────────────────────────────────────
 
-def get_overview_stats(creator_slug: str = "zarna") -> dict:
+def get_overview_stats(creator_slug: str = "") -> dict:
     conn = get_conn()
     # Never fall back to "zarna" — callers must pass an explicit, authorized slug.
     # An empty slug would silently expose Zarna's data to any unprovisioned account.

@@ -419,7 +419,7 @@ def _consume_message_credits(outbound_text: str, inbound_text: str, *, source: s
 
     Fail-open: never blocks message processing — billing is secondary to replies.
     """
-    slug = getattr(brain, "slug", None) or "zarna"
+    slug = getattr(brain, "slug", None) or ""
     if not slug:
         return
 

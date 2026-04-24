@@ -16,11 +16,12 @@ def audience():
 @login_required
 def index():
     try:
-        stats = get_overview_stats()
+        user = current_user()
+        slug = (user or {}).get("creator_slug") or ""
+        stats = get_overview_stats(creator_slug=slug)
     except Exception:
         stats = {}
 
-    user = current_user()
     week_delta = _pct_delta(stats.get("messages_week", 0), stats.get("messages_prev_week", 0))
     sub_delta = _pct_delta(stats.get("new_subs_week", 0), stats.get("new_subs_prev_week", 0))
 

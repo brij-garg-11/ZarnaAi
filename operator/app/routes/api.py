@@ -662,16 +662,17 @@ def api_inbox_send(phone_last4):
 
     # Log to messages table so it shows in thread history
     sent_at = datetime.now(timezone.utc)
+    inbox_slug = (user or {}).get("creator_slug") or ""
     message_id = None
     try:
         conn = get_conn()
         with conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO messages (phone_number, role, text, created_at, source)
-                    VALUES (%s, 'assistant', %s, %s, 'manual_operator')
+                    INSERT INTO messages (phone_number, role, text, created_at, source, creator_slug)
+                    VALUES (%s, 'assistant', %s, %s, 'manual_operator', %s)
                     RETURNING id
-                """, (phone, text, sent_at))
+                """, (phone, text, sent_at, inbox_slug))
                 message_id = cur.fetchone()[0]
         conn.close()
         logger.info("api_inbox_send: logged message id=%s for ***%s", message_id, phone_last4)
