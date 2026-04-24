@@ -520,8 +520,8 @@ class PostgresStorage(BaseStorage):
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO messages (phone_number, role, text) VALUES (%s, %s, %s) RETURNING id",
-                        (phone_number, role, text),
+                        "INSERT INTO messages (phone_number, role, text, creator_slug) VALUES (%s, %s, %s, %s) RETURNING id",
+                        (phone_number, role, text, self._creator_slug),
                     )
                     row_id = cur.fetchone()[0]
         finally:

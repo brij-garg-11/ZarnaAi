@@ -259,11 +259,35 @@ def init_db():
             week_of      DATE        NOT NULL,
             message_text TEXT        DEFAULT '',
             selected_at  TIMESTAMPTZ DEFAULT NOW(),
-            UNIQUE (week_of)
+            creator_slug TEXT        NOT NULL DEFAULT 'zarna',
+            UNIQUE (creator_slug, week_of)
         )
         """,
         "CREATE INDEX IF NOT EXISTS idx_fotw_week ON fan_of_the_week (week_of DESC)",
         "CREATE INDEX IF NOT EXISTS idx_fotw_phone ON fan_of_the_week (phone_number)",
+
+        # ── Multi-tenant backfill: add creator_slug to originally single-tenant tables ──
+        # contacts, messages, and fan_of_the_week were built for Zarna only.
+        # Default existing rows to 'zarna'; new rows get the slug from the bot pipeline.
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS creator_slug TEXT DEFAULT 'zarna'",
+        "ALTER TABLE messages ADD COLUMN IF NOT EXISTS creator_slug TEXT DEFAULT 'zarna'",
+        "ALTER TABLE fan_of_the_week ADD COLUMN IF NOT EXISTS creator_slug TEXT NOT NULL DEFAULT 'zarna'",
+        # Migrate fan_of_the_week unique constraint from (week_of) → (creator_slug, week_of)
+        # Idempotent: DROP CONSTRAINT errors are swallowed by the try/except in init_db.
+        "ALTER TABLE fan_of_the_week DROP CONSTRAINT IF EXISTS fan_of_the_week_week_of_key",
+        """DO $$ BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'fan_of_the_week_creator_slug_week_of_key'
+            ) THEN
+                ALTER TABLE fan_of_the_week
+                  ADD CONSTRAINT fan_of_the_week_creator_slug_week_of_key
+                  UNIQUE (creator_slug, week_of);
+            END IF;
+        END $$""",
+        "CREATE INDEX IF NOT EXISTS idx_contacts_slug ON contacts (creator_slug)",
+        "CREATE INDEX IF NOT EXISTS idx_messages_slug ON messages (creator_slug, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_fotw_slug_week ON fan_of_the_week (creator_slug, week_of DESC)",
 
         # ── Customer of the Week (SMB) ─────────────────────────────────────
         """

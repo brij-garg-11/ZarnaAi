@@ -26,8 +26,15 @@ api_bp = Blueprint("api", __name__)
 @login_required
 def dashboard_stats():
     """Main dashboard stats — mirrors the HTML dashboard data."""
+    from flask import session as _session
+    user = current_user()
+    slug = (
+        _session.get("viewing_as") or user.get("creator_slug")
+        if user and user.get("is_super_admin")
+        else (user or {}).get("creator_slug") or ""
+    )
     try:
-        stats = get_overview_stats()
+        stats = get_overview_stats(creator_slug=slug)
     except Exception:
         logger.exception("api: failed to fetch overview stats")
         stats = {}
@@ -144,8 +151,15 @@ def blasts_list():
 @login_required
 def audience():
     """Audience tags, area codes, and fan tier breakdown."""
+    from flask import session as _session
+    _u = current_user()
+    _slug = (
+        _session.get("viewing_as") or _u.get("creator_slug")
+        if _u and _u.get("is_super_admin")
+        else (_u or {}).get("creator_slug") or ""
+    )
     try:
-        stats = get_overview_stats()
+        stats = get_overview_stats(creator_slug=_slug)
     except Exception:
         logger.exception("api: failed to fetch audience stats")
         stats = {}
@@ -159,10 +173,10 @@ def audience():
             cur.execute("""
                 SELECT fan_tier, COUNT(*) as count
                 FROM contacts
-                WHERE fan_tier IS NOT NULL
+                WHERE creator_slug = %s AND fan_tier IS NOT NULL
                 GROUP BY fan_tier
                 ORDER BY count DESC
-            """)
+            """, (_slug,))
             tier_counts = {row["fan_tier"]: row["count"] for row in cur.fetchall()}
         conn.close()
     except Exception:
@@ -403,6 +417,13 @@ def inbox():
     Phone numbers are masked to last-4 only.
     Query params: ?page=1
     """
+    from flask import session as _session
+    _u = current_user()
+    _slug = (
+        _session.get("viewing_as") or _u.get("creator_slug")
+        if _u and _u.get("is_super_admin")
+        else (_u or {}).get("creator_slug") or ""
+    )
     page = max(1, int(request.args.get("page", 1)))
     per_page = 25
     offset = (page - 1) * per_page
@@ -415,8 +436,8 @@ def inbox():
             cur.execute("""
                 SELECT COUNT(DISTINCT phone_number) AS total
                 FROM messages
-                WHERE role = 'user'
-            """)
+                WHERE role = 'user' AND creator_slug = %s
+            """, (_slug,))
             total = cur.fetchone()["total"]
 
             # One row per fan: most recent message, message counts, fan info
@@ -430,12 +451,12 @@ def inbox():
                     COUNT(*) FILTER (WHERE m.role = 'assistant') AS bot_messages,
                     (
                         SELECT text FROM messages m2
-                        WHERE m2.phone_number = m.phone_number
+                        WHERE m2.phone_number = m.phone_number AND m2.creator_slug = m.creator_slug
                         ORDER BY m2.created_at DESC LIMIT 1
                     ) AS last_body,
                     (
                         SELECT role FROM messages m2
-                        WHERE m2.phone_number = m.phone_number
+                        WHERE m2.phone_number = m.phone_number AND m2.creator_slug = m.creator_slug
                         ORDER BY m2.created_at DESC LIMIT 1
                     ) AS last_role,
                     c.fan_tier,
@@ -443,11 +464,12 @@ def inbox():
                     c.fan_location,
                     LEFT(c.fan_memory, 200) AS fan_memory_preview
                 FROM messages m
-                LEFT JOIN contacts c ON c.phone_number = m.phone_number
+                LEFT JOIN contacts c ON c.phone_number = m.phone_number AND c.creator_slug = m.creator_slug
+                WHERE m.creator_slug = %s
                 GROUP BY m.phone_number, c.fan_tier, c.fan_tags, c.fan_location, c.fan_memory
                 ORDER BY last_message_at DESC
                 LIMIT %s OFFSET %s
-            """, (per_page, offset))
+            """, (_slug, per_page, offset))
             rows = cur.fetchall()
         conn.close()
     except Exception:
@@ -485,19 +507,27 @@ def inbox_thread(phone_last4):
     """
     Full message thread for a fan identified by their last-4 phone digits.
     If multiple fans share the same last-4, returns the most recently active one.
+    Scoped to the logged-in user's creator_slug.
     """
+    from flask import session as _session
+    _u = current_user()
+    _slug = (
+        _session.get("viewing_as") or _u.get("creator_slug")
+        if _u and _u.get("is_super_admin")
+        else (_u or {}).get("creator_slug") or ""
+    )
     try:
         conn = get_conn()
         import psycopg2.extras
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            # Find the full phone number (most recent match)
+            # Find the full phone number (most recent match, scoped to this creator)
             cur.execute("""
                 SELECT phone_number FROM messages
-                WHERE RIGHT(phone_number, 4) = %s
+                WHERE RIGHT(phone_number, 4) = %s AND creator_slug = %s
                 GROUP BY phone_number
                 ORDER BY MAX(created_at) DESC
                 LIMIT 1
-            """, (phone_last4,))
+            """, (phone_last4, _slug))
             row = cur.fetchone()
             if not row:
                 return jsonify(messages=[], fan={}), 404
@@ -507,9 +537,9 @@ def inbox_thread(phone_last4):
             cur.execute("""
                 SELECT role, text AS body, created_at, intent, tone_mode, sell_variant
                 FROM messages
-                WHERE phone_number = %s
+                WHERE phone_number = %s AND creator_slug = %s
                 ORDER BY created_at ASC
-            """, (phone,))
+            """, (phone, _slug))
             messages = [
                 {
                     "role": r["role"],
@@ -523,8 +553,8 @@ def inbox_thread(phone_last4):
 
             cur.execute("""
                 SELECT fan_tier, fan_tags, fan_location, fan_memory, fan_score, created_at
-                FROM contacts WHERE phone_number = %s
-            """, (phone,))
+                FROM contacts WHERE phone_number = %s AND creator_slug = %s
+            """, (phone, _slug))
             fan_row = cur.fetchone()
             fan = {}
             if fan_row:
@@ -588,17 +618,18 @@ def api_inbox_send(phone_last4):
     except Exception:
         logger.exception("api_inbox_send: credit gate failed — allowing send (fail-open)")
 
-    # Resolve the full phone number from last-4
+    # Resolve the full phone number from last-4, scoped to this creator
+    _slug_for_send = (user or {}).get("creator_slug") or ""
     try:
         conn = get_conn()
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT phone_number FROM messages
-                WHERE RIGHT(phone_number, 4) = %s
+                WHERE RIGHT(phone_number, 4) = %s AND creator_slug = %s
                 GROUP BY phone_number
                 ORDER BY MAX(created_at) DESC
                 LIMIT 1
-            """, (phone_last4,))
+            """, (phone_last4, _slug_for_send))
             row = cur.fetchone()
         conn.close()
     except Exception as e:
@@ -855,6 +886,13 @@ def api_blast_tier_counts():
         ]
       }
     """
+    from flask import session as _session
+    _u = current_user()
+    _slug = (
+        _session.get("viewing_as") or _u.get("creator_slug")
+        if _u and _u.get("is_super_admin")
+        else (_u or {}).get("creator_slug") or ""
+    )
     counts = {}
     try:
         conn = get_conn()
@@ -862,8 +900,9 @@ def api_blast_tier_counts():
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT fan_tier, COUNT(*) FROM contacts "
-                "WHERE fan_tier IS NOT NULL AND phone_number NOT LIKE 'whatsapp:%%' "
-                "GROUP BY fan_tier"
+                "WHERE creator_slug = %s AND fan_tier IS NOT NULL AND phone_number NOT LIKE 'whatsapp:%%' "
+                "GROUP BY fan_tier",
+                (_slug,)
             )
             counts = {row[0]: row[1] for row in cur.fetchall()}
         conn.close()
@@ -951,6 +990,13 @@ def api_smart_send_preview():
         "total_suppressed": N
       }
     """
+    from flask import session as _session
+    _u_ssp = current_user()
+    _slug_ssp = (
+        _session.get("viewing_as") or _u_ssp.get("creator_slug")
+        if _u_ssp and _u_ssp.get("is_super_admin")
+        else (_u_ssp or {}).get("creator_slug") or ""
+    )
     result = {"tiers": {}, "total_sending": 0, "total_suppressed": 0}
     try:
         conn = get_conn()
@@ -961,8 +1007,8 @@ def api_smart_send_preview():
             for tier, cadence in CADENCE_DAYS.items():
                 cur.execute(
                     "SELECT DISTINCT phone_number FROM contacts "
-                    "WHERE fan_tier = %s AND phone_number NOT LIKE 'whatsapp:%%'",
-                    (tier,),
+                    "WHERE creator_slug = %s AND fan_tier = %s AND phone_number NOT LIKE 'whatsapp:%%'",
+                    (_slug_ssp, tier),
                 )
                 all_phones = {r[0] for r in cur.fetchall()} - optouts
 
@@ -1483,7 +1529,15 @@ def fan_of_the_week():
     """
     Returns this week's saved Fan of the Week if one has been selected,
     otherwise falls back to the top dynamic candidate.
+    Scoped to the logged-in user's creator_slug.
     """
+    from flask import session as _session
+    _user = current_user()
+    _slug = (
+        _session.get("viewing_as") or _user.get("creator_slug")
+        if _user and _user.get("is_super_admin")
+        else (_user or {}).get("creator_slug") or ""
+    )
     import psycopg2.extras
     try:
         conn = get_conn()
@@ -1496,8 +1550,9 @@ def fan_of_the_week():
                 FROM fan_of_the_week f
                 LEFT JOIN contacts c ON c.phone_number = f.phone_number
                 WHERE f.week_of = DATE_TRUNC('week', CURRENT_DATE)::date
+                  AND f.creator_slug = %s
                 LIMIT 1
-            """)
+            """, (_slug,))
             saved = cur.fetchone()
             if saved:
                 conn.close()
@@ -1515,10 +1570,10 @@ def fan_of_the_week():
                     fan_memory=saved["fan_memory"] or "",
                     fan_score=saved["fan_score"],
                 )
-            # No saved pick — return top dynamic candidate
+            # No saved pick — return top dynamic candidate scoped to this creator
             row = None
             for days_back in (7, 30, 90):
-                cur.execute(_FOTW_CANDIDATES_SQL, (days_back,))
+                cur.execute(_FOTW_CANDIDATES_SQL + " AND bm.creator_slug = %s", (days_back, _slug))
                 row = cur.fetchone()
                 if row:
                     break
@@ -1552,14 +1607,22 @@ def fan_of_the_week_candidates():
     """
     Returns up to 5 smart-ranked candidates for Fan of the Week,
     excluding anyone picked in the last 8 weeks.
+    Scoped to the logged-in user's creator_slug.
     """
+    from flask import session as _session
+    _u = current_user()
+    _slug = (
+        _session.get("viewing_as") or _u.get("creator_slug")
+        if _u and _u.get("is_super_admin")
+        else (_u or {}).get("creator_slug") or ""
+    )
     import psycopg2.extras
     try:
         conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             rows = []
             for days_back in (7, 30, 90):
-                cur.execute(_FOTW_CANDIDATES_SQL, (days_back,))
+                cur.execute(_FOTW_CANDIDATES_SQL + " AND bm.creator_slug = %s", (days_back, _slug))
                 rows = cur.fetchall()
                 if rows:
                     break
@@ -1595,6 +1658,13 @@ def fan_of_the_week_select():
     Body: { "phone_last4": "1234", "message_text": "..." }
     Also tags the contact with 'fan_of_the_week'.
     """
+    from flask import session as _session
+    _u_fotw = current_user()
+    _slug_fotw = (
+        _session.get("viewing_as") or _u_fotw.get("creator_slug")
+        if _u_fotw and _u_fotw.get("is_super_admin")
+        else (_u_fotw or {}).get("creator_slug") or ""
+    )
     import psycopg2.extras
     data = request.get_json(silent=True) or {}
     phone_last4 = (data.get("phone_last4") or "").strip()
@@ -1606,14 +1676,14 @@ def fan_of_the_week_select():
     try:
         conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            # Resolve last-4 to full phone number
+            # Resolve last-4 to full phone number, scoped to this creator
             cur.execute("""
                 SELECT phone_number FROM messages
-                WHERE RIGHT(phone_number, 4) = %s
+                WHERE RIGHT(phone_number, 4) = %s AND creator_slug = %s
                 GROUP BY phone_number
                 ORDER BY MAX(created_at) DESC
                 LIMIT 1
-            """, (phone_last4,))
+            """, (phone_last4, _slug_fotw))
             row = cur.fetchone()
             if not row:
                 conn.close()
@@ -1621,15 +1691,15 @@ def fan_of_the_week_select():
 
             phone = row["phone_number"]
 
-            # Upsert the pick for this week
+            # Upsert the pick for this week, scoped to this creator
             cur.execute("""
-                INSERT INTO fan_of_the_week (phone_number, week_of, message_text)
-                VALUES (%s, DATE_TRUNC('week', CURRENT_DATE)::date, %s)
-                ON CONFLICT (week_of) DO UPDATE
+                INSERT INTO fan_of_the_week (phone_number, week_of, message_text, creator_slug)
+                VALUES (%s, DATE_TRUNC('week', CURRENT_DATE)::date, %s, %s)
+                ON CONFLICT (creator_slug, week_of) DO UPDATE
                     SET phone_number = EXCLUDED.phone_number,
                         message_text = EXCLUDED.message_text,
                         selected_at  = NOW()
-            """, (phone, message_text))
+            """, (phone, message_text, _slug_fotw))
 
             # Add 'fan_of_the_week' tag to the contact (avoid duplicates)
             cur.execute("""
@@ -1638,9 +1708,9 @@ def fan_of_the_week_select():
                     COALESCE(fan_tags, '{}'),
                     'fan_of_the_week'
                 )
-                WHERE phone_number = %s
+                WHERE phone_number = %s AND creator_slug = %s
                   AND NOT ('fan_of_the_week' = ANY(COALESCE(fan_tags, '{}')))
-            """, (phone,))
+            """, (phone, _slug_fotw))
 
         conn.commit()
         conn.close()
@@ -1656,7 +1726,15 @@ def fan_of_the_week_select():
 def fan_of_the_week_history():
     """
     Returns all past Fan of the Week picks, newest first.
+    Scoped to the logged-in user's creator_slug.
     """
+    from flask import session as _session
+    _u = current_user()
+    _slug = (
+        _session.get("viewing_as") or _u.get("creator_slug")
+        if _u and _u.get("is_super_admin")
+        else (_u or {}).get("creator_slug") or ""
+    )
     import psycopg2.extras
     try:
         conn = get_conn()
@@ -1672,10 +1750,11 @@ def fan_of_the_week_history():
                     c.fan_location,
                     c.fan_score
                 FROM fan_of_the_week f
-                LEFT JOIN contacts c ON c.phone_number = f.phone_number
+                LEFT JOIN contacts c ON c.phone_number = f.phone_number AND c.creator_slug = f.creator_slug
+                WHERE f.creator_slug = %s
                 ORDER BY f.week_of DESC
                 LIMIT 52
-            """)
+            """, (_slug,))
             rows = cur.fetchall()
         conn.close()
     except Exception:

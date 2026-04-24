@@ -28,13 +28,11 @@ from ..db import get_conn
 
 _log = logging.getLogger(__name__)
 
-# Project root so we can find creator_config/TEMPLATE_LLM.json regardless of
-# where the process was launched from. operator/app/provisioning/… → ../../../
+# Repo root: app/provisioning/config_writer.py → go up 3 levels to reach the
+# repo root where creator_config/ lives.
 _ROOT = os.path.dirname(
     os.path.dirname(
-        os.path.dirname(
-            os.path.dirname(os.path.abspath(__file__))
-        )
+        os.path.dirname(os.path.abspath(__file__))
     )
 )
 _TEMPLATE_PATH = os.path.join(_ROOT, "creator_config", "TEMPLATE_LLM.json")

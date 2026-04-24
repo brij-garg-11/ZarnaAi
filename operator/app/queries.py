@@ -11,66 +11,67 @@ import psycopg2.extras
 
 # ── Stats ──────────────────────────────────────────────────────────────────
 
-def get_overview_stats() -> dict:
+def get_overview_stats(creator_slug: str = "zarna") -> dict:
     conn = get_conn()
+    slug = creator_slug or "zarna"
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute("SELECT COUNT(DISTINCT phone_number) FROM contacts")
+            cur.execute("SELECT COUNT(DISTINCT phone_number) FROM contacts WHERE creator_slug=%s", (slug,))
             total_subscribers = cur.fetchone()[0]
 
-            cur.execute("SELECT COUNT(*) FROM messages WHERE role='user'")
+            cur.execute("SELECT COUNT(*) FROM messages WHERE role='user' AND creator_slug=%s", (slug,))
             total_messages = cur.fetchone()[0]
 
-            cur.execute("SELECT COUNT(*) FROM messages WHERE role='user' AND created_at >= NOW()-INTERVAL '24 hours'")
+            cur.execute("SELECT COUNT(*) FROM messages WHERE role='user' AND creator_slug=%s AND created_at >= NOW()-INTERVAL '24 hours'", (slug,))
             messages_today = cur.fetchone()[0]
 
-            cur.execute("SELECT COUNT(*) FROM messages WHERE role='user' AND created_at >= NOW()-INTERVAL '7 days'")
+            cur.execute("SELECT COUNT(*) FROM messages WHERE role='user' AND creator_slug=%s AND created_at >= NOW()-INTERVAL '7 days'", (slug,))
             messages_week = cur.fetchone()[0]
 
             cur.execute("""
                 SELECT COUNT(*) FROM messages
-                WHERE role='user' AND created_at >= NOW()-INTERVAL '14 days'
+                WHERE role='user' AND creator_slug=%s AND created_at >= NOW()-INTERVAL '14 days'
                   AND created_at < NOW()-INTERVAL '7 days'
-            """)
+            """, (slug,))
             messages_prev_week = cur.fetchone()[0]
 
-            cur.execute("SELECT COUNT(DISTINCT phone_number) FROM contacts WHERE created_at >= NOW()-INTERVAL '7 days'")
+            cur.execute("SELECT COUNT(DISTINCT phone_number) FROM contacts WHERE creator_slug=%s AND created_at >= NOW()-INTERVAL '7 days'", (slug,))
             new_subs_week = cur.fetchone()[0]
 
             cur.execute("""
                 SELECT COUNT(DISTINCT phone_number) FROM contacts
-                WHERE created_at >= NOW()-INTERVAL '14 days'
+                WHERE creator_slug=%s AND created_at >= NOW()-INTERVAL '14 days'
                   AND created_at < NOW()-INTERVAL '7 days'
-            """)
+            """, (slug,))
             new_subs_prev_week = cur.fetchone()[0]
 
-            cur.execute("SELECT COUNT(*) FROM messages WHERE role='user' AND created_at >= NOW()-INTERVAL '1 hour'")
+            cur.execute("SELECT COUNT(*) FROM messages WHERE role='user' AND creator_slug=%s AND created_at >= NOW()-INTERVAL '1 hour'", (slug,))
             messages_last_hour = cur.fetchone()[0]
 
             cur.execute("""
                 SELECT DATE(created_at AT TIME ZONE 'America/New_York') as day, COUNT(*) as cnt
-                FROM messages WHERE role='user' AND created_at >= NOW()-INTERVAL '30 days'
+                FROM messages WHERE role='user' AND creator_slug=%s AND created_at >= NOW()-INTERVAL '30 days'
                 GROUP BY day ORDER BY day
-            """)
+            """, (slug,))
             messages_by_day = [(str(r["day"]), r["cnt"]) for r in cur.fetchall()]
 
             cur.execute("""
                 SELECT EXTRACT(HOUR FROM created_at AT TIME ZONE 'America/New_York')::int as hr,
                        COUNT(*) as cnt
-                FROM messages WHERE role='user' AND created_at >= NOW()-INTERVAL '30 days'
+                FROM messages WHERE role='user' AND creator_slug=%s AND created_at >= NOW()-INTERVAL '30 days'
                 GROUP BY hr ORDER BY hr
-            """)
+            """, (slug,))
             hour_map = {r["hr"]: r["cnt"] for r in cur.fetchall()}
             messages_by_hour = [hour_map.get(h, 0) for h in range(24)]
 
             cur.execute("""
                 SELECT UNNEST(fan_tags) as tag, COUNT(*) as cnt
-                FROM contacts WHERE fan_tags IS NOT NULL AND fan_tags != '{}'
+                FROM contacts WHERE creator_slug=%s AND fan_tags IS NOT NULL AND fan_tags != '{}'
                 GROUP BY tag ORDER BY cnt DESC LIMIT 20
-            """)
+            """, (slug,))
             tag_breakdown = [(r["tag"], r["cnt"]) for r in cur.fetchall()]
 
-            cur.execute("SELECT phone_number FROM contacts")
+            cur.execute("SELECT phone_number FROM contacts WHERE creator_slug=%s", (slug,))
             all_phones = [r[0] for r in cur.fetchall()]
             area_codes = Counter()
             for p in all_phones:
@@ -81,7 +82,7 @@ def get_overview_stats() -> dict:
                     area_codes[digits[:3]] += 1
             top_area_codes = area_codes.most_common(10)
 
-            cur.execute("SELECT COUNT(*) FROM contacts WHERE fan_memory IS NOT NULL AND fan_memory != ''")
+            cur.execute("SELECT COUNT(*) FROM contacts WHERE creator_slug=%s AND fan_memory IS NOT NULL AND fan_memory != ''", (slug,))
             profiled_fans = cur.fetchone()[0]
 
         return {
