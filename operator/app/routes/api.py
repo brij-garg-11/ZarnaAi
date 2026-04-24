@@ -8,7 +8,7 @@ All routes return JSON — no HTML rendering.
 from pathlib import Path
 
 from flask import Blueprint, jsonify, request
-from ..routes.auth import login_required, current_user
+from ..routes.auth import login_required, current_user, resolve_slug
 
 _BUSINESS_CONFIGS_DIR = Path(__file__).parent.parent / "business_configs"
 from ..queries import get_overview_stats, list_shows, list_blast_drafts, get_all_tags
@@ -20,19 +20,29 @@ logger = logging.getLogger(__name__)
 api_bp = Blueprint("api", __name__)
 
 
+def _slug_or_abort():
+    """
+    Resolve the authorized creator_slug for the current request.
+    Returns the slug string on success.
+    Calls flask.abort() with 401/403 on authorization failure so callers
+    never need to branch on the error code themselves.
+    """
+    from flask import abort
+    slug, err = resolve_slug()
+    if err == 401:
+        abort(401)
+    if err == 403:
+        abort(403)
+    return slug
+
+
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
 @api_bp.route("/api/dashboard/stats")
 @login_required
 def dashboard_stats():
     """Main dashboard stats — mirrors the HTML dashboard data."""
-    from flask import session as _session
-    user = current_user()
-    slug = (
-        _session.get("viewing_as") or user.get("creator_slug")
-        if user and user.get("is_super_admin")
-        else (user or {}).get("creator_slug") or ""
-    )
+    slug = _slug_or_abort()
     try:
         stats = get_overview_stats(creator_slug=slug)
     except Exception:
@@ -151,20 +161,14 @@ def blasts_list():
 @login_required
 def audience():
     """Audience tags, area codes, and fan tier breakdown."""
-    from flask import session as _session
-    _u = current_user()
-    _slug = (
-        _session.get("viewing_as") or _u.get("creator_slug")
-        if _u and _u.get("is_super_admin")
-        else (_u or {}).get("creator_slug") or ""
-    )
+    _slug = _slug_or_abort()
     try:
         stats = get_overview_stats(creator_slug=_slug)
     except Exception:
         logger.exception("api: failed to fetch audience stats")
         stats = {}
 
-    # Fan tier counts from contacts table
+    # Fan tier counts from contacts table (slug already resolved above)
     tier_counts = {}
     try:
         conn = get_conn()
@@ -417,13 +421,7 @@ def inbox():
     Phone numbers are masked to last-4 only.
     Query params: ?page=1
     """
-    from flask import session as _session
-    _u = current_user()
-    _slug = (
-        _session.get("viewing_as") or _u.get("creator_slug")
-        if _u and _u.get("is_super_admin")
-        else (_u or {}).get("creator_slug") or ""
-    )
+    _slug = _slug_or_abort()
     page = max(1, int(request.args.get("page", 1)))
     per_page = 25
     offset = (page - 1) * per_page
@@ -507,15 +505,9 @@ def inbox_thread(phone_last4):
     """
     Full message thread for a fan identified by their last-4 phone digits.
     If multiple fans share the same last-4, returns the most recently active one.
-    Scoped to the logged-in user's creator_slug.
+    Scoped to the logged-in user's authorized creator_slug.
     """
-    from flask import session as _session
-    _u = current_user()
-    _slug = (
-        _session.get("viewing_as") or _u.get("creator_slug")
-        if _u and _u.get("is_super_admin")
-        else (_u or {}).get("creator_slug") or ""
-    )
+    _slug = _slug_or_abort()
     try:
         conn = get_conn()
         import psycopg2.extras
@@ -619,7 +611,7 @@ def api_inbox_send(phone_last4):
         logger.exception("api_inbox_send: credit gate failed — allowing send (fail-open)")
 
     # Resolve the full phone number from last-4, scoped to this creator
-    _slug_for_send = (user or {}).get("creator_slug") or ""
+    _slug_for_send = _slug_or_abort()
     try:
         conn = get_conn()
         with conn.cursor() as cur:
@@ -886,13 +878,7 @@ def api_blast_tier_counts():
         ]
       }
     """
-    from flask import session as _session
-    _u = current_user()
-    _slug = (
-        _session.get("viewing_as") or _u.get("creator_slug")
-        if _u and _u.get("is_super_admin")
-        else (_u or {}).get("creator_slug") or ""
-    )
+    _slug = _slug_or_abort()
     counts = {}
     try:
         conn = get_conn()
@@ -931,12 +917,7 @@ def api_contacts_engaged():
     """
     from ..engagement import top_engaged
 
-    user = current_user()
-    from flask import session
-    if user.get("is_super_admin"):
-        slug = session.get("viewing_as") or user.get("creator_slug")
-    else:
-        slug = user.get("creator_slug")
+    slug = _slug_or_abort()
 
     try:
         limit = int(request.args.get("top", "100"))
@@ -990,13 +971,7 @@ def api_smart_send_preview():
         "total_suppressed": N
       }
     """
-    from flask import session as _session
-    _u_ssp = current_user()
-    _slug_ssp = (
-        _session.get("viewing_as") or _u_ssp.get("creator_slug")
-        if _u_ssp and _u_ssp.get("is_super_admin")
-        else (_u_ssp or {}).get("creator_slug") or ""
-    )
+    _slug_ssp = _slug_or_abort()
     result = {"tiers": {}, "total_sending": 0, "total_suppressed": 0}
     try:
         conn = get_conn()
@@ -1529,15 +1504,9 @@ def fan_of_the_week():
     """
     Returns this week's saved Fan of the Week if one has been selected,
     otherwise falls back to the top dynamic candidate.
-    Scoped to the logged-in user's creator_slug.
+    Scoped to the logged-in user's authorized creator_slug.
     """
-    from flask import session as _session
-    _user = current_user()
-    _slug = (
-        _session.get("viewing_as") or _user.get("creator_slug")
-        if _user and _user.get("is_super_admin")
-        else (_user or {}).get("creator_slug") or ""
-    )
+    _slug = _slug_or_abort()
     import psycopg2.extras
     try:
         conn = get_conn()
@@ -1607,15 +1576,9 @@ def fan_of_the_week_candidates():
     """
     Returns up to 5 smart-ranked candidates for Fan of the Week,
     excluding anyone picked in the last 8 weeks.
-    Scoped to the logged-in user's creator_slug.
+    Scoped to the logged-in user's authorized creator_slug.
     """
-    from flask import session as _session
-    _u = current_user()
-    _slug = (
-        _session.get("viewing_as") or _u.get("creator_slug")
-        if _u and _u.get("is_super_admin")
-        else (_u or {}).get("creator_slug") or ""
-    )
+    _slug = _slug_or_abort()
     import psycopg2.extras
     try:
         conn = get_conn()
@@ -1658,13 +1621,7 @@ def fan_of_the_week_select():
     Body: { "phone_last4": "1234", "message_text": "..." }
     Also tags the contact with 'fan_of_the_week'.
     """
-    from flask import session as _session
-    _u_fotw = current_user()
-    _slug_fotw = (
-        _session.get("viewing_as") or _u_fotw.get("creator_slug")
-        if _u_fotw and _u_fotw.get("is_super_admin")
-        else (_u_fotw or {}).get("creator_slug") or ""
-    )
+    _slug_fotw = _slug_or_abort()
     import psycopg2.extras
     data = request.get_json(silent=True) or {}
     phone_last4 = (data.get("phone_last4") or "").strip()
@@ -1726,15 +1683,9 @@ def fan_of_the_week_select():
 def fan_of_the_week_history():
     """
     Returns all past Fan of the Week picks, newest first.
-    Scoped to the logged-in user's creator_slug.
+    Scoped to the logged-in user's authorized creator_slug.
     """
-    from flask import session as _session
-    _u = current_user()
-    _slug = (
-        _session.get("viewing_as") or _u.get("creator_slug")
-        if _u and _u.get("is_super_admin")
-        else (_u or {}).get("creator_slug") or ""
-    )
+    _slug = _slug_or_abort()
     import psycopg2.extras
     try:
         conn = get_conn()
@@ -2450,16 +2401,13 @@ def billing_status():
 def _get_tenant_slug() -> str | None:
     """
     Returns the effective tenant_slug for the current request.
-    Super-admins can override via session['viewing_as']; everyone else
-    gets their own creator_slug.
+    Delegates to resolve_slug() so all authorization checks (own slug +
+    team membership) are applied consistently.
     """
-    from flask import session
-    user = current_user()
-    if not user:
+    slug, err = resolve_slug()
+    if err:
         return None
-    if user.get("is_super_admin"):
-        return session.get("viewing_as") or user.get("creator_slug")
-    return user.get("creator_slug")
+    return slug or None
 
 
 @api_bp.route("/api/business/stats")
@@ -3659,12 +3607,7 @@ def team_members():
     explicit role). Pending invites still live in `operator_invites` until
     the invitee completes signup.
     """
-    user = current_user()
-    from flask import session
-    if user.get("is_super_admin"):
-        slug = session.get("viewing_as") or user.get("creator_slug")
-    else:
-        slug = user.get("creator_slug")
+    slug = _slug_or_abort()
 
     if not slug:
         return jsonify(error="No project context"), 400
@@ -3800,13 +3743,8 @@ def team_invite():
     On their first Google login the account is auto-provisioned.
     """
     user = current_user()
-    from flask import session
-    if user.get("is_super_admin"):
-        slug = session.get("viewing_as") or user.get("creator_slug")
-        account_type_for_project = session.get("viewing_as_account_type") or user.get("account_type") or "performer"
-    else:
-        slug = user.get("creator_slug")
-        account_type_for_project = user.get("account_type") or "performer"
+    slug = _slug_or_abort()
+    account_type_for_project = user.get("account_type") or "performer"
 
     if not slug:
         return jsonify(error="No project context"), 400
@@ -3892,9 +3830,7 @@ def team_invite():
 @login_required
 def team_revoke_invite(invite_id):
     """Revoke a pending invite."""
-    user = current_user()
-    from flask import session
-    slug = session.get("viewing_as") if user.get("is_super_admin") else user.get("creator_slug")
+    slug = _slug_or_abort()
 
     conn = get_conn()
     try:
@@ -3921,8 +3857,7 @@ def team_remove_member(member_id):
     dropped and their operator_users record deactivated.
     """
     user = current_user()
-    from flask import session
-    slug = session.get("viewing_as") if user.get("is_super_admin") else user.get("creator_slug")
+    slug = _slug_or_abort()
 
     if member_id == user["id"]:
         return jsonify(error="You cannot remove yourself"), 400

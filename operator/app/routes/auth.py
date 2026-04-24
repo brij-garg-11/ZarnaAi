@@ -53,6 +53,75 @@ def current_user() -> dict | None:
     return None
 
 
+def get_authorized_slugs(user_id: int, own_slug: str | None) -> set[str]:
+    """
+    Returns the full set of creator_slugs this user is authorized to access:
+      - Their own slug (if set)
+      - Any tenant_slug they have an accepted team_members row for
+
+    This is the source of truth for all data-access authorization.
+    """
+    slugs: set[str] = set()
+    if own_slug:
+        slugs.add(own_slug)
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT tenant_slug FROM team_members
+                   WHERE user_id = %s AND accepted_at IS NOT NULL""",
+                (user_id,),
+            )
+            for row in cur.fetchall():
+                slugs.add(row[0])
+        conn.close()
+    except Exception:
+        logger.exception("get_authorized_slugs: db error for user_id=%s", user_id)
+    return slugs
+
+
+def resolve_slug() -> tuple[str, int | None]:
+    """
+    Returns (effective_slug, http_error_code_or_None).
+
+    Rules:
+      - Super-admins: can view any slug via session["viewing_as"]; no
+        further membership check is applied.
+      - Everyone else: effective slug = their own creator_slug OR any
+        slug they have an accepted team_members record for (e.g. via
+        session["viewing_as"] for account-switchers).
+      - If the resolved slug is empty (account not fully set up), returns
+        ("", None) — callers should treat this as empty/zero data.
+      - If viewing_as is set but the user is NOT authorized for that slug,
+        returns ("", 403).
+    """
+    user = current_user()
+    if not user:
+        return ("", 401)
+
+    own_slug = user.get("creator_slug") or ""
+
+    # Super-admins bypass the membership check.
+    if user.get("is_super_admin"):
+        effective = session.get("viewing_as") or own_slug
+        return (effective, None)
+
+    # For regular users, viewing_as lets team members switch accounts.
+    requested = session.get("viewing_as") or own_slug
+    if not requested:
+        return ("", None)
+
+    authorized = get_authorized_slugs(user["id"], own_slug)
+    if requested not in authorized:
+        logger.warning(
+            "resolve_slug: user %s tried to access slug '%s' — not authorized (authorized: %s)",
+            user.get("email"), requested, authorized,
+        )
+        return ("", 403)
+
+    return (requested, None)
+
+
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
