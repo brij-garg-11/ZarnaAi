@@ -493,18 +493,35 @@ def get_pending_scheduled_blasts():
 
 # ── Live shows (read-only, PII-free) ───────────────────────────────────────
 
-def list_shows() -> list[dict]:
+def list_shows(creator_slug: str | None = None) -> list[dict]:
+    """List live shows.
+
+    When ``creator_slug`` is provided, results are scoped to that tenant so
+    team members only ever see their own project's shows. Passing ``None``
+    returns everything — intended for super-admin / cross-tenant views.
+    """
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute("""
-                SELECT s.id, s.name, s.status, s.keyword, s.deliver_as,
-                       s.event_category, s.window_start, s.window_end,
-                       s.event_timezone, s.created_at,
-                       (SELECT COUNT(*) FROM live_show_signups x WHERE x.show_id = s.id) AS signup_count
-                FROM live_shows s
-                ORDER BY s.created_at DESC
-            """)
+            if creator_slug:
+                cur.execute("""
+                    SELECT s.id, s.name, s.status, s.keyword, s.deliver_as,
+                           s.event_category, s.window_start, s.window_end,
+                           s.event_timezone, s.created_at, s.creator_slug,
+                           (SELECT COUNT(*) FROM live_show_signups x WHERE x.show_id = s.id) AS signup_count
+                    FROM live_shows s
+                    WHERE s.creator_slug = %s
+                    ORDER BY s.created_at DESC
+                """, (creator_slug,))
+            else:
+                cur.execute("""
+                    SELECT s.id, s.name, s.status, s.keyword, s.deliver_as,
+                           s.event_category, s.window_start, s.window_end,
+                           s.event_timezone, s.created_at, s.creator_slug,
+                           (SELECT COUNT(*) FROM live_show_signups x WHERE x.show_id = s.id) AS signup_count
+                    FROM live_shows s
+                    ORDER BY s.created_at DESC
+                """)
             return [dict(r) for r in cur.fetchall()]
     except Exception as e:
         import logging
@@ -514,18 +531,30 @@ def list_shows() -> list[dict]:
         conn.close()
 
 
-def get_show(show_id: int) -> dict | None:
+def get_show(show_id: int, creator_slug: str | None = None) -> dict | None:
+    """Fetch one show. If ``creator_slug`` is provided, enforce tenant scoping
+    — returns None when the show belongs to a different tenant."""
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute("""
-                SELECT s.id, s.name, s.status, s.keyword, s.use_keyword_only,
-                       s.deliver_as, s.event_category, s.event_timezone,
-                       s.window_start, s.window_end, s.created_at,
-                       (SELECT COUNT(*) FROM live_show_signups x WHERE x.show_id = s.id) AS signup_count
-                FROM live_shows s
-                WHERE s.id = %s
-            """, (show_id,))
+            if creator_slug:
+                cur.execute("""
+                    SELECT s.id, s.name, s.status, s.keyword, s.use_keyword_only,
+                           s.deliver_as, s.event_category, s.event_timezone,
+                           s.window_start, s.window_end, s.created_at, s.creator_slug,
+                           (SELECT COUNT(*) FROM live_show_signups x WHERE x.show_id = s.id) AS signup_count
+                    FROM live_shows s
+                    WHERE s.id = %s AND s.creator_slug = %s
+                """, (show_id, creator_slug))
+            else:
+                cur.execute("""
+                    SELECT s.id, s.name, s.status, s.keyword, s.use_keyword_only,
+                           s.deliver_as, s.event_category, s.event_timezone,
+                           s.window_start, s.window_end, s.created_at, s.creator_slug,
+                           (SELECT COUNT(*) FROM live_show_signups x WHERE x.show_id = s.id) AS signup_count
+                    FROM live_shows s
+                    WHERE s.id = %s
+                """, (show_id,))
             row = cur.fetchone()
             return dict(row) if row else None
     except Exception as e:

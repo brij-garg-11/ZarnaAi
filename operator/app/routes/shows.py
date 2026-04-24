@@ -91,7 +91,18 @@ def _get_recent_audit(show_id: int) -> list:
         conn.close()
 
 
-def _create_show(name, keyword, use_keyword, window_start, window_end, deliver_as, event_category, event_timezone):
+def _create_show(
+    name,
+    keyword,
+    use_keyword,
+    window_start,
+    window_end,
+    deliver_as,
+    event_category,
+    event_timezone,
+    creator_slug=None,
+    created_by=None,
+):
     conn = get_conn()
     try:
         with conn:
@@ -99,11 +110,13 @@ def _create_show(name, keyword, use_keyword, window_start, window_end, deliver_a
                 cur.execute("""
                     INSERT INTO live_shows
                       (name, keyword, use_keyword_only, window_start, window_end,
-                       deliver_as, event_category, event_timezone, status)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'draft')
+                       deliver_as, event_category, event_timezone, status,
+                       creator_slug, created_by)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s, %s)
                     RETURNING id
                 """, (name, keyword or None, use_keyword, window_start, window_end,
-                      deliver_as, event_category, event_timezone))
+                      deliver_as, event_category, event_timezone,
+                      (creator_slug or None), (created_by or None)))
                 show_id = cur.fetchone()[0]
                 cur.execute(
                     "INSERT INTO admin_audit_log (show_id, action, detail) VALUES (%s,%s,%s)",
@@ -142,7 +155,12 @@ def new_show():
             error = "Window start and end are required for time-window mode."
         else:
             try:
-                show_id = _create_show(name, keyword, use_kw, ws, we, deliver, event_cat, etz)
+                cu = current_user() or {}
+                show_id = _create_show(
+                    name, keyword, use_kw, ws, we, deliver, event_cat, etz,
+                    creator_slug=(cu.get("creator_slug") or None),
+                    created_by=(cu.get("email") or None),
+                )
                 flash(f'Show "{name}" created as a draft.', "success")
                 return redirect(url_for("shows.show_detail", show_id=show_id))
             except Exception as e:
@@ -160,8 +178,10 @@ def new_show():
 @shows_bp.route("/operator/shows")
 @login_required
 def list_shows_view():
+    cu = current_user() or {}
+    slug = None if cu.get("is_super_admin") else (cu.get("creator_slug") or None)
     try:
-        shows = list_shows()
+        shows = list_shows(creator_slug=slug) if slug else (list_shows() if cu.get("is_super_admin") else [])
     except Exception as e:
         logger.exception("list_shows error")
         shows = []
@@ -182,7 +202,9 @@ def list_shows_view():
 @shows_bp.route("/operator/shows/<int:show_id>")
 @login_required
 def show_detail(show_id: int):
-    show = get_show(show_id)
+    cu = current_user() or {}
+    slug = None if cu.get("is_super_admin") else (cu.get("creator_slug") or None)
+    show = get_show(show_id, creator_slug=slug) if slug else get_show(show_id)
     if not show:
         flash("Show not found.", "error")
         return redirect(url_for("shows.list_shows_view"))
@@ -205,7 +227,9 @@ def show_detail(show_id: int):
 @login_required
 def show_live_status(show_id: int):
     """Lightweight JSON endpoint polled by the browser for live signup counts."""
-    show = get_show(show_id)
+    cu = current_user() or {}
+    slug = None if cu.get("is_super_admin") else (cu.get("creator_slug") or None)
+    show = get_show(show_id, creator_slug=slug) if slug else get_show(show_id)
     if not show:
         return jsonify({"error": "not found"}), 404
     return jsonify({

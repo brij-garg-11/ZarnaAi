@@ -60,7 +60,9 @@ def blast_index():
     _reset_stuck_sending_drafts()
     drafts = list_blast_drafts()
     tags = get_all_tags()
-    shows = list_shows()
+    cu = current_user() or {}
+    slug = None if cu.get("is_super_admin") else (cu.get("creator_slug") or None)
+    shows = list_shows(creator_slug=slug) if slug else (list_shows() if cu.get("is_super_admin") else [])
     return render_template(
         "blast.html",
         user=current_user(),
@@ -122,7 +124,9 @@ def blast_new_for_show(show_id: int):
     """
     from ..queries import get_show
     user = current_user()
-    show = get_show(show_id)
+    cu = user or {}
+    slug = None if cu.get("is_super_admin") else (cu.get("creator_slug") or None)
+    show = get_show(show_id, creator_slug=slug) if slug else get_show(show_id)
     show_name = show["name"] if show else f"Show #{show_id}"
     new_id = save_blast_draft(
         name=f"{show_name} — show message",
@@ -140,7 +144,9 @@ def blast_new_for_show(show_id: int):
 @login_required
 def blast_compose(draft_id: int):
     tags = get_all_tags()
-    shows = list_shows()
+    cu = current_user() or {}
+    slug = None if cu.get("is_super_admin") else (cu.get("creator_slug") or None)
+    shows = list_shows(creator_slug=slug) if slug else (list_shows() if cu.get("is_super_admin") else [])
     drafts = list_blast_drafts()
 
     active_draft = get_blast_draft(draft_id)

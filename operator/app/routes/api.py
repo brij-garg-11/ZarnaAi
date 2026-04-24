@@ -93,9 +93,15 @@ def dashboard_stats():
 @api_bp.route("/api/shows")
 @login_required
 def shows_list():
-    """List all live shows grouped by status."""
+    """List all live shows grouped by status (tenant-scoped)."""
+    user = current_user() or {}
+    # Super-admins see every show; everyone else is scoped to their tenant.
+    slug = None if user.get("is_super_admin") else (user.get("creator_slug") or None)
+    if not user.get("is_super_admin") and not slug:
+        # No tenant yet (e.g. post-removal user) → no shows to show.
+        return jsonify(live=[], draft=[], ended=[])
     try:
-        shows = list_shows()
+        shows = list_shows(creator_slug=slug)
     except Exception:
         logger.exception("api: failed to list shows")
         shows = []
@@ -720,7 +726,12 @@ def api_create_show():
         return jsonify(success=False, error="Window start and end are required for time-window mode."), 400
 
     try:
-        show_id = _create_show(name, keyword, use_kw, ws, we, deliver, event_cat, etz)
+        user = current_user() or {}
+        show_id = _create_show(
+            name, keyword, use_kw, ws, we, deliver, event_cat, etz,
+            creator_slug=(user.get("creator_slug") or None),
+            created_by=(user.get("email") or None),
+        )
         return jsonify(success=True, show_id=show_id, message=f'Show "{name}" created as a draft.')
     except Exception as e:
         logger.exception("api_create_show error")
@@ -769,8 +780,9 @@ def api_show_blast_init(show_id):
     """
     from ..queries import save_blast_draft, list_shows
     user = current_user()
+    slug = None if (user or {}).get("is_super_admin") else (user or {}).get("creator_slug")
     try:
-        shows = list_shows()
+        shows = list_shows(creator_slug=slug) if slug else list_shows()
         show = next((s for s in shows if s["id"] == show_id), None)
         if not show:
             return jsonify(success=False, error="Show not found."), 404
@@ -1051,8 +1063,17 @@ def _user_owns_draft(draft_id: int, user: dict) -> bool:
 def _user_owns_show(show_id: int, user: dict) -> bool:
     """
     Returns True if the current user is allowed to operate on this live show.
-    Super-admins pass unconditionally. Regular users check creator_slug scoping
-    via the shows table (created_by column if present, otherwise slug-level gate).
+
+    Authorization model (post multi-tenant migration):
+      • Super-admins pass unconditionally.
+      • Everyone else must belong to the show's tenant — i.e. their
+        creator_slug must match live_shows.creator_slug. Team members
+        (admin / member roles) can therefore activate, end, or delete
+        shows inside their project, not just shows they personally created.
+
+    Legacy rows with a NULL creator_slug fall back to the old email-based
+    created_by check so we don't accidentally lock out accounts that still
+    have historical shows from before the backfill ran.
     """
     if user.get("is_super_admin"):
         return True
@@ -1060,19 +1081,26 @@ def _user_owns_show(show_id: int, user: dict) -> bool:
         conn = get_conn()
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT created_by FROM live_shows WHERE id=%s",
+                "SELECT creator_slug, created_by FROM live_shows WHERE id=%s",
                 (show_id,),
             )
             row = cur.fetchone()
         conn.close()
         if not row:
             return False
-        created_by = (row[0] or "").lower()
-        # If show has no created_by (legacy rows), allow any authenticated user
-        # for backward compatibility — tightened once creator_slug is on shows.
-        if not created_by:
-            return True
-        return created_by == (user.get("email") or "").lower()
+        show_slug = (row[0] or "").lower()
+        created_by = (row[1] or "").lower()
+        user_slug = (user.get("creator_slug") or "").lower()
+        user_email = (user.get("email") or "").lower()
+
+        if show_slug:
+            return bool(user_slug) and show_slug == user_slug
+
+        # Legacy fallback: no slug stamped yet. Prefer email match if we have
+        # it, otherwise (truly pre-auth rows) allow the request through.
+        if created_by:
+            return created_by == user_email
+        return True
     except Exception:
         logger.exception("_user_owns_show check failed for show_id=%s", show_id)
         return False

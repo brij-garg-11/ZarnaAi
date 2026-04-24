@@ -461,6 +461,19 @@ def init_db():
         "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS engagement_score INT DEFAULT 0",
         "CREATE INDEX IF NOT EXISTS idx_contacts_engagement ON contacts(engagement_score DESC) WHERE engagement_score > 0",
 
+        # ── Multi-tenant ownership on live_shows ──────────────────────────
+        # Prior releases referenced live_shows.created_by / creator_slug from
+        # the _user_owns_show() guard but never actually added the columns,
+        # which made every activate/end/delete API call 404 for non-super
+        # admins. We add both (idempotent) and backfill historical rows with
+        # Zarna's slug/owner email since every existing show pre-dates
+        # multi-tenancy.
+        "ALTER TABLE live_shows ADD COLUMN IF NOT EXISTS creator_slug TEXT DEFAULT NULL",
+        "ALTER TABLE live_shows ADD COLUMN IF NOT EXISTS created_by TEXT DEFAULT NULL",
+        "UPDATE live_shows SET creator_slug='zarna' WHERE creator_slug IS NULL OR creator_slug=''",
+        "UPDATE live_shows SET created_by='brij@zarnagarg.com' WHERE created_by IS NULL OR created_by=''",
+        "CREATE INDEX IF NOT EXISTS idx_live_shows_creator_slug ON live_shows(creator_slug)",
+
         # ── Data-cleanup on every startup ──────────────────────────────────
         # 1. Clear /tmp-based image URLs (ephemeral Railway filesystem, gone on redeploy)
         "UPDATE blast_drafts SET media_url='' WHERE media_url LIKE '%/operator/blast/uploads/%'",
