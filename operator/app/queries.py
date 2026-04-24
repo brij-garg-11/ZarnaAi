@@ -13,7 +13,11 @@ import psycopg2.extras
 
 def get_overview_stats(creator_slug: str = "zarna") -> dict:
     conn = get_conn()
-    slug = creator_slug or "zarna"
+    # Never fall back to "zarna" — callers must pass an explicit, authorized slug.
+    # An empty slug would silently expose Zarna's data to any unprovisioned account.
+    slug = creator_slug
+    if not slug:
+        return {}
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute("SELECT COUNT(DISTINCT phone_number) FROM contacts WHERE creator_slug=%s", (slug,))

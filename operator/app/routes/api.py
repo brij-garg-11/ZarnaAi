@@ -26,12 +26,16 @@ def _slug_or_abort():
     Returns the slug string on success.
     Calls flask.abort() with 401/403 on authorization failure so callers
     never need to branch on the error code themselves.
+    An empty slug means the account is not yet provisioned — treat as 403
+    so unprovisioned users never see another tenant's data.
     """
     from flask import abort
     slug, err = resolve_slug()
     if err == 401:
         abort(401)
     if err == 403:
+        abort(403)
+    if not slug:
         abort(403)
     return slug
 
