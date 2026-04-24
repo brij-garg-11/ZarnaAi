@@ -640,20 +640,9 @@ def google_callback():
             )
             invite = cur.fetchone()
 
-        # If no invite, check whether the account is explicitly deactivated.
-        # Deactivated accounts can only come back through a new invite — they
-        # can't self-serve signup or just log in again.
-        if not invite:
-            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-                cur.execute(
-                    "SELECT id, is_active FROM operator_users WHERE email=%s",
-                    (email,),
-                )
-                existing_any = cur.fetchone()
-
-            if existing_any and not existing_any["is_active"]:
-                conn.close()
-                return redirect(f"{frontend_url}/login?error=access_revoked")
+        # (No deactivated-account block needed here — removed members keep their
+        # ZarBot account active. They just lose creator_slug + team_members access,
+        # so resolve_slug() returns empty and they land on onboarding.)
 
         if invite:
             # Scenario 2: invited user — auto-provision from invite.

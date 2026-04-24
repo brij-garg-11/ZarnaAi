@@ -3906,13 +3906,18 @@ def team_remove_member(member_id):
                     "DELETE FROM team_members WHERE tenant_slug=%s AND user_id=%s",
                     (slug, member_id),
                 )
+                # Remove project association but keep the account active — the
+                # person can still log in to ZarBot and create their own bot.
+                # We only strip their slug so resolve_slug() returns empty and
+                # they land on onboarding instead of this dashboard.
                 cur.execute(
-                    """UPDATE operator_users SET is_active=FALSE, creator_slug=NULL
-                       WHERE id=%s AND is_super_admin=FALSE""",
-                    (member_id,),
+                    """UPDATE operator_users SET creator_slug=NULL
+                       WHERE id=%s AND is_super_admin=FALSE
+                         AND creator_slug=%s""",
+                    (member_id, slug),
                 )
                 # Cancel any outstanding invites for this user on this project so
-                # they can't use a pending invite to re-join immediately.
+                # they can't use a dangling invite to immediately re-join.
                 cur.execute(
                     """DELETE FROM operator_invites
                        WHERE creator_slug=%s
