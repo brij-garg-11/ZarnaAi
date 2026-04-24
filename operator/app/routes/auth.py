@@ -628,22 +628,9 @@ def google_callback():
                 return redirect(f"{frontend_url}/onboarding")
             return redirect(f"{frontend_url}/dashboard")
 
-        # Before invite / signup flows: check if this email belongs to an account
-        # that was explicitly deactivated (e.g. removed from a team). We never
-        # allow deactivated accounts to re-activate themselves — only an admin
-        # re-invite can restore access.
-        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute(
-                "SELECT id, is_active FROM operator_users WHERE email=%s",
-                (email,),
-            )
-            existing_any = cur.fetchone()
-
-        if existing_any and not existing_any["is_active"]:
-            conn.close()
-            return redirect(f"{frontend_url}/login?error=access_revoked")
-
-        # No existing active account — check for a pending invite first
+        # Check for a pending invite first — this is the legitimate re-entry path
+        # even for previously deactivated accounts. An admin re-invite means
+        # "please restore this person's access", so we honour it.
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute(
                 """SELECT * FROM operator_invites
@@ -653,10 +640,25 @@ def google_callback():
             )
             invite = cur.fetchone()
 
+        # If no invite, check whether the account is explicitly deactivated.
+        # Deactivated accounts can only come back through a new invite — they
+        # can't self-serve signup or just log in again.
+        if not invite:
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                cur.execute(
+                    "SELECT id, is_active FROM operator_users WHERE email=%s",
+                    (email,),
+                )
+                existing_any = cur.fetchone()
+
+            if existing_any and not existing_any["is_active"]:
+                conn.close()
+                return redirect(f"{frontend_url}/login?error=access_revoked")
+
         if invite:
             # Scenario 2: invited user — auto-provision from invite.
-            # Only inserts a fresh row; never re-activates a deactivated account
-            # (that case is caught above).
+            # Re-activates deactivated accounts when a new invite exists,
+            # which is intentional — the admin chose to restore access.
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -665,7 +667,7 @@ def google_callback():
                                 account_type, creator_slug, last_login_at)
                            VALUES (%s, %s, '', FALSE, TRUE, %s, %s, NOW())
                            ON CONFLICT (email) DO UPDATE
-                           SET account_type=%s, creator_slug=%s,
+                           SET is_active=TRUE, account_type=%s, creator_slug=%s,
                                name=%s, last_login_at=NOW()
                            RETURNING id""",
                         (email, name, invite["account_type"], invite["creator_slug"],
