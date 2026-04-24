@@ -1430,6 +1430,7 @@ _FOTW_CANDIDATES_SQL = """
         SELECT phone_number, COUNT(*) AS reply_count
         FROM   messages
         WHERE  role = 'user'
+          AND  creator_slug = %s
           AND  created_at >= NOW() - INTERVAL '7 days'
           AND  did_user_reply = true
         GROUP  BY phone_number
@@ -1449,6 +1450,7 @@ _FOTW_CANDIDATES_SQL = """
             m.created_at AS msg_at
         FROM messages m
         WHERE m.role = 'user'
+          AND m.creator_slug = %s
           AND m.created_at >= NOW() - INTERVAL '1 day' * %s
           AND LENGTH(m.text) BETWEEN 15 AND 400
           AND m.text NOT ILIKE 'stop%%'
@@ -1483,12 +1485,13 @@ _FOTW_CANDIDATES_SQL = """
           + RANDOM() * 5
         )                                        AS candidate_score
     FROM best_msg bm
-    LEFT JOIN contacts c  ON c.phone_number = bm.phone_number
+    LEFT JOIN contacts c  ON c.phone_number = bm.phone_number AND c.creator_slug = %s
     LEFT JOIN recent_replies rr ON rr.phone_number = bm.phone_number
     LEFT JOIN came_back cb      ON cb.phone_number = bm.phone_number
     WHERE bm.phone_number NOT IN (
         SELECT phone_number FROM fan_of_the_week
         WHERE week_of >= CURRENT_DATE - INTERVAL '8 weeks'
+          AND creator_slug = %s
     )
       AND bm.phone_number NOT IN (
         '+16466406086', '+16467244908', '+16467242012'
@@ -1542,7 +1545,7 @@ def fan_of_the_week():
             # No saved pick — return top dynamic candidate scoped to this creator
             row = None
             for days_back in (7, 30, 90):
-                cur.execute(_FOTW_CANDIDATES_SQL + " AND bm.creator_slug = %s", (days_back, _slug))
+                cur.execute(_FOTW_CANDIDATES_SQL, (_slug, _slug, days_back, _slug, _slug))
                 row = cur.fetchone()
                 if row:
                     break
@@ -1585,7 +1588,7 @@ def fan_of_the_week_candidates():
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             rows = []
             for days_back in (7, 30, 90):
-                cur.execute(_FOTW_CANDIDATES_SQL + " AND bm.creator_slug = %s", (days_back, _slug))
+                cur.execute(_FOTW_CANDIDATES_SQL, (_slug, _slug, days_back, _slug, _slug))
                 rows = cur.fetchall()
                 if rows:
                     break
