@@ -347,13 +347,48 @@ def _lookup_user_by_customer(customer_id: str) -> Optional[dict]:
         import psycopg2.extras
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute(
-                "SELECT id, creator_slug FROM operator_users WHERE stripe_customer_id=%s",
+                "SELECT id, creator_slug, account_type FROM operator_users WHERE stripe_customer_id=%s",
                 (customer_id,),
             )
             row = cur.fetchone()
             return dict(row) if row else None
     finally:
         conn.close()
+
+
+def _sync_plan_to_notion(
+    slug: str,
+    account_type: Optional[str],
+    plan,
+    billing_cycle: str,
+    stripe_customer_id: Optional[str] = None,
+    status_label: str = "active",
+) -> None:
+    """Fire-and-forget update of the customer's Notion page with their new plan.
+    Never raises — billing correctness must not depend on Notion availability.
+
+    `plan` is an instance of billing.plans.Plan.
+    """
+    if not slug:
+        return
+    try:
+        from ..notion_crm import update_customer_plan_async
+        monthly_fee = (
+            plan.monthly_price_usd if billing_cycle == "monthly"
+            else round(plan.annual_price_usd / 12.0, 2)
+        )
+        update_customer_plan_async(
+            slug=slug,
+            account_type=account_type or plan.audience,
+            plan_tier=plan.tier,
+            plan_label=plan.label,
+            billing_cycle=billing_cycle,
+            monthly_fee=monthly_fee,
+            stripe_customer_id=stripe_customer_id,
+            status_label=status_label,
+        )
+    except Exception:
+        logger.exception("_sync_plan_to_notion failed for slug=%s", slug)
 
 
 def _handle_checkout_completed(session: dict) -> None:
@@ -402,6 +437,14 @@ def _handle_checkout_completed(session: dict) -> None:
             stripe_subscription_id=sub_id,
             billing_cycle_anchor=datetime.now(timezone.utc),
             included_credits=plan.monthly_credits,
+        )
+        _sync_plan_to_notion(
+            slug=slug,
+            account_type=plan.audience,
+            plan=plan,
+            billing_cycle=billing_cycle,
+            stripe_customer_id=customer_id,
+            status_label="active",
         )
 
 
@@ -463,6 +506,14 @@ def _handle_invoice_paid(invoice: dict) -> None:
         billing_cycle_anchor=anchor,
         included_credits=plan.monthly_credits,
     )
+    _sync_plan_to_notion(
+        slug=user.get("creator_slug") or "",
+        account_type=user.get("account_type") or plan.audience,
+        plan=plan,
+        billing_cycle=billing_cycle,
+        stripe_customer_id=customer_id,
+        status_label="active",
+    )
 
 
 def _handle_subscription_updated(sub: dict) -> None:
@@ -507,6 +558,14 @@ def _handle_subscription_updated(sub: dict) -> None:
         billing_cycle_anchor=anchor,
         included_credits=plan.monthly_credits,
     )
+    _sync_plan_to_notion(
+        slug=user.get("creator_slug") or "",
+        account_type=user.get("account_type") or plan.audience,
+        plan=plan,
+        billing_cycle=billing_cycle,
+        stripe_customer_id=customer_id,
+        status_label="active",
+    )
 
 
 def _handle_subscription_deleted(sub: dict) -> None:
@@ -517,6 +576,25 @@ def _handle_subscription_deleted(sub: dict) -> None:
     if not user:
         return
     clear_subscription(user_id=user["id"])
+    # Best-effort Notion update: mark as cancelled. We don't have a Plan object
+    # here, but we can still flip the status.
+    try:
+        slug = user.get("creator_slug") or ""
+        account_type = user.get("account_type") or "performer"
+        if slug:
+            from ..notion_crm import update_customer_plan_async
+            update_customer_plan_async(
+                slug=slug,
+                account_type=account_type,
+                plan_tier="cancelled",
+                plan_label="Cancelled",
+                billing_cycle="monthly",
+                monthly_fee=0.0,
+                stripe_customer_id=customer_id,
+                status_label="cancelled",
+            )
+    except Exception:
+        logger.exception("subscription_deleted: Notion sync failed for user=%s", user.get("id"))
     _send_billing_email(
         user_id=user["id"],
         subject="Your ZarBot subscription has ended",

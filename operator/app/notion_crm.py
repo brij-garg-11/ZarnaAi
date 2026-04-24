@@ -408,6 +408,65 @@ def create_customer_async(user_id: int, email: str, account_type: str, slug: str
     t.start()
 
 
+def update_customer_plan(
+    slug: str,
+    account_type: str,
+    *,
+    plan_tier: str,
+    plan_label: str,
+    billing_cycle: str,
+    monthly_fee: float,
+    stripe_customer_id: Optional[str] = None,
+    status_label: str = "active",
+) -> bool:
+    """
+    Sync a customer's plan/billing info to their Notion page.
+    Called from Stripe webhook handlers so Notion reflects subscription state.
+
+    Safe to call in a background thread (never raises).
+    """
+    try:
+        database_id = PERFORMERS_DB_ID if account_type == "performer" else BUSINESSES_DB_ID
+        page_id = _find_page_by_slug(database_id, slug)
+        if not page_id:
+            logger.warning("notion_crm: update_customer_plan — no page for slug=%s", slug)
+            return False
+
+        properties: dict = {
+            "Status":           {"select": {"name": status_label}},
+            "Plan":             {"select": {"name": plan_label}},
+            "Billing Cycle":    {"select": {"name": billing_cycle}},
+            "Monthly Fee ($)":  {"number": float(monthly_fee)},
+        }
+        if stripe_customer_id:
+            properties["Stripe Customer"] = {"rich_text": _rich_text(stripe_customer_id)}
+
+        ok = _update_page(page_id, properties)
+        logger.info(
+            "notion_crm: update_customer_plan slug=%s tier=%s cycle=%s fee=$%s ok=%s",
+            slug, plan_tier, billing_cycle, monthly_fee, ok,
+        )
+        return ok
+    except Exception:
+        logger.exception("notion_crm: update_customer_plan failed for %s", slug)
+        return False
+
+
+def update_customer_plan_async(
+    slug: str,
+    account_type: str,
+    **kwargs,
+) -> None:
+    """Fire-and-forget version of update_customer_plan."""
+    t = threading.Thread(
+        target=update_customer_plan,
+        args=(slug, account_type),
+        kwargs=kwargs,
+        daemon=True,
+    )
+    t.start()
+
+
 def sync_customer_costs(slug: str, account_type: str, conn) -> bool:
     """
     Update cost and metrics columns for a customer's Notion page,
