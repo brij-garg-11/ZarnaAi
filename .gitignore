@@ -47,3 +47,5 @@ lovable-frontend/
 # (Promote to a real test if reused — don't let these ride along.)
 scripts/debug_*.py
 scripts/audit_winning_corpus.py
+scripts/e2e_*.py
+scripts/e2e_*.json

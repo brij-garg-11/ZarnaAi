@@ -4321,61 +4321,7 @@ def api_provisioning_retry():
         return jsonify(success=False, error="retry_failed"), 500
 
 
-# ── Dev / QA test endpoint ─────────────────────────────────────────────────
-#
-# POST /api/dev/simulate-message
-#
-# Super-admin only. Simulates an inbound SMS to a specific creator's bot and
-# returns the AI reply directly, without actually sending anything via Twilio
-# or SlickText. Used for voice/personality testing in staging and E2E tests.
-#
-# Body:
-#   {
-#     "slug":  "marcus_cole",
-#     "phone": "+15551234567",
-#     "message": "Hey, I'm new here!"
-#   }
-#
-# Returns: { success, reply, slug }
-
-@api_bp.route("/api/dev/simulate-message", methods=["POST"])
-@login_required
-def api_dev_simulate_message():
-    import sys
-    import os as _os
-
-    user = current_user()
-    if not user.get("is_super_admin"):
-        return jsonify(success=False, error="forbidden"), 403
-
-    data = request.get_json(silent=True) or {}
-    slug = (data.get("slug") or "").strip().lower()
-    phone = (data.get("phone") or "").strip()
-    message_text = (data.get("message") or "").strip()
-
-    if not slug or not phone or not message_text:
-        return jsonify(success=False, error="slug, phone, and message are required"), 400
-
-    # Make the main-app package importable from the operator context
-    _ws_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(__file__))))
-    if _ws_root not in sys.path:
-        sys.path.insert(0, _ws_root)
-
-    try:
-        from app.brain.handler import create_brain
-    except Exception:
-        logger.exception("simulate_message: could not import create_brain")
-        return jsonify(success=False, error="brain_import_failed"), 500
-
-    try:
-        tenant_brain = create_brain(slug=slug)
-        reply = tenant_brain.handle_incoming_message(phone, message_text)
-        logger.info(
-            "simulate_message: slug=%s phone=***%s message_len=%d reply_len=%d",
-            slug, phone[-4:] if len(phone) >= 4 else "?",
-            len(message_text), len(reply or ""),
-        )
-        return jsonify(success=True, slug=slug, reply=reply or "", skipped=not (reply or "").strip())
-    except Exception as e:
-        logger.exception("simulate_message: brain failed for slug=%s", slug)
-        return jsonify(success=False, error=f"brain_error: {e}"), 500
+# NOTE: simulate-message / dev brain-call endpoint intentionally lives on the
+# main (Zarna) service, not the operator service — the operator Docker image
+# doesn't ship the root `app/` package. Run scripts/e2e_voice_test.py locally
+# to exercise the pipeline for a given slug.
