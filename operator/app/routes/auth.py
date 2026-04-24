@@ -764,7 +764,11 @@ def google_callback():
 def api_me():
     """
     Returns the currently authenticated user, or 401 if not logged in.
-    The React frontend can call this on load to check session state.
+    The React frontend calls this on every load to check session state.
+
+    Also processes any pending invite for this user inline — so a
+    re-invited member who is already logged in gets their access restored
+    on the next page load without needing to re-authenticate.
     """
     uid = session.get("operator_user_id")
     logger.info(
@@ -777,6 +781,49 @@ def api_me():
     if not user:
         logger.info("[AUTH] /api/auth/me — unauthenticated (no valid user for uid=%s)", uid)
         return jsonify(authenticated=False), 401
+
+    # If the user has a pending invite, accept it now so they don't need
+    # to log out and back in to pick up restored project access.
+    creator_slug = user.get("creator_slug") or ""
+    try:
+        conn = get_conn()
+        import psycopg2.extras as _extras
+        with conn.cursor(cursor_factory=_extras.DictCursor) as cur:
+            cur.execute(
+                """SELECT * FROM operator_invites
+                   WHERE email=%s AND accepted_at IS NULL
+                   ORDER BY created_at DESC LIMIT 1""",
+                (user["email"],),
+            )
+            pending = cur.fetchone()
+        if pending:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE operator_users
+                           SET creator_slug=%s, account_type=%s, last_login_at=NOW()
+                           WHERE id=%s""",
+                        (pending["creator_slug"], pending["account_type"], user["id"]),
+                    )
+                    cur.execute(
+                        "UPDATE operator_invites SET accepted_at=NOW() WHERE id=%s",
+                        (pending["id"],),
+                    )
+                    cur.execute(
+                        """INSERT INTO team_members
+                               (tenant_slug, user_id, role, invited_at, accepted_at)
+                           VALUES (%s, %s, 'member', %s, NOW())
+                           ON CONFLICT (tenant_slug, user_id) DO UPDATE
+                           SET accepted_at=NOW()""",
+                        (pending["creator_slug"], user["id"], pending["created_at"]),
+                    )
+            creator_slug = pending["creator_slug"]
+            logger.info("[AUTH] /api/auth/me — auto-accepted invite for uid=%s slug=%s",
+                        user["id"], creator_slug)
+        conn.close()
+    except Exception:
+        logger.exception("[AUTH] /api/auth/me — invite auto-accept failed for uid=%s", uid)
+
     return jsonify(
         authenticated=True,
         user={
@@ -784,7 +831,7 @@ def api_me():
             "name": user["name"],
             "is_owner": user["is_owner"],
             "account_type": user.get("account_type") or "performer",
-            "creator_slug": user.get("creator_slug") or "",
+            "creator_slug": creator_slug,
             "is_super_admin": bool(user.get("is_super_admin")),
         },
     )
