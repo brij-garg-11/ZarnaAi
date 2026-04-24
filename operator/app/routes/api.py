@@ -2305,7 +2305,15 @@ def billing_status():
     except Exception:
         pass
 
-    status = get_credit_status(user_id=user["id"])
+    # Team members should inherit the tenant owner's plan — an invited user on
+    # Zarna (grandfathered/unlimited) must NOT see the "Free Trial" banner just
+    # because their personal operator_users row still defaults to trial. When a
+    # creator_slug is available we always look the owner up by slug; otherwise
+    # we fall back to the user's own id.
+    if slug:
+        status = get_credit_status(slug=slug)
+    else:
+        status = get_credit_status(user_id=user["id"])
     plan_tier = status.get("plan_tier") or "trial"
     plan = ALL_PLANS.get(plan_tier)
     if status.get("unlimited"):
