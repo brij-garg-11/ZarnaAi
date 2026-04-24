@@ -3998,6 +3998,30 @@ def api_provisioning_status():
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            # Check plan tier first — grandfathered/founder/internal accounts
+            # pre-date the self-serve provisioning pipeline. Their bots are
+            # already live on manually-configured numbers, so return "legacy"
+            # regardless of what bot_configs says (a stale pending/in_progress
+            # row would otherwise keep the "Setting up your bot…" banner alive).
+            cur.execute(
+                """SELECT ou.plan_tier, ou.phone_number
+                   FROM operator_users ou
+                   WHERE ou.creator_slug = %s
+                   LIMIT 1""",
+                (slug,),
+            )
+            tier_row = cur.fetchone()
+            if tier_row:
+                plan_tier_val, legacy_phone_val = tier_row
+                from ..billing.plans import is_unlimited_tier
+                if is_unlimited_tier(plan_tier_val):
+                    return jsonify(
+                        status="legacy",
+                        phone_number=legacy_phone_val,
+                        error_message=None,
+                        creator_slug=slug,
+                    )
+
             cur.execute(
                 """
                 SELECT bc.provisioning_status, bc.error_message, ou.phone_number
