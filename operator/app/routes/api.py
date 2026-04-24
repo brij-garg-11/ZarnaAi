@@ -2252,10 +2252,14 @@ def billing_status():
     status = get_credit_status(user_id=user["id"])
     plan_tier = status.get("plan_tier") or "trial"
     plan = ALL_PLANS.get(plan_tier)
-    plan_label = plan.label if plan else (
-        "Free Trial" if plan_tier == "trial"
-        else plan_tier.replace("_", " ").title()
-    )
+    if status.get("unlimited"):
+        plan_label = "Unlimited"
+    elif plan:
+        plan_label = plan.label
+    elif plan_tier == "trial":
+        plan_label = "Free Trial"
+    else:
+        plan_label = plan_tier.replace("_", " ").title()
 
     # Static booster catalog — order + prices from plans.py
     boosters = [
@@ -2323,6 +2327,7 @@ def billing_status():
             plan_label=plan_label,
             billing_cycle=(plan and "monthly") or None,
             is_trial=status.get("is_trial", False),
+            unlimited=status.get("unlimited", False),
             credits_used=status.get("used", 0),
             credits_total=status.get("total", 0),
             credits_included=status.get("included", 0),
@@ -4007,9 +4012,29 @@ def api_provisioning_status():
         conn.close()
 
     if not row:
+        # No bot_configs row for this slug. This happens for accounts that
+        # pre-date the self-serve provisioning pipeline (e.g. Zarna, WSCC —
+        # numbers were configured manually) or operators impersonating a
+        # slug without one. Surface a dedicated "legacy" state so the UI
+        # can hide the banner entirely instead of implying a setup is
+        # in progress.
+        legacy_phone = None
+        try:
+            conn = get_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT phone_number FROM operator_users WHERE creator_slug=%s LIMIT 1",
+                    (slug,),
+                )
+                lr = cur.fetchone()
+                if lr:
+                    legacy_phone = lr[0]
+            conn.close()
+        except Exception:
+            pass
         return jsonify(
-            status="pending",
-            phone_number=None,
+            status="legacy",
+            phone_number=legacy_phone,
             error_message=None,
             creator_slug=slug,
         )

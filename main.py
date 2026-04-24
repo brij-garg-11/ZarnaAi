@@ -467,7 +467,13 @@ def _consume_message_credits(outbound_text: str, inbound_text: str, *, source: s
                 user_id, plan_tier, _trial_left = row
                 total_credits = 1 + outbound_credits  # 1 inbound + N outbound
 
-                if plan_tier == "trial":
+                # Grandfathered / founder / internal tiers bypass accounting
+                # (still log audit below so usage is visible in credit_events).
+                unlimited_tier = (plan_tier or "").lower() in {
+                    "grandfathered", "founder", "internal"
+                }
+
+                if plan_tier == "trial" and not unlimited_tier:
                     cur.execute(
                         """UPDATE operator_users
                            SET trial_credits_remaining = GREATEST(0, trial_credits_remaining - %s)
@@ -475,17 +481,18 @@ def _consume_message_credits(outbound_text: str, inbound_text: str, *, source: s
                         (total_credits, user_id),
                     )
 
-                cur.execute(
-                    """
-                    INSERT INTO operator_credit_usage
-                        (operator_user_id, creator_slug, period_start, credits_included, credits_used)
-                    VALUES (%s, %s, CURRENT_DATE, 0, %s)
-                    ON CONFLICT (operator_user_id, period_start)
-                    DO UPDATE SET credits_used = operator_credit_usage.credits_used + EXCLUDED.credits_used,
-                                  updated_at = NOW()
-                    """,
-                    (user_id, slug, total_credits),
-                )
+                if not unlimited_tier:
+                    cur.execute(
+                        """
+                        INSERT INTO operator_credit_usage
+                            (operator_user_id, creator_slug, period_start, credits_included, credits_used)
+                        VALUES (%s, %s, CURRENT_DATE, 0, %s)
+                        ON CONFLICT (operator_user_id, period_start)
+                        DO UPDATE SET credits_used = operator_credit_usage.credits_used + EXCLUDED.credits_used,
+                                      updated_at = NOW()
+                        """,
+                        (user_id, slug, total_credits),
+                    )
 
                 cur.execute(
                     """

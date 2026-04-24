@@ -21,7 +21,12 @@ from datetime import date, timedelta
 from typing import Optional
 
 from ..db import get_conn
-from .plans import SOFT_GRACE_MULTIPLIER, TRIAL_CREDITS, get_plan_credits
+from .plans import (
+    SOFT_GRACE_MULTIPLIER,
+    TRIAL_CREDITS,
+    get_plan_credits,
+    is_unlimited_tier,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +240,31 @@ def consume_credit(
     plan_tier = user_row.get("plan_tier") or "trial"
     uid = user_row["id"]
 
+    # Grandfathered / internal accounts: log the event (for analytics) but
+    # never decrement a bucket or return a blocking status.
+    if is_unlimited_tier(plan_tier):
+        try:
+            conn = get_conn()
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO credit_events
+                            (operator_user_id, creator_slug, kind, credits, source_id)
+                        VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (uid, resolved_slug, kind, -credits, source_id),
+                    )
+            conn.close()
+        except Exception:
+            logger.exception("consume_credit(unlimited): audit insert failed uid=%s", uid)
+        return {
+            **_empty_status(),
+            "user_id": uid,
+            "plan_tier": plan_tier,
+            "unlimited": True,
+        }
+
     period_start, period_end = _current_period(uid)
 
     conn = get_conn()
@@ -327,9 +357,11 @@ def _empty_status() -> dict:
     return {
         "plan_tier": None,
         "is_trial": False,
+        "unlimited": False,
         "used": 0,
         "included": 0,
         "boosters_purchased": 0,
+        "total": 0,
         "overage": 0,
         "remaining": 0,
         "exhausted": False,
@@ -386,6 +418,17 @@ def get_credit_status(
 
     uid = user_row["id"]
     plan_tier = user_row.get("plan_tier") or "trial"
+
+    # Grandfathered / internal: return a "nothing to show" status flagged
+    # with unlimited=True so the UI can skip trial/credit banners.
+    if is_unlimited_tier(plan_tier):
+        return {
+            **_empty_status(),
+            "user_id": uid,
+            "plan_tier": plan_tier,
+            "unlimited": True,
+        }
+
     period_start, period_end = _current_period(uid)
 
     conn = get_conn()
@@ -447,6 +490,7 @@ def get_credit_status(
         "user_id": uid,
         "plan_tier": plan_tier,
         "is_trial": is_trial,
+        "unlimited": False,
         "used": used,
         "included": included,
         "boosters_purchased": boosters_purchased,
@@ -482,6 +526,10 @@ def check_send_quota(
     status = get_credit_status(user_id=user_id, slug=slug)
     if not status.get("plan_tier"):
         # Unknown user (e.g. local dev without billing init) — allow, don't block.
+        return True, status
+
+    # Grandfathered / founder / internal — unlimited, always allowed.
+    if status.get("unlimited"):
         return True, status
 
     if status["is_trial"]:

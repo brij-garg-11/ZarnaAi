@@ -415,6 +415,20 @@ def init_db():
         ON CONFLICT (tenant_slug, user_id) DO NOTHING
         """,
 
+        # ── Grandfathered / founder accounts ───────────────────────────────
+        # These slugs pre-date Stripe and are explicitly granted unlimited
+        # usage by the product owner. Re-running is safe (ON CONFLICT). If
+        # the account isn't onboarded yet, the UPDATE matches zero rows.
+        # Can be extended by editing this list — the app reads plan_tier
+        # every request, so changes take effect on the next call.
+        """
+        UPDATE operator_users
+        SET    plan_tier = 'grandfathered',
+               trial_credits_remaining = 0
+        WHERE  creator_slug IN ('zarna', 'west_side_comedy')
+          AND  plan_tier <> 'grandfathered'
+        """,
+
         # ── Smart Send: engagement score on contacts ──────────────────────
         # Recomputed nightly based on reply recency, session depth, click activity.
         # Used by /api/contacts/engaged?top=N for the Smart Send audience selector.

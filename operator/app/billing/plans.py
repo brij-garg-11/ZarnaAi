@@ -107,6 +107,19 @@ ALL_PLANS: dict[str, Plan] = {**PERFORMER_PLANS, **BUSINESS_PLANS}
 TRIAL_CREDITS = 1000
 
 
+# Grandfathered / internal tiers that never hit the credit gate or show
+# trial/upgrade UI. Used for founder accounts (Zarna) and early partner
+# deployments (WSCC) that pre-date Stripe. Plans.py treats these as
+# effectively unlimited — no credits_included row is required, no
+# soft-grace math is done, no 402s are ever returned.
+UNLIMITED_TIERS = frozenset({"grandfathered", "founder", "internal"})
+
+
+def is_unlimited_tier(plan_tier: Optional[str]) -> bool:
+    """True when the tier should bypass all credit gates."""
+    return (plan_tier or "").lower() in UNLIMITED_TIERS
+
+
 # One-time credit add-on packs
 @dataclass(frozen=True)
 class Booster:
