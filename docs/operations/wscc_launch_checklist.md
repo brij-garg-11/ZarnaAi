@@ -3,6 +3,8 @@
 A short list of operational checks to run against production before pointing the West Side Comedy Club owner at the dashboard.
 None of these are code changes; they are SQL / shell verifications that the deploy is in the expected state for a grandfathered unlimited business account.
 
+> **Slug note:** WSCC's `creator_slug` in the database is **`west_side_comedy`** (matches `operator/app/business_configs/west_side_comedy.json`). All SQL below uses that slug.
+
 ---
 
 ## 1. WSCC plan_tier is grandfathered (Unlimited)
@@ -14,7 +16,7 @@ The Billing UI now strictly trusts the API's `unlimited` flag (we removed the
 ```sql
 SELECT email, creator_slug, plan_tier, stripe_customer_id, trial_credits_remaining
 FROM   operator_users
-WHERE  creator_slug = 'wscc'
+WHERE  creator_slug = 'west_side_comedy'
 ORDER  BY id;
 ```
 
@@ -25,7 +27,7 @@ Expected: at least one row with `plan_tier IN ('grandfathered', 'founder', 'inte
 ```sql
 UPDATE operator_users
 SET    plan_tier = 'grandfathered'
-WHERE  creator_slug = 'wscc' AND email = '<owner_email>';
+WHERE  creator_slug = 'west_side_comedy' AND email = '<owner_email>';
 ```
 
 Then refresh the dashboard — Billing should show the **Unlimited** badge and
@@ -71,13 +73,13 @@ Both are safe to re-run.
 ```sql
 SELECT phone_number, provisioning_status, twilio_phone_sid
 FROM   operator_users
-WHERE  creator_slug = 'wscc';
+WHERE  creator_slug = 'west_side_comedy';
 ```
 
 `provisioning_status` should be `'live'`. Cross-check that
-`SMB_WSCC_SMS_NUMBER` is set in the Railway environment for **both** the
-`main` and `operator` services — the inbox tab and the blast-send path both
-read it.
+`SMB_WEST_SIDE_COMEDY_SMS_NUMBER` is set in the Railway environment for
+**both** the `main` and `operator` services — the inbox tab and the
+blast-send path both read it.
 
 ---
 
@@ -101,7 +103,7 @@ classification CTE in `operator/app/business_blast.py` is reading from an empty
 `smb_messages` table — confirm inbound messages are landing there:
 
 ```sql
-SELECT COUNT(*) FROM smb_messages WHERE tenant_slug = 'wscc';
+SELECT COUNT(*) FROM smb_messages WHERE tenant_slug = 'west_side_comedy';
 ```
 
 ---
@@ -119,3 +121,33 @@ curl -i https://app.zar.bot/api/business/stats    # expect 200
 ```
 
 Super-admins are exempt — admin "view as wscc" should still see all endpoints.
+
+---
+
+## 6. Reset stale welcome / signup overrides (one-time)
+
+The MyBot UI reads from `smb_bot_config.config_json` overlaid on the file
+defaults in `operator/app/business_configs/west_side_comedy.json`. If MyBot
+shows values that don't match the file (e.g. an old test welcome message),
+clear those keys so the file values win again.
+
+```bash
+# Dry-run preview (default; no changes written)
+DATABASE_URL=$RAILWAY_DATABASE_URL python scripts/reset_smb_bot_config_keys.py
+
+# Apply
+DATABASE_URL=$RAILWAY_DATABASE_URL python scripts/reset_smb_bot_config_keys.py --apply
+```
+
+The script defaults to clearing `welcome_message` and `signup_question` for
+the `west_side_comedy` tenant. To clear different keys or a different tenant:
+
+```bash
+DATABASE_URL=$RAILWAY_DATABASE_URL python scripts/reset_smb_bot_config_keys.py \
+    --slug west_side_comedy \
+    --keys welcome_message,signup_question,outreach_invite_message \
+    --apply
+```
+
+After the script finishes, hard-reload `/my-bot` — the canonical values from
+`west_side_comedy.json` should appear in the form.
