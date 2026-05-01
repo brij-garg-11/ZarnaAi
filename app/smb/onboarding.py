@@ -147,11 +147,14 @@ def get_onboarding_reply(
                         invite["offer"], ticket_number,
                     )
 
-                threading.Thread(
-                    target=_send_vcard_mms,
-                    args=(phone_number, tenant),
-                    daemon=True,
-                ).start()
+                # Only send the contact card if the tenant has it enabled.
+                # Default is True (send it) unless explicitly disabled in config.
+                if tenant.raw.get("send_contact_card", True):
+                    threading.Thread(
+                        target=_send_vcard_mms,
+                        args=(phone_number, tenant),
+                        daemon=True,
+                    ).start()
                 return _welcome_and_question(
                     tenant,
                     claimed_offer=invite["offer"] if invite else None,
@@ -296,9 +299,15 @@ def _classify_answer(answer: str, tenant: BusinessTenant) -> dict:
 
 def _send_vcard_mms(phone_number: str, tenant: BusinessTenant) -> None:
     """Send the tenant vCard as a follow-up MMS so the subscriber can save the contact."""
-    domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    # Use the operator app domain (api.zar.bot) — stable, predictable URL.
+    # Falls back to RAILWAY_PUBLIC_DOMAIN for local dev / alternative deployments.
+    domain = (
+        os.getenv("OPERATOR_API_BASE_URL")
+        or os.getenv("RAILWAY_PUBLIC_DOMAIN")
+        or ""
+    ).strip()
     if not domain:
-        logger.warning("SMB vcard: RAILWAY_PUBLIC_DOMAIN not set — skipping vCard MMS")
+        logger.warning("SMB vcard: no base URL configured — skipping vCard MMS")
         return
     if not domain.startswith("http"):
         domain = f"https://{domain}"

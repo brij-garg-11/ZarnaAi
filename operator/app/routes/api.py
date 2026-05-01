@@ -2287,6 +2287,7 @@ def bot_data():
             welcome_message=_get("welcome_message"),
             signup_question=_get("signup_question"),
             outreach_invite_message=_get("outreach_invite_message"),
+            send_contact_card=db_overrides.get("send_contact_card", cfg.get("send_contact_card", True)),
             tracked_links=tracked_links,
             address=db_overrides.get("address", knowledge.get("address", "")),
             hours=db_overrides.get("hours", knowledge.get("hours", "")),
@@ -2382,7 +2383,7 @@ def save_bot_data():
             "tone", "welcome_message", "signup_question",
             "outreach_invite_message", "address", "hours",
             "website", "tracked_links", "display_name",
-            "logo_url",
+            "logo_url", "send_contact_card",
         }
         updates = {k: v for k, v in data.items() if k in allowed}
         if not updates:
@@ -2706,6 +2707,75 @@ def _get_tenant_slug() -> str | None:
     if err:
         return None
     return slug or None
+
+
+@api_bp.route("/smb/vcard/<slug>.vcf", methods=["GET"])
+def operator_smb_vcard(slug: str):
+    """
+    Serve a vCard (.vcf) for a business tenant so subscribers can save the
+    contact with one tap. No auth required — Twilio/iOS fetches this URL
+    directly when displaying the MMS.
+
+    Hosted on the operator app (api.zar.bot) so the URL is stable and
+    predictable, unlike RAILWAY_PUBLIC_DOMAIN which can vary per service.
+    """
+    import base64, io, json
+    from pathlib import Path
+    from flask import Response as FlaskResponse
+
+    config_path = _BUSINESS_CONFIGS_DIR / f"{slug}.json"
+    if not config_path.exists():
+        return ("Not found", 404)
+
+    try:
+        cfg = json.loads(config_path.read_text())
+    except Exception:
+        return ("Not found", 404)
+
+    display_name = cfg.get("display_name") or slug
+    logo_url = cfg.get("logo_url") or ""
+    sms_number = cfg.get("sms_number") or ""
+
+    lines = [
+        "BEGIN:VCARD",
+        "VERSION:3.0",
+        f"FN:{display_name}",
+        "N:;;;;",
+        f"ORG:{display_name}",
+    ]
+    if sms_number:
+        lines.append(f"TEL;TYPE=CELL:{sms_number}")
+
+    if logo_url:
+        try:
+            from PIL import Image
+            import urllib.request
+            req = urllib.request.Request(
+                logo_url,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; ZarBotVCard/1.0)"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                img_bytes = resp.read()
+            img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+            w, h = img.size
+            side = min(w, h)
+            img = img.crop(((w - side) // 2, (h - side) // 2,
+                             (w + side) // 2, (h + side) // 2))
+            img = img.resize((300, 300), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            lines.append(f"PHOTO;TYPE=JPEG;ENCODING=BASE64:{b64}")
+        except Exception:
+            logger.warning("operator vCard: failed to embed logo for slug=%s", slug, exc_info=True)
+
+    lines.append("END:VCARD")
+    vcf = "\r\n".join(lines) + "\r\n"
+    return FlaskResponse(
+        vcf,
+        mimetype="text/vcard",
+        headers={"Content-Disposition": f'attachment; filename="{slug}.vcf"'},
+    )
 
 
 @api_bp.route("/api/business/stats")
