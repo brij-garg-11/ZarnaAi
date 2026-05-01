@@ -870,24 +870,41 @@ def record_outreach_invite(
     """
     Record that an outbound invite was sent to this number.
 
-    - If no prior record exists: insert fresh.
-    - If a record exists but was never claimed: reset sent_at so the 24h clock restarts.
-    - If already claimed: leave it untouched — one free ticket per number ever.
+    - If no prior unclaimed record exists: insert fresh.
+    - If an unclaimed record exists: reset sent_at so the 24h clock restarts.
+    - If the most recent record is already claimed: insert a new row so the
+      offer can be re-extended (e.g. a different campaign batch).
+
+    Note: the DB-level unique constraint on (tenant_slug, phone_number) was
+    dropped in a later migration to support multi-campaign outreach logging.
+    Dedup is now handled here at the application level.
     """
     with conn.cursor() as cur:
+        # Check for an existing unclaimed invite for this number
         cur.execute(
-            """
-            INSERT INTO smb_outreach_invites (tenant_slug, phone_number, offer, sent_at, claimed_at, batch_name)
-            VALUES (%s, %s, %s, NOW(), NULL, %s)
-            ON CONFLICT (tenant_slug, phone_number)
-            DO UPDATE SET
-                offer      = EXCLUDED.offer,
-                sent_at    = NOW(),
-                batch_name = COALESCE(EXCLUDED.batch_name, smb_outreach_invites.batch_name)
-            WHERE smb_outreach_invites.claimed_at IS NULL
-            """,
-            (tenant_slug, phone_number, offer, batch_name),
+            """SELECT id FROM smb_outreach_invites
+               WHERE tenant_slug=%s AND phone_number=%s AND claimed_at IS NULL
+               ORDER BY sent_at DESC LIMIT 1""",
+            (tenant_slug, phone_number),
         )
+        existing = cur.fetchone()
+        if existing:
+            # Refresh the clock on the unclaimed invite (same behaviour as before)
+            cur.execute(
+                """UPDATE smb_outreach_invites
+                   SET offer=%s, sent_at=NOW(),
+                       batch_name=COALESCE(%s, batch_name)
+                   WHERE id=%s""",
+                (offer, batch_name, existing[0]),
+            )
+        else:
+            # Insert fresh — either first invite ever or re-invite after claiming
+            cur.execute(
+                """INSERT INTO smb_outreach_invites
+                       (tenant_slug, phone_number, offer, sent_at, claimed_at, batch_name)
+                   VALUES (%s, %s, %s, NOW(), NULL, %s)""",
+                (tenant_slug, phone_number, offer, batch_name),
+            )
 
 
 def get_active_invite(conn, tenant_slug: str, phone_number: str, window_hours: int = 24) -> dict | None:

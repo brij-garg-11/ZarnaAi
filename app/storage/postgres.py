@@ -418,6 +418,10 @@ _SMB_OUTREACH_MIGRATIONS = (
     "ALTER TABLE smb_outreach_invites ADD COLUMN IF NOT EXISTS ticket_number INT",
     # Blast batch label so admin can track which CSV send each invite came from
     "ALTER TABLE smb_outreach_invites ADD COLUMN IF NOT EXISTS batch_name TEXT",
+    # Drop the original (tenant_slug, phone_number) unique constraint so multi-campaign
+    # outreach can log a new row per campaign without being blocked by prior sends.
+    # The old free-ticket flow now deduplicates at the application level in upsert_outreach_invite().
+    "ALTER TABLE smb_outreach_invites DROP CONSTRAINT IF EXISTS smb_outreach_invites_tenant_slug_phone_number_key",
 )
 
 

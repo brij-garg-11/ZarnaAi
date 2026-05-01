@@ -3469,17 +3469,17 @@ def business_outreach_send():
                 try:
                     client.messages.create(body=full_body, from_=from_number, to=phone)
                     sent += 1
-                    # Log to smb_outreach_invites
+                    # Log to smb_outreach_invites — plain INSERT so each campaign
+                    # creates its own row even if the number was contacted before.
+                    # The old (tenant_slug, phone_number) unique constraint was
+                    # dropped via migration; dedup for the free-ticket flow is now
+                    # handled application-side in storage.upsert_outreach_invite().
                     with dbc:
                         with dbc.cursor() as cur:
                             cur.execute(
                                 """INSERT INTO smb_outreach_invites
                                        (tenant_slug, phone_number, offer, sent_at, batch_name)
-                                   VALUES (%s, %s, %s, NOW(), %s)
-                                   ON CONFLICT (tenant_slug, phone_number) DO UPDATE
-                                       SET sent_at = NOW(),
-                                           batch_name = COALESCE(EXCLUDED.batch_name, smb_outreach_invites.batch_name)
-                                   WHERE smb_outreach_invites.claimed_at IS NULL""",
+                                   VALUES (%s, %s, %s, NOW(), %s)""",
                                 (slug, phone, "custom_outreach", batch_name),
                             )
                 except Exception:
