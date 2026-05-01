@@ -2709,28 +2709,28 @@ def _get_tenant_slug() -> str | None:
     return slug or None
 
 
-@api_bp.route("/smb/vcard/<slug>.vcf", methods=["GET"])
-def operator_smb_vcard(slug: str):
-    """
-    Serve a vCard (.vcf) for a business tenant so subscribers can save the
-    contact with one tap. No auth required — Twilio/iOS fetches this URL
-    directly when displaying the MMS.
+# Module-level cache: slug → pre-built vCard string.
+# Built once on first request per process; Twilio retries and subsequent
+# opt-ins return instantly without re-downloading or re-processing the logo.
+_vcard_cache: dict[str, str] = {}
 
-    Hosted on the operator app (api.zar.bot) so the URL is stable and
-    predictable, unlike RAILWAY_PUBLIC_DOMAIN which can vary per service.
+
+def _build_vcard(slug: str) -> str | None:
+    """
+    Build the full vCard text for a slug, embedding the logo as base64.
+    Returns None if the config doesn't exist.
+    Downloads and processes the logo only once per process lifetime.
     """
     import base64, io, json
-    from pathlib import Path
-    from flask import Response as FlaskResponse
 
     config_path = _BUSINESS_CONFIGS_DIR / f"{slug}.json"
     if not config_path.exists():
-        return ("Not found", 404)
+        return None
 
     try:
         cfg = json.loads(config_path.read_text())
     except Exception:
-        return ("Not found", 404)
+        return None
 
     display_name = cfg.get("display_name") or slug
     logo_url = cfg.get("logo_url") or ""
@@ -2770,9 +2770,30 @@ def operator_smb_vcard(slug: str):
             logger.warning("operator vCard: failed to embed logo for slug=%s", slug, exc_info=True)
 
     lines.append("END:VCARD")
-    vcf = "\r\n".join(lines) + "\r\n"
+    return "\r\n".join(lines) + "\r\n"
+
+
+@api_bp.route("/smb/vcard/<slug>.vcf", methods=["GET"])
+def operator_smb_vcard(slug: str):
+    """
+    Serve a vCard (.vcf) for a business tenant so subscribers can save the
+    contact with one tap. No auth required — Twilio/iOS fetches this URL
+    directly when displaying the MMS.
+
+    The vCard is built once and cached in _vcard_cache so Twilio's fetch
+    (and any retries) return in microseconds instead of re-downloading and
+    re-processing the logo image on every request.
+    """
+    from flask import Response as FlaskResponse
+
+    if slug not in _vcard_cache:
+        vcf = _build_vcard(slug)
+        if vcf is None:
+            return ("Not found", 404)
+        _vcard_cache[slug] = vcf
+
     return FlaskResponse(
-        vcf,
+        _vcard_cache[slug],
         mimetype="text/vcard",
         headers={"Content-Disposition": f'attachment; filename="{slug}.vcf"'},
     )
