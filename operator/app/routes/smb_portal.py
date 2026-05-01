@@ -201,22 +201,32 @@ def _get_show_attendees(show_id: int):
 
 
 def _get_segments(slug: str):
-    """Return available blast audience segments from smb_preferences."""
+    """
+    Return available blast audience segments from smb_preferences.
+
+    smb_preferences is keyed on subscriber_id (not phone_number / tenant_slug),
+    so we have to join through smb_subscribers to scope to a tenant. The
+    previous query referenced p.tenant_slug, which doesn't exist on this
+    table — every call raised in production and silently returned [].
+    """
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT question_key, answer, COUNT(*) as cnt
-                FROM smb_preferences
-                WHERE tenant_slug = %s
-                GROUP BY question_key, answer
-                ORDER BY question_key, cnt DESC
+                SELECT p.question_key, p.answer, COUNT(*) AS cnt
+                FROM   smb_preferences p
+                JOIN   smb_subscribers s ON s.id = p.subscriber_id
+                WHERE  s.tenant_slug = %s
+                  AND  s.status = 'active'
+                GROUP  BY p.question_key, p.answer
+                ORDER  BY p.question_key, cnt DESC
                 """,
                 (slug,),
             )
             return cur.fetchall()
     except Exception:
+        logger.exception("smb_portal: _get_segments failed for slug=%s", slug)
         return []
     finally:
         conn.close()
@@ -236,15 +246,23 @@ def _get_all_subscriber_phones(slug: str):
 
 
 def _get_segment_phones(slug: str, question_key: str, answer: str):
+    """
+    Return the phone numbers of subscribers in this tenant whose answer to
+    `question_key` matches `answer`. Joins through subscriber_id because
+    smb_preferences only carries the FK + question/answer columns.
+    """
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT DISTINCT s.phone_number
-                FROM smb_subscribers s
-                JOIN smb_preferences p ON p.phone_number = s.phone_number AND p.tenant_slug = s.tenant_slug
-                WHERE s.tenant_slug = %s AND p.question_key = %s AND p.answer = %s
+                FROM   smb_subscribers s
+                JOIN   smb_preferences p ON p.subscriber_id = s.id
+                WHERE  s.tenant_slug = %s
+                  AND  s.status = 'active'
+                  AND  p.question_key = %s
+                  AND  p.answer = %s
                 """,
                 (slug, question_key, answer),
             )

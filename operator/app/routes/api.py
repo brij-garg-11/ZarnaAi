@@ -40,12 +40,34 @@ def _slug_or_abort():
     return slug
 
 
+def _require_performer_account():
+    """
+    Performer-only endpoints (dashboard/stats, audience, inbox, shows, blasts,
+    fan-of-the-week) are scoped to performer-style data shapes (fan tags, area
+    codes, blast drafts, etc.) and the corresponding *performer* tables/queries.
+
+    Business (SMB) accounts have parallel /api/business/* endpoints that read
+    from smb_subscribers / smb_messages / smb_blasts. Returning 404 here keeps
+    the response shape JSON and avoids leaking which paths exist while making
+    the misuse explicit (so the frontend never silently shows zeroed-out data
+    for the wrong account type). Super-admins are always allowed through so
+    they can inspect any tenant.
+    """
+    from flask import abort
+    user = current_user() or {}
+    if user.get("is_super_admin"):
+        return
+    if (user.get("account_type") or "performer") == "business":
+        abort(404)
+
+
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
 @api_bp.route("/api/dashboard/stats")
 @login_required
 def dashboard_stats():
     """Main dashboard stats — mirrors the HTML dashboard data."""
+    _require_performer_account()
     slug = _slug_or_abort()
     try:
         stats = get_overview_stats(creator_slug=slug)
@@ -94,6 +116,7 @@ def dashboard_stats():
 @login_required
 def shows_list():
     """List all live shows grouped by status (tenant-scoped)."""
+    _require_performer_account()
     user = current_user() or {}
     # Super-admins see every show; everyone else is scoped to their tenant.
     slug = None if user.get("is_super_admin") else (user.get("creator_slug") or None)
@@ -134,6 +157,7 @@ def shows_list():
 @login_required
 def blasts_list():
     """List recent blast drafts with their send stats (tenant-scoped)."""
+    _require_performer_account()
     user = current_user() or {}
     slug = None if user.get("is_super_admin") else (user.get("creator_slug") or None)
     if not user.get("is_super_admin") and not slug:
@@ -175,6 +199,7 @@ def blasts_list():
 @login_required
 def audience():
     """Audience tags, area codes, and fan tier breakdown."""
+    _require_performer_account()
     _slug = _slug_or_abort()
     try:
         stats = get_overview_stats(creator_slug=_slug)
@@ -366,6 +391,7 @@ def audience_frequency():
     Tenant-scoped: a team member only sees frequency stats for fans that
     belong to their project (``contacts.creator_slug == user.creator_slug``).
     """
+    _require_performer_account()
     user = current_user() or {}
     is_super = bool(user.get("is_super_admin"))
     slug = None if is_super else (user.get("creator_slug") or None)
@@ -455,6 +481,7 @@ def inbox():
     Phone numbers are masked to last-4 only.
     Query params: ?page=1
     """
+    _require_performer_account()
     _slug = _slug_or_abort()
     page = max(1, int(request.args.get("page", 1)))
     per_page = 25
@@ -541,6 +568,7 @@ def inbox_thread(phone_last4):
     If multiple fans share the same last-4, returns the most recently active one.
     Scoped to the logged-in user's authorized creator_slug.
     """
+    _require_performer_account()
     _slug = _slug_or_abort()
     try:
         conn = get_conn()
@@ -611,6 +639,7 @@ def api_inbox_send(phone_last4):
     Body: { "text": "Hey, great to hear from you!" }
     Returns: { success, message_id, sent_at }
     """
+    _require_performer_account()
     from datetime import datetime, timezone
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
@@ -724,6 +753,7 @@ def api_inbox_send(phone_last4):
 def api_create_show():
     """Create a new live show draft. Returns {success, show_id, error}."""
     from ..routes.shows import _create_show, _parse_local_dt, EVENT_TIMEZONE_CHOICES, _ALLOWED_TZ
+    _require_performer_account()
     data = request.get_json(silent=True) or {}
 
     name = (data.get("name") or "").strip()
@@ -920,6 +950,7 @@ def api_blast_tier_counts():
         ]
       }
     """
+    _require_performer_account()
     _slug = _slug_or_abort()
     counts = {}
     try:
@@ -959,6 +990,7 @@ def api_contacts_engaged():
     """
     from ..engagement import top_engaged
 
+    _require_performer_account()
     slug = _slug_or_abort()
 
     try:
@@ -1013,6 +1045,7 @@ def api_smart_send_preview():
         "total_suppressed": N
       }
     """
+    _require_performer_account()
     _slug_ssp = _slug_or_abort()
     result = {"tiers": {}, "total_sending": 0, "total_suppressed": 0}
     try:
@@ -1164,6 +1197,7 @@ def _user_owns_show(show_id: int, user: dict) -> bool:
 def api_create_blast():
     """Create a blank blast draft. Returns {success, draft_id}."""
     from ..queries import save_blast_draft
+    _require_performer_account()
     user = current_user()
     try:
         draft_id = save_blast_draft(
@@ -1296,6 +1330,7 @@ def api_upload_image():
 def api_blast_preview_count():
     """Returns audience count for given filter as JSON."""
     from ..queries import count_audience
+    _require_performer_account()
     data = request.get_json(silent=True) or {}
     audience_type = data.get("audience_type", "all")
     if audience_type not in ("all", "tag", "location", "random", "show", "tier", "engaged"):
@@ -1318,6 +1353,12 @@ def api_blast_test(draft_id):
     """Send a [TEST] copy of the blast to a single phone number."""
     from ..blast_sender import _send_one
     from ..queries import get_blast_draft
+    user = current_user()
+    # Ownership gate matches the rest of the /api/blasts/<id>/* routes
+    # (save, send, delete) — without it a logged-in user could /test any
+    # other tenant's draft id by guessing.
+    if not _user_owns_draft(draft_id, user):
+        return jsonify(success=False, error="Blast not found"), 404
     data = request.get_json(silent=True) or {}
 
     test_phone = (data.get("test_phone") or "").strip()
@@ -1600,6 +1641,7 @@ def fan_of_the_week():
     otherwise falls back to the top dynamic candidate.
     Scoped to the logged-in user's authorized creator_slug.
     """
+    _require_performer_account()
     _slug = _slug_or_abort()
     import psycopg2.extras
     try:
@@ -1672,6 +1714,7 @@ def fan_of_the_week_candidates():
     excluding anyone picked in the last 8 weeks.
     Scoped to the logged-in user's authorized creator_slug.
     """
+    _require_performer_account()
     _slug = _slug_or_abort()
     import psycopg2.extras
     try:
@@ -1715,6 +1758,7 @@ def fan_of_the_week_select():
     Body: { "phone_last4": "1234", "message_text": "..." }
     Also tags the contact with 'fan_of_the_week'.
     """
+    _require_performer_account()
     _slug_fotw = _slug_or_abort()
     import psycopg2.extras
     data = request.get_json(silent=True) or {}
@@ -1779,6 +1823,7 @@ def fan_of_the_week_history():
     Returns all past Fan of the Week picks, newest first.
     Scoped to the logged-in user's authorized creator_slug.
     """
+    _require_performer_account()
     _slug = _slug_or_abort()
     import psycopg2.extras
     try:
@@ -1873,6 +1918,26 @@ _COTW_CANDIDATES_SQL = """
 """
 
 
+def _ensure_slug_authorized(slug: str):
+    """
+    Abort 403 unless the current user is authorized for this tenant slug.
+
+    Used by all /api/smb/<slug>/... endpoints — without this check the slug
+    in the URL is trusted, which would let any logged-in business owner read
+    or mutate another tenant's Customer of the Week records.
+    """
+    from flask import abort
+    user = current_user()
+    if not user:
+        abort(401)
+    if user.get("is_super_admin"):
+        return
+    own_slug = user.get("creator_slug") or ""
+    authorized = get_authorized_slugs(user.get("id"), own_slug)
+    if slug not in authorized:
+        abort(403)
+
+
 @api_bp.route("/api/smb/<slug>/customer-of-the-week")
 @login_required
 def smb_customer_of_the_week(slug: str):
@@ -1880,6 +1945,7 @@ def smb_customer_of_the_week(slug: str):
     Returns this week's saved Customer of the Week for an SMB tenant,
     or falls back to the top dynamic candidate.
     """
+    _ensure_slug_authorized(slug)
     import psycopg2.extras
     try:
         conn = get_conn()
@@ -1927,6 +1993,7 @@ def smb_customer_of_the_week(slug: str):
 @login_required
 def smb_customer_of_the_week_candidates(slug: str):
     """Top 5 Customer of the Week candidates for an SMB tenant."""
+    _ensure_slug_authorized(slug)
     import psycopg2.extras
     try:
         conn = get_conn()
@@ -1957,6 +2024,7 @@ def smb_customer_of_the_week_select(slug: str):
     Save the chosen Customer of the Week for the current week.
     Body: { "phone_last4": "1234", "message_text": "..." }
     """
+    _ensure_slug_authorized(slug)
     import psycopg2.extras
     data = request.get_json(silent=True) or {}
     phone_last4 = (data.get("phone_last4") or "").strip()
@@ -2008,6 +2076,7 @@ def smb_customer_of_the_week_select(slug: str):
 @login_required
 def smb_customer_of_the_week_history(slug: str):
     """Returns last 52 weeks of Customer of the Week picks for an SMB tenant."""
+    _ensure_slug_authorized(slug)
     import psycopg2.extras
     try:
         conn = get_conn()
@@ -2212,6 +2281,7 @@ def save_bot_data():
             "tone", "welcome_message", "signup_question",
             "outreach_invite_message", "address", "hours",
             "website", "tracked_links", "display_name",
+            "logo_url",
         }
         updates = {k: v for k, v in data.items() if k in allowed}
         if not updates:
@@ -2633,9 +2703,11 @@ def business_inbox():
                 )
                 first_msg_at = cur.fetchone()[0]
 
+                # Never send the full E.164 to the browser — last 4 is all
+                # the UI uses, and exposing the full number means a stolen
+                # session leaks every customer's phone number to attackers.
                 threads.append({
                     "phone_last4": phone[-4:],
-                    "phone_number": phone,
                     "last_message": r["last_message"] or "",
                     "last_role": r["last_role"],
                     "last_message_at": r["created_at"].isoformat(),
@@ -2711,7 +2783,6 @@ def business_inbox_thread(phone_last4):
                 prefs = {r["question_key"]: r["answer"] for r in cur.fetchall()}
 
             profile = {
-                "phone_number": phone,
                 "phone_last4": phone[-4:],
                 "status": sub["status"] if sub else "unknown",
                 "joined_at": sub["joined_at"].isoformat() if sub and sub["joined_at"] else None,
@@ -2950,10 +3021,14 @@ def business_customer_of_week():
 
             phone = best["phone_number"]
 
+            # body_length_chars is added by ensure_smb_engagement_schema()
+            # in the main app and is missing from older SMB databases. Order
+            # by char_length(body) directly so this endpoint never crashes
+            # on a fresh provision before the migration runs.
             cur.execute(
                 """SELECT body FROM smb_messages
                    WHERE tenant_slug=%s AND phone_number=%s AND role='user'
-                   ORDER BY body_length_chars DESC NULLS LAST LIMIT 1""",
+                   ORDER BY char_length(body) DESC NULLS LAST LIMIT 1""",
                 (slug, phone),
             )
             msg_row = cur.fetchone()
@@ -2976,14 +3051,73 @@ def business_customer_of_week():
         conn.close()
 
 
+@api_bp.route("/api/business/blast/tier-counts")
+@login_required
+def business_blast_tier_counts():
+    """
+    Per-tier subscriber counts so the business blast composer can show how
+    many fans would receive each tier-targeted promo (mirrors the performer
+    /api/blasts/tier-counts shape so the React component can be reused).
+    """
+    from .. import business_blast as _bb
+
+    slug = _get_tenant_slug()
+    if not slug:
+        return jsonify(error="No tenant slug configured for this account"), 400
+
+    conn = get_conn()
+    try:
+        tiers = _bb.compute_tier_counts(slug, conn)
+    except Exception:
+        logger.exception("business_blast_tier_counts: failed for slug=%s", slug)
+        return jsonify(success=False, error="Failed to compute tier counts"), 500
+    finally:
+        conn.close()
+    return jsonify(success=True, tiers=tiers)
+
+
+@api_bp.route("/api/business/blast/smart-send-preview", methods=["POST"])
+@login_required
+def business_blast_smart_send_preview():
+    """
+    For each tier, return how many fans would actually receive this blast vs
+    be suppressed by the cadence rule. Used by the business Smart Send card.
+    """
+    from .. import business_blast as _bb
+
+    slug = _get_tenant_slug()
+    if not slug:
+        return jsonify(error="No tenant slug configured for this account"), 400
+
+    conn = get_conn()
+    try:
+        result = _bb.compute_smart_send_preview(slug, conn)
+    except Exception:
+        logger.exception("business_blast_smart_send_preview: failed for slug=%s", slug)
+        return jsonify(success=False, error="Failed to compute Smart Send preview"), 500
+    finally:
+        conn.close()
+    return jsonify(success=True, **result)
+
+
 @api_bp.route("/api/business/blast/send", methods=["POST"])
 @login_required
 def business_blast_send():
     """
     Fire a promo blast for the business tenant.
-    Body: { "message": "...", "audience": "all|segment:LOCAL|segment:ENGAGED|..." }
-    Sends in a background thread; returns immediately.
+
+    Body: {
+      "message":    "...",                 # required
+      "audience":   "all" | "tier:<tier>" | "smart-send"
+                  | "segment:<NAME>" | "customer_of_the_week",
+      "ai_cleanup": true | false           # default true
+    }
+    Sends in a background thread; returns immediately with the resolved
+    recipient count and the AI-cleaned body so the UI can show what actually
+    went out.
     """
+    from .. import business_blast as _bb
+
     slug = _get_tenant_slug()
     if not slug:
         return jsonify(error="No tenant slug configured for this account"), 400
@@ -2991,97 +3125,47 @@ def business_blast_send():
     data = request.get_json(silent=True) or {}
     message = (data.get("message") or "").strip()
     audience = (data.get("audience") or "all").strip()
+    ai_cleanup = data.get("ai_cleanup", True)
+    if isinstance(ai_cleanup, str):
+        ai_cleanup = ai_cleanup.lower() not in ("false", "0", "no", "")
 
     if not message:
         return jsonify(error="Message is required"), 400
 
-    import os, threading, time as _time, json
-    from twilio.rest import Client as TwilioClient
-
-    slug_upper = slug.upper()
-    from_number = os.getenv(f"SMB_{slug_upper}_SMS_NUMBER")
-    if not from_number:
-        return jsonify(error="SMS number not configured for this account"), 500
-
-    # Load segment definitions from local business config
     try:
-        cfg = json.loads((_BUSINESS_CONFIGS_DIR / f"{slug}.json").read_text())
-        segments_def = cfg.get("segments", [])
+        result = _bb.send_blast(
+            slug=slug,
+            raw_message=message,
+            audience=audience,
+            ai_cleanup=bool(ai_cleanup),
+            business_configs_dir=_BUSINESS_CONFIGS_DIR,
+            get_conn=get_conn,
+        )
+    except _bb.UnknownAudience as exc:
+        return jsonify(success=False, error=str(exc)), 400
     except Exception:
-        segments_def = []
+        logger.exception("business_blast_send: failed for slug=%s audience=%s", slug, audience)
+        return jsonify(success=False, error="Failed to queue blast"), 500
 
-    def _run():
-        conn = get_conn()
-        try:
-            import psycopg2.extras
-            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-                if audience.lower() == "all":
-                    cur.execute(
-                        "SELECT phone_number FROM smb_subscribers WHERE tenant_slug=%s AND status='active'",
-                        (slug,),
-                    )
-                elif audience.lower().startswith("segment:"):
-                    seg_name = audience[8:].strip().upper()
-                    seg = next((s for s in segments_def if s["name"].upper() == seg_name), None)
-                    if not seg:
-                        logger.error("business_blast: unknown segment %s for tenant %s", seg_name, slug)
-                        return
-                    ph = ",".join(["%s"] * len(seg["answers"]))
-                    cur.execute(
-                        f"""SELECT DISTINCT s.phone_number
-                            FROM smb_subscribers s
-                            JOIN smb_preferences p ON p.subscriber_id = s.id
-                            WHERE s.tenant_slug=%s AND s.status='active'
-                              AND p.question_key=%s AND p.answer IN ({ph})""",
-                        (slug, seg["question_key"], *seg["answers"]),
-                    )
-                else:
-                    logger.error("business_blast: invalid audience=%s", audience)
-                    return
+    if not result.get("success"):
+        # Helper returns success=False with a user-safe error string when the
+        # audience is empty or the SMS number isn't configured.
+        return jsonify(result), 400
 
-                phones = [r["phone_number"] for r in cur.fetchall()]
-
-            if not phones:
-                logger.info("business_blast: no subscribers for audience=%s tenant=%s", audience, slug)
-                return
-
-            twilio = TwilioClient(
-                os.getenv("TWILIO_ACCOUNT_SID"),
-                os.getenv("TWILIO_AUTH_TOKEN"),
-            )
-            attempted = succeeded = 0
-            for phone in phones:
-                attempted += 1
-                try:
-                    twilio.messages.create(body=message, from_=from_number, to=phone)
-                    succeeded += 1
-                except Exception as e:
-                    logger.warning("business_blast: send to %s failed: %s", phone[-4:], e)
-                if len(phones) > 1:
-                    _time.sleep(0.35)
-
-            seg_label = audience if audience != "all" else None
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """INSERT INTO smb_blasts
-                               (tenant_slug, owner_message, body, attempted, succeeded, segment)
-                           VALUES (%s, %s, %s, %s, %s, %s)""",
-                        (slug, message[:500], message[:500], attempted, succeeded, seg_label),
-                    )
-            logger.info(
-                "business_blast done: tenant=%s audience=%s attempted=%d succeeded=%d",
-                slug, audience, attempted, succeeded,
-            )
-        except Exception:
-            logger.exception("business_blast: thread failed for tenant=%s", slug)
-        finally:
-            conn.close()
-
-    threading.Thread(target=_run, daemon=True).start()
-
-    audience_label = audience.replace("segment:", "").replace("all", "all subscribers").lower()
-    return jsonify(success=True, status=f"Blast queued for {audience_label}. You'll see it in Promos when it completes.")
+    return jsonify(
+        success=True,
+        status=(
+            f"Blast queued for {result['recipient_count']:,} "
+            f"{result['audience_label']} subscriber"
+            f"{'' if result['recipient_count'] == 1 else 's'}. "
+            "You'll see it in Promos when it completes."
+        ),
+        recipient_count=result["recipient_count"],
+        audience_label=result["audience_label"],
+        ai_cleaned=result["ai_cleaned"],
+        body_preview=result["body_preview"],
+        blast_id=result["blast_id"],
+    )
 
 
 @api_bp.route("/api/business/blast/preview-count", methods=["POST"])
@@ -3089,48 +3173,31 @@ def business_blast_send():
 def business_blast_preview_count():
     """
     Return how many subscribers would receive a blast for the given audience.
-    Body: { "audience": "all|segment:LOCAL|..." }
+    Body: { "audience": "all|tier:<tier>|smart-send|segment:<NAME>|customer_of_the_week" }
     """
+    from .. import business_blast as _bb
+
     slug = _get_tenant_slug()
     if not slug:
         return jsonify(error="No tenant slug configured for this account"), 400
 
     data = request.get_json(silent=True) or {}
-    audience = (data.get("audience") or "all").strip().lower()
+    audience = (data.get("audience") or "all").strip()
 
-    conn = get_conn()
     try:
-        import psycopg2.extras, json
-        from pathlib import Path
+        count = _bb.preview_count(
+            slug=slug,
+            audience=audience,
+            business_configs_dir=_BUSINESS_CONFIGS_DIR,
+            get_conn=get_conn,
+        )
+    except _bb.UnknownAudience as exc:
+        return jsonify(error=str(exc)), 400
+    except Exception:
+        logger.exception("business_blast_preview_count: failed for slug=%s audience=%s", slug, audience)
+        return jsonify(error="Failed to preview audience"), 500
 
-        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            if audience == "all":
-                cur.execute(
-                    "SELECT COUNT(*) FROM smb_subscribers WHERE tenant_slug=%s AND status='active'",
-                    (slug,),
-                )
-                count = cur.fetchone()[0]
-            elif audience.startswith("segment:"):
-                seg_name = audience[8:].strip().upper()
-                cfg = json.loads((_BUSINESS_CONFIGS_DIR / f"{slug}.json").read_text())
-                seg = next((s for s in cfg.get("segments", []) if s["name"].upper() == seg_name), None)
-                if not seg:
-                    return jsonify(error=f"Unknown segment: {seg_name}"), 400
-                ph = ",".join(["%s"] * len(seg["answers"]))
-                cur.execute(
-                    f"""SELECT COUNT(DISTINCT s.id)
-                        FROM smb_subscribers s
-                        JOIN smb_preferences p ON p.subscriber_id = s.id
-                        WHERE s.tenant_slug=%s AND p.question_key=%s AND p.answer IN ({ph})""",
-                    (slug, seg["question_key"], *seg["answers"]),
-                )
-                count = cur.fetchone()[0]
-            else:
-                return jsonify(error="Invalid audience type"), 400
-
-        return jsonify(count=count, audience=audience)
-    finally:
-        conn.close()
+    return jsonify(count=count, audience=audience)
 
 
 # ── Password change (all account types) ──────────────────────────────────────
@@ -3278,24 +3345,80 @@ def business_promo_stats(promo_id):
                 succeeded = row["succeeded"] or 0
                 failed = attempted - succeeded
 
-                # Replies from any subscriber after this blast was sent
+                # Reply rate must be scoped to actual recipients within a
+                # reasonable response window — otherwise an unrelated DM
+                # from a random subscriber the day after a blast inflates the
+                # number. We prefer the per-recipient log added with
+                # smb_blast_recipients; we fall back to the legacy "any
+                # message after sent_at" query for blasts that pre-date the
+                # migration so historical promos still show a number.
                 cur.execute(
-                    """SELECT COUNT(DISTINCT phone_number) AS cnt
-                       FROM smb_messages
-                       WHERE tenant_slug=%s AND role='user' AND created_at > %s""",
-                    (slug, row["sent_at"]),
+                    """
+                    SELECT COUNT(DISTINCT m.phone_number) AS cnt
+                    FROM   smb_blast_recipients r
+                    JOIN   smb_messages m
+                           ON m.tenant_slug = r.tenant_slug
+                          AND m.phone_number = r.phone_number
+                          AND m.role = 'user'
+                          AND m.created_at >  r.sent_at
+                          AND m.created_at <= r.sent_at + INTERVAL '24 hours'
+                    WHERE  r.blast_id = %s
+                    """,
+                    (blast_id,),
                 )
-                replies = cur.fetchone()["cnt"]
+                replies = cur.fetchone()["cnt"] or 0
+
+                if replies == 0:
+                    cur.execute(
+                        "SELECT COUNT(*) AS cnt FROM smb_blast_recipients WHERE blast_id=%s",
+                        (blast_id,),
+                    )
+                    if (cur.fetchone()["cnt"] or 0) == 0:
+                        cur.execute(
+                            """SELECT COUNT(DISTINCT phone_number) AS cnt
+                               FROM smb_messages
+                               WHERE tenant_slug=%s AND role='user'
+                                 AND created_at >  %s
+                                 AND created_at <= %s + INTERVAL '24 hours'""",
+                            (slug, row["sent_at"], row["sent_at"]),
+                        )
+                        replies = cur.fetchone()["cnt"] or 0
+
                 reply_rate = round(replies / succeeded * 100, 1) if succeeded else 0
 
-                # Sample reply messages
+                # Sample reply messages — same join, same window
                 cur.execute(
-                    """SELECT body FROM smb_messages
-                       WHERE tenant_slug=%s AND role='user' AND created_at > %s
-                       ORDER BY created_at ASC LIMIT 5""",
-                    (slug, row["sent_at"]),
+                    """
+                    SELECT m.body
+                    FROM   smb_blast_recipients r
+                    JOIN   smb_messages m
+                           ON m.tenant_slug = r.tenant_slug
+                          AND m.phone_number = r.phone_number
+                          AND m.role = 'user'
+                          AND m.created_at >  r.sent_at
+                          AND m.created_at <= r.sent_at + INTERVAL '24 hours'
+                    WHERE  r.blast_id = %s
+                    ORDER  BY m.created_at ASC
+                    LIMIT  5
+                    """,
+                    (blast_id,),
                 )
                 sample_replies = [r["body"] for r in cur.fetchall()]
+                if not sample_replies:
+                    cur.execute(
+                        "SELECT COUNT(*) AS cnt FROM smb_blast_recipients WHERE blast_id=%s",
+                        (blast_id,),
+                    )
+                    if (cur.fetchone()["cnt"] or 0) == 0:
+                        cur.execute(
+                            """SELECT body FROM smb_messages
+                               WHERE tenant_slug=%s AND role='user'
+                                 AND created_at >  %s
+                                 AND created_at <= %s + INTERVAL '24 hours'
+                               ORDER BY created_at ASC LIMIT 5""",
+                            (slug, row["sent_at"], row["sent_at"]),
+                        )
+                        sample_replies = [r["body"] for r in cur.fetchall()]
 
                 return jsonify(
                     type="blast",
@@ -3807,14 +3930,33 @@ def team_members():
         conn.close()
 
 
-def _send_invite_email(to_email: str, inviter_name: str, project_name: str) -> None:
-    """Send a team invite email via Resend."""
+def _send_invite_email(
+    to_email: str,
+    inviter_name: str,
+    project_name: str,
+    *,
+    account_type: str = "performer",
+) -> None:
+    """Send a team invite email via Resend.
+
+    The body wording adapts to whether the project is a performer or business
+    account so we don't tell a restaurant's new manager they're getting access
+    to "fan conversations".
+    """
     import os
     import resend
 
     resend.api_key = os.getenv("RESEND_API_KEY", "")
     from_addr = os.getenv("RESEND_FROM", "hello@zar.bot")
     login_url = os.getenv("FRONTEND_URL", "https://zar.bot") + "/login"
+
+    is_business = (account_type or "performer").lower() == "business"
+    inbox_label = "customer conversations" if is_business else "fan conversations"
+    closing_line = (
+        "Your customers are texting in. Don't keep them waiting."
+        if is_business
+        else "Your fans are waiting. Don't ghost them."
+    )
 
     resend.Emails.send({
         "from": f"Zar <{from_addr}>",
@@ -3830,7 +3972,7 @@ def _send_invite_email(to_email: str, inviter_name: str, project_name: str) -> N
           </h2>
           <p style="color:#555;margin:0 0 8px;line-height:1.6">
             <strong>{inviter_name}</strong> has added you as a team member.
-            Sign in with Google to get access to the dashboard, fan conversations, and more.
+            Sign in with Google to get access to the dashboard, {inbox_label}, and more.
           </p>
           <p style="color:#555;margin:0 0 28px;line-height:1.6">
             Use <strong>{to_email}</strong> when signing in so your invite is recognized automatically.
@@ -3841,7 +3983,7 @@ def _send_invite_email(to_email: str, inviter_name: str, project_name: str) -> N
             Accept invite
           </a>
           <p style="color:#aaa;font-size:12px;margin-top:36px;line-height:1.6">
-            Your fans are waiting. Don't ghost them.<br>
+            {closing_line}<br>
             If you were not expecting this invite, you can safely ignore this email.
           </p>
         </div>
@@ -3937,7 +4079,12 @@ def team_invite():
         inviter_name = user.get("name") or user.get("email") or "Your teammate"
         project_name = slug.replace("_", " ").title()
         try:
-            _send_invite_email(email, inviter_name, project_name)
+            _send_invite_email(
+                email,
+                inviter_name,
+                project_name,
+                account_type=account_type_for_project,
+            )
         except Exception:
             logger.exception("team_invite: failed to send email to %s", email)
 

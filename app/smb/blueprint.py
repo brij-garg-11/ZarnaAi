@@ -240,7 +240,7 @@ def _process_smb_message(from_number: str, to_number: str, message_text: str) ->
         import math as _math
         from app.smb.tenants import get_registry as _smb_registry  # type: ignore
 
-        tenant = _smb_registry().get_by_to(to_number) if to_number else None
+        tenant = _smb_registry().get_by_to_number(to_number) if to_number else None
         slug = tenant.slug if tenant else None
         if slug:
             def _segs(text: str) -> int:

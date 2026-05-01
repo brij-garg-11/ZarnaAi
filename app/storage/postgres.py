@@ -318,6 +318,23 @@ _SMB_MIGRATIONS = (
     "CREATE INDEX IF NOT EXISTS idx_smb_blasts_tenant ON smb_blasts(tenant_slug, sent_at DESC)",
     # Add segment column for targeted blasts (idempotent ALTER)
     "ALTER TABLE smb_blasts ADD COLUMN IF NOT EXISTS segment TEXT DEFAULT NULL",
+    # Per-recipient log so Smart Send can compute cadence suppression and the
+    # promo stats page can scope reply_rate to actual recipients (not every
+    # subscriber that happened to text the bot after the blast went out).
+    """
+    CREATE TABLE IF NOT EXISTS smb_blast_recipients (
+        id           BIGSERIAL   PRIMARY KEY,
+        blast_id     BIGINT      NOT NULL REFERENCES smb_blasts(id) ON DELETE CASCADE,
+        tenant_slug  TEXT        NOT NULL,
+        phone_number TEXT        NOT NULL,
+        sent_at      TIMESTAMPTZ DEFAULT NOW(),
+        status       TEXT        NOT NULL DEFAULT 'sent'
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_smb_blast_recipients_tenant_phone "
+    "ON smb_blast_recipients(tenant_slug, phone_number, sent_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_smb_blast_recipients_blast "
+    "ON smb_blast_recipients(blast_id)",
     # Pending blast confirmations — shared across all gunicorn workers via DB
     """
     CREATE TABLE IF NOT EXISTS smb_pending_blasts (

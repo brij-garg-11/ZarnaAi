@@ -27,7 +27,11 @@ from app.analytics.blueprint import analytics_bp
 from app.live_shows.blueprint import live_shows_bp
 from app.smb.blueprint import smb_bp
 from app.smb.portal import portal_bp
-from app.smb.portal_interactive import portal_interactive_bp
+# portal_interactive_bp intentionally unregistered — the canonical interactive
+# client portal lives in operator/app/routes/smb_portal.py and runs on the
+# operator service. Keeping a second copy here led to two divergent /portal/
+# /<slug>/login implementations (see audit). Re-add only if you're moving the
+# portal back into the main app.
 from app.live_shows.signup import LiveShowSignupResult, try_live_show_signup
 from app.live_shows.quiz import get_active_quiz_for_fan, record_quiz_response, build_quiz_context
 from app.live_shows.blast_context import get_active_blast_context, build_blast_context_prompt
@@ -145,12 +149,20 @@ def _send_join_confirmation_async(phone: str, channel: str, body: str) -> None:
 
 
 app = Flask(__name__)
+# Required so Flask sessions (used by the SMB interactive portal and the
+# admin views below) actually work. Without this any session.set() crashes
+# with "The session is unavailable because no secret key was set." in prod.
+app.secret_key = (
+    os.getenv("FLASK_SECRET_KEY")
+    or os.getenv("SECRET_KEY")
+    or os.getenv("OPERATOR_SECRET_KEY")
+    or "dev-only-do-not-use-in-prod"
+)
 app.register_blueprint(admin_bp)
 app.register_blueprint(analytics_bp)
 app.register_blueprint(live_shows_bp)
 app.register_blueprint(smb_bp)
 app.register_blueprint(portal_bp)
-app.register_blueprint(portal_interactive_bp)
 
 brain     = create_brain()
 slicktext = create_slicktext_adapter()
