@@ -2109,6 +2109,63 @@ def smb_customer_of_the_week_history(slug: str):
 
 # ── Bot Data ──────────────────────────────────────────────────────────────────
 
+def _resolve_bot_context() -> tuple[str | None, str, int | None]:
+    """
+    Resolve (creator_slug, account_type, http_error_or_None) for /api/bot-data.
+
+    Honors session["viewing_as"] so that:
+      - Super-admins see/edit the project they've selected via the project picker.
+      - Team members see/edit the tenant they're switched into.
+      - Regular users get their own creator_slug + account_type.
+
+    This avoids a long-standing bug where /api/bot-data read user.creator_slug
+    directly — when a super-admin viewed-as a different tenant, the API returned
+    *their own* config (e.g. Zarna performer), so the frontend's BusinessBotView
+    fell back to MOCK_BUSINESS_BOT placeholders that looked like real WSCC text.
+    """
+    from flask import session
+
+    user = current_user()
+    if not user:
+        return (None, "performer", 401)
+
+    own_slug = user.get("creator_slug") or ""
+    own_type = user.get("account_type") or "performer"
+
+    if user.get("is_super_admin") and session.get("viewing_as"):
+        slug = session["viewing_as"]
+        account_type = session.get("viewing_as_account_type") or "performer"
+        return (slug, account_type, None)
+
+    slug, err = resolve_slug()
+    if err is not None:
+        return (slug or None, own_type, err)
+    if not slug:
+        return (None, own_type, None)
+
+    if slug == own_slug:
+        return (slug, own_type, None)
+
+    # Team-member viewing-as another tenant — look up that tenant's account_type.
+    account_type = session.get("viewing_as_account_type")
+    if not account_type:
+        try:
+            dbc = get_conn()
+            with dbc.cursor() as cur:
+                cur.execute(
+                    "SELECT account_type FROM operator_users "
+                    "WHERE creator_slug=%s AND is_active=TRUE LIMIT 1",
+                    (slug,),
+                )
+                row = cur.fetchone()
+                account_type = (row[0] if row else None) or "performer"
+            dbc.close()
+        except Exception:
+            logger.exception("_resolve_bot_context: lookup failed for slug=%s", slug)
+            account_type = "performer"
+    return (slug, account_type, None)
+
+
 def _load_performer_config_from_db(slug: str) -> dict | None:
     """
     Load a performer's bot config from bot_configs.config_json.
@@ -2142,10 +2199,11 @@ def bot_data():
     """
     import json
 
-    user = current_user()
-    slug = user.get("creator_slug") if user else None
-    account_type = (user.get("account_type") or "performer") if user else "performer"
-
+    slug, account_type, err = _resolve_bot_context()
+    if err == 401:
+        return jsonify(authenticated=False, error="Login required"), 401
+    if err == 403:
+        return jsonify(error="Not authorized for this account."), 403
     if not slug:
         return jsonify(error="Onboarding not complete — no bot configured yet."), 400
 
@@ -2269,8 +2327,11 @@ def save_bot_data():
     import psycopg2.extras
 
     user = current_user()
-    account_type = (user.get("account_type") or "performer")
-    slug = user.get("creator_slug") or ""
+    slug, account_type, err = _resolve_bot_context()
+    if err == 401:
+        return jsonify(authenticated=False, error="Login required"), 401
+    if err == 403:
+        return jsonify(error="Not authorized for this account."), 403
     if not slug:
         return jsonify(error="Onboarding not complete — no bot configured yet."), 400
 
@@ -2315,6 +2376,28 @@ def save_bot_data():
     if not updates:
         return jsonify(error="No valid fields provided"), 400
 
+    # When a super-admin / team member is viewing-as a different tenant,
+    # attribute a brand-new bot_configs INSERT to that tenant's actual owner
+    # (not the impersonator). For existing rows, ON CONFLICT only updates
+    # config_json, so this only matters on first save.
+    owner_user_id = user["id"]
+    if slug != (user.get("creator_slug") or ""):
+        try:
+            dbc2 = get_conn()
+            with dbc2.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM operator_users "
+                    "WHERE creator_slug=%s AND is_active=TRUE "
+                    "ORDER BY id LIMIT 1",
+                    (slug,),
+                )
+                row = cur.fetchone()
+                if row:
+                    owner_user_id = row[0]
+            dbc2.close()
+        except Exception:
+            logger.exception("save_bot_data: owner lookup failed for slug=%s", slug)
+
     conn = get_conn()
     try:
         with conn:
@@ -2326,7 +2409,7 @@ def save_bot_data():
                        ON CONFLICT (creator_slug) DO UPDATE
                        SET config_json = bot_configs.config_json || %s::jsonb,
                            updated_at  = NOW()""",
-                    (user["id"], slug, json.dumps(updates), json.dumps(updates)),
+                    (owner_user_id, slug, json.dumps(updates), json.dumps(updates)),
                 )
         return jsonify(success=True)
     except Exception:
