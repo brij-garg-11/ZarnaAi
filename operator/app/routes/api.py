@@ -4418,7 +4418,6 @@ def team_invite():
     """
     user = current_user()
     slug = _slug_or_abort()
-    account_type_for_project = user.get("account_type") or "performer"
 
     if not slug:
         return jsonify(error="No project context"), 400
@@ -4429,6 +4428,25 @@ def team_invite():
         return jsonify(error="Valid email is required"), 400
 
     conn = get_conn()
+
+    # Resolve the account_type AND display_name for the target project —
+    # not the logged-in user's own type. Critical for super-admins: when
+    # brij@zarnagarg.com (performer) invites Felecia to WSCC (business),
+    # the invite must carry account_type="business" so Felecia lands on
+    # the business dashboard, not the performer dashboard.
+    try:
+        with conn.cursor() as _cur:
+            _cur.execute(
+                "SELECT account_type, name FROM operator_users WHERE creator_slug=%s AND is_active=TRUE LIMIT 1",
+                (slug,),
+            )
+            _row = _cur.fetchone()
+            account_type_for_project = (_row[0] if _row else None) or "performer"
+            project_display_name = (_row[1] if _row else None) or slug.replace("_", " ").title()
+    except Exception:
+        logger.exception("team_invite: failed to look up account_type for slug=%s", slug)
+        account_type_for_project = user.get("account_type") or "performer"
+        project_display_name = slug.replace("_", " ").title()
     try:
         with conn:
             with conn.cursor() as cur:
@@ -4495,12 +4513,11 @@ def team_invite():
 
         # Send invite email (non-blocking, failure does not break the invite)
         inviter_name = user.get("name") or user.get("email") or "Your teammate"
-        project_name = slug.replace("_", " ").title()
         try:
             _send_invite_email(
                 email,
                 inviter_name,
-                project_name,
+                project_display_name,
                 account_type=account_type_for_project,
             )
         except Exception:
