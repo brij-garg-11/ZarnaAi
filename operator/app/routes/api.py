@@ -3261,6 +3261,7 @@ def business_blast_test():
 
     Body: { "message": "...", "test_phone": "+12125551234" }
     """
+    import os
     import re
 
     slug = _get_tenant_slug()
