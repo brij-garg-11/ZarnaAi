@@ -4088,6 +4088,44 @@ def admin_exit_project():
     return jsonify(success=True)
 
 
+@api_bp.route("/api/admin/project-info/<slug>")
+@login_required
+def admin_project_info(slug: str):
+    """Lightweight metadata lookup for a single project slug.
+
+    Used by the frontend SlugGuard when a super-admin opens a bookmarked
+    /{slug}/dashboard URL in a new tab — we need to know account_type before
+    rendering the page so the correct dashboard is shown.
+    """
+    if not _require_super_admin():
+        return jsonify(error="Super-admin access required"), 403
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT ou.account_type, bc.display_name, bc.logo_url, ou.location,
+                          (SELECT COUNT(*) FROM smb_subscribers WHERE tenant_slug = ou.creator_slug) AS subscriber_count
+                   FROM operator_users ou
+                   LEFT JOIN bot_configs bc ON bc.creator_slug = ou.creator_slug
+                   WHERE ou.creator_slug = %s AND ou.is_active = TRUE
+                   LIMIT 1""",
+                (slug,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return jsonify(error="Project not found"), 404
+        return jsonify(
+            slug=slug,
+            account_type=row[0] or "performer",
+            display_name=row[1] or slug,
+            logo_url=row[2],
+            location=row[3],
+            subscriber_count=int(row[4]) if row[4] is not None else None,
+        )
+    finally:
+        conn.close()
+
+
 @api_bp.route("/api/admin/current-project")
 @login_required
 def admin_current_project():
