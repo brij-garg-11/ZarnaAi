@@ -3251,6 +3251,62 @@ def business_blast_send():
     )
 
 
+@api_bp.route("/api/business/blast/test", methods=["POST"])
+@login_required
+def business_blast_test():
+    """
+    Send a [TEST] copy of a promo message to a single phone number using
+    the tenant's own SMS number. The message is prefixed with [TEST] so
+    it is clearly distinguishable from a real blast.
+
+    Body: { "message": "...", "test_phone": "+12125551234" }
+    """
+    import re
+
+    slug = _get_tenant_slug()
+    if not slug:
+        return jsonify(success=False, error="No tenant configured for this account."), 400
+
+    data = request.get_json(silent=True) or {}
+    message = (data.get("message") or "").strip()
+    test_phone = (data.get("test_phone") or "").strip()
+
+    if not message:
+        return jsonify(success=False, error="message is required."), 400
+    if not test_phone:
+        return jsonify(success=False, error="test_phone is required."), 400
+
+    # Normalise to E.164 if the user typed a bare 10-digit US number
+    digits_only = re.sub(r"\D", "", test_phone)
+    if len(digits_only) == 10:
+        test_phone = f"+1{digits_only}"
+    elif len(digits_only) == 11 and digits_only.startswith("1"):
+        test_phone = f"+{digits_only}"
+
+    env_key = f"SMB_{slug.upper()}_SMS_NUMBER"
+    from_number = os.getenv(env_key, "").strip()
+    if not from_number:
+        return jsonify(success=False, error=f"SMS number not configured ({env_key})."), 400
+
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+    if not all([account_sid, auth_token]):
+        return jsonify(success=False, error="Twilio credentials not configured."), 500
+
+    body = f"[TEST] {message}"
+    try:
+        from twilio.rest import Client as TwilioClient
+        client = TwilioClient(account_sid, auth_token)
+        client.messages.create(body=body, from_=from_number, to=test_phone)
+        logger.info(
+            "business_blast_test: test sent to ...%s for slug=%s", test_phone[-4:], slug
+        )
+        return jsonify(success=True, sent_to=f"...{test_phone[-4:]}")
+    except Exception as exc:
+        logger.exception("business_blast_test: failed for slug=%s", slug)
+        return jsonify(success=False, error=str(exc)), 500
+
+
 @api_bp.route("/api/business/blast/preview-count", methods=["POST"])
 @login_required
 def business_blast_preview_count():
