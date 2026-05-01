@@ -3443,7 +3443,7 @@ def business_outreach_send():
         ), 400
 
     # Append mandatory TCPA / CTIA cold-outreach footer (non-negotiable)
-    footer = "Reply YES to join our text club. Reply STOP to never hear from us again."
+    footer = "Reply YES to join our text club. Reply STOP to end."
     full_body = f"{message}\n\n{footer}"
 
     result = {
