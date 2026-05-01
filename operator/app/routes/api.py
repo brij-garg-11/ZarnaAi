@@ -7,7 +7,7 @@ All routes return JSON — no HTML rendering.
 
 from pathlib import Path
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
 from ..routes.auth import login_required, current_user, resolve_slug, get_authorized_slugs
 
 _BUSINESS_CONFIGS_DIR = Path(__file__).parent.parent / "business_configs"
@@ -18,6 +18,54 @@ import logging
 logger = logging.getLogger(__name__)
 
 api_bp = Blueprint("api", __name__)
+
+
+def _get_viewing_as() -> tuple[str | None, str | None]:
+    """
+    Return (slug, account_type) for the project a super-admin is currently
+    viewing, preferring the per-request ``X-Viewing-As`` header over the
+    server-side session.
+
+    Why header-first?  The Flask session is a single shared cookie for the
+    browser, so selecting a project in Tab B overwrites what Tab A was
+    viewing.  The frontend stores the selection in ``sessionStorage`` (which
+    is per-tab) and sends it as this header on every API call, making each
+    tab completely independent.
+
+    Falls back to ``session["viewing_as"]`` for backward compatibility with
+    any code path that still sets the session (e.g. non-header callers or
+    fresh tabs before they have made their first select-project call).
+    """
+    user = current_user()
+    if not user or not user.get("is_super_admin"):
+        return (None, None)
+
+    header_slug = (request.headers.get("X-Viewing-As") or "").strip()
+    if header_slug:
+        # Look up account_type for the header slug so callers don't need to.
+        account_type = session.get("viewing_as_account_type") if session.get("viewing_as") == header_slug else None
+        if not account_type:
+            try:
+                _c = get_conn()
+                with _c.cursor() as _cur:
+                    _cur.execute(
+                        "SELECT account_type FROM operator_users "
+                        "WHERE creator_slug=%s AND is_active=TRUE LIMIT 1",
+                        (header_slug,),
+                    )
+                    _row = _cur.fetchone()
+                    account_type = (_row[0] if _row else None) or "performer"
+                _c.close()
+            except Exception:
+                logger.exception("_get_viewing_as: DB lookup failed for slug=%s", header_slug)
+                account_type = "performer"
+        return (header_slug, account_type)
+
+    # Fallback: legacy server-side session (shared across tabs, but kept for
+    # backward compatibility with fresh tabs that haven't sent the header yet).
+    slug = session.get("viewing_as")
+    account_type = session.get("viewing_as_account_type") or "performer"
+    return (slug or None, account_type if slug else None)
 
 
 def _slug_or_abort():
@@ -2113,18 +2161,11 @@ def _resolve_bot_context() -> tuple[str | None, str, int | None]:
     """
     Resolve (creator_slug, account_type, http_error_or_None) for /api/bot-data.
 
-    Honors session["viewing_as"] so that:
+    Honors viewing_as (header-first, then session) so that:
       - Super-admins see/edit the project they've selected via the project picker.
       - Team members see/edit the tenant they're switched into.
       - Regular users get their own creator_slug + account_type.
-
-    This avoids a long-standing bug where /api/bot-data read user.creator_slug
-    directly — when a super-admin viewed-as a different tenant, the API returned
-    *their own* config (e.g. Zarna performer), so the frontend's BusinessBotView
-    fell back to MOCK_BUSINESS_BOT placeholders that looked like real WSCC text.
     """
-    from flask import session
-
     user = current_user()
     if not user:
         return (None, "performer", 401)
@@ -2132,10 +2173,9 @@ def _resolve_bot_context() -> tuple[str | None, str, int | None]:
     own_slug = user.get("creator_slug") or ""
     own_type = user.get("account_type") or "performer"
 
-    if user.get("is_super_admin") and session.get("viewing_as"):
-        slug = session["viewing_as"]
-        account_type = session.get("viewing_as_account_type") or "performer"
-        return (slug, account_type, None)
+    va_slug, va_type = _get_viewing_as()
+    if user.get("is_super_admin") and va_slug:
+        return (va_slug, va_type or "performer", None)
 
     slug, err = resolve_slug()
     if err is not None:
@@ -3961,14 +4001,13 @@ def admin_current_project():
     The frontend (account-type.tsx) expects `viewing_as` to be an object with
     { slug, display_name, account_type, logo_url, location, subscriber_count }.
     """
-    from flask import session
     user = current_user()
     if not user or not user.get("is_super_admin"):
         return jsonify(viewing_as=None)
-    slug = session.get("viewing_as")
-    account_type = session.get("viewing_as_account_type") or "performer"
+    slug, account_type = _get_viewing_as()
     if not slug:
         return jsonify(viewing_as=None, is_super_admin=True)
+    account_type = account_type or "performer"
 
     # Enrich with display metadata from bot_configs so the header shows
     # the project name rather than a raw slug.
@@ -4479,14 +4518,12 @@ def api_onboarding_status():
       { "completed": true,  "account_type": "performer", "creator_slug": "zarna" }
       { "completed": false, "account_type": null,        "creator_slug": null }
     """
-    from flask import session
     user = current_user()
 
     # Super-admin impersonating a project → always treat as completed
-    if user.get("is_super_admin") and session.get("viewing_as"):
-        slug = session["viewing_as"]
-        account_type = session.get("viewing_as_account_type") or "performer"
-        return jsonify(completed=True, account_type=account_type, creator_slug=slug)
+    va_slug, va_type = _get_viewing_as()
+    if user.get("is_super_admin") and va_slug:
+        return jsonify(completed=True, account_type=va_type or "performer", creator_slug=va_slug)
 
     completed = bool(user.get("creator_slug") and user.get("account_type"))
     return jsonify(
@@ -4723,12 +4760,12 @@ def api_provisioning_status():
       live         — bot is ready; fan texts will be answered
       failed       — pipeline raised; inspect error_message for the traceback
     """
-    from flask import session
     user = current_user()
 
     slug = None
-    if user.get("is_super_admin") and session.get("viewing_as"):
-        slug = session["viewing_as"]
+    va_slug, _va_type = _get_viewing_as()
+    if user.get("is_super_admin") and va_slug:
+        slug = va_slug
     else:
         slug = user.get("creator_slug")
 
@@ -4831,12 +4868,12 @@ def api_provisioning_retry():
     "Retry" button actually restarts the pipeline instead of just refetching
     status.
     """
-    from flask import session
     import threading
     user = current_user()
 
-    if user.get("is_super_admin") and session.get("viewing_as"):
-        slug = session["viewing_as"]
+    va_slug, _va_type = _get_viewing_as()
+    if user.get("is_super_admin") and va_slug:
+        slug = va_slug
     else:
         slug = user.get("creator_slug")
 
