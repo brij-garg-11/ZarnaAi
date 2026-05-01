@@ -193,7 +193,12 @@ def _welcome_and_question(
     If claimed_offer is set (e.g. 'free_ticket'), appends the reward line including
     the unique ticket_number so they can show it at the door.
     """
-    stop_line = "Reply STOP any time to opt out."
+    # CTIA / A2P 10DLC required disclosures on first message after opt-in:
+    # - Msg frequency disclosure (#3), msg & data rates (#4), STOP keyword (#5).
+    # HELP keyword is intentionally omitted: the conversational AI handles
+    # freeform help requests, and Twilio's default HELP autoresponder still
+    # fires on the literal keyword.
+    stop_line = "Msg frequency varies. Msg & data rates may apply. Reply STOP to cancel."
     welcome = tenant.welcome_message or f"Welcome to {tenant.display_name}!"
 
     parts = [welcome]
