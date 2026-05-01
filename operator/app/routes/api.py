@@ -2726,6 +2726,10 @@ def business_stats():
                 {"date": str(r["day"]), "count": r["cnt"]} for r in cur.fetchall()
             ]
 
+        import os as _os
+        env_key = f"SMB_{slug.upper()}_SMS_NUMBER"
+        sms_number = _os.getenv(env_key, "")
+
         return jsonify(
             total_subscribers=total_subscribers,
             active_subscribers=active_subscribers,
@@ -2735,6 +2739,7 @@ def business_stats():
             messages_week=messages_week,
             total_blasts=total_blasts,
             messages_by_day=messages_by_day,
+            sms_number=sms_number,
         )
     finally:
         conn.close()
@@ -3306,6 +3311,149 @@ def business_blast_test():
     except Exception as exc:
         logger.exception("business_blast_test: failed for slug=%s", slug)
         return jsonify(success=False, error=str(exc)), 500
+
+
+@api_bp.route("/api/business/outreach/send", methods=["POST"])
+@login_required
+def business_outreach_send():
+    """
+    Send a cold outreach message to a list of raw phone numbers.
+
+    Unlike /api/business/blast/send (which targets existing subscribers),
+    this endpoint targets people who have NOT yet opted in. Used to convert
+    existing customer lists into SMS subscribers.
+
+    Compliance rules enforced server-side:
+      - Skip any number already in smb_subscribers with status='stopped'
+        (they previously opted out and must not be re-contacted).
+      - Append a mandatory opt-in / opt-out footer so the message meets
+        TCPA / CTIA A2P 10DLC requirements for cold outreach.
+      - Log every send to smb_outreach_invites for auditing and claimed tracking.
+
+    Body: {
+      "phones":      ["2125551234", "+12125554567", ...],   // raw or E.164
+      "message":     "West Side Comedy Club here! ...",     // custom or bot default
+      "batch_name":  "April 2026 Email List"               // optional label
+    }
+    """
+    import os
+    import re
+    import threading
+
+    slug = _get_tenant_slug()
+    if not slug:
+        return jsonify(success=False, error="No tenant configured for this account."), 400
+
+    data = request.get_json(silent=True) or {}
+    raw_phones = data.get("phones") or []
+    message = (data.get("message") or "").strip()
+    batch_name = (data.get("batch_name") or "").strip() or None
+
+    if not raw_phones:
+        return jsonify(success=False, error="No phone numbers provided."), 400
+    if not message:
+        return jsonify(success=False, error="message is required."), 400
+    if len(raw_phones) > 5000:
+        return jsonify(success=False, error="Maximum 5,000 numbers per send."), 400
+
+    # Normalise to E.164 US numbers, drop obvious non-numbers
+    def _normalise(raw: str) -> str | None:
+        digits = re.sub(r"\D", "", raw.strip())
+        if len(digits) == 10:
+            return f"+1{digits}"
+        if len(digits) == 11 and digits.startswith("1"):
+            return f"+{digits}"
+        return None
+
+    phones = list(dict.fromkeys(p for p in (_normalise(r) for r in raw_phones) if p))
+    if not phones:
+        return jsonify(success=False, error="No valid US phone numbers found."), 400
+
+    env_key = f"SMB_{slug.upper()}_SMS_NUMBER"
+    from_number = os.getenv(env_key, "").strip()
+    if not from_number:
+        return jsonify(success=False, error=f"SMS number not configured ({env_key})."), 400
+
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+    auth_token  = os.getenv("TWILIO_AUTH_TOKEN", "")
+    if not all([account_sid, auth_token]):
+        return jsonify(success=False, error="Twilio credentials not configured."), 500
+
+    # Filter out numbers that previously opted out (STOP'd)
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT phone_number FROM smb_subscribers
+                   WHERE tenant_slug=%s AND status='stopped'""",
+                (slug,),
+            )
+            stopped = {row[0] for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+    phones_to_send = [p for p in phones if p not in stopped]
+    skipped_stopped = len(phones) - len(phones_to_send)
+
+    if not phones_to_send:
+        return jsonify(
+            success=False,
+            error="All provided numbers have previously opted out.",
+            skipped_stopped=skipped_stopped,
+        ), 400
+
+    # Append mandatory TCPA / CTIA cold-outreach footer (non-negotiable)
+    footer = "Reply YES to join our text club. Reply STOP to never hear from us again."
+    full_body = f"{message}\n\n{footer}"
+
+    result = {
+        "success": True,
+        "total_provided": len(phones),
+        "skipped_stopped": skipped_stopped,
+        "recipient_count": len(phones_to_send),
+        "batch_name": batch_name,
+    }
+
+    def _dispatch():
+        try:
+            from twilio.rest import Client as TwilioClient
+            client = TwilioClient(account_sid, auth_token)
+        except Exception:
+            logger.exception("business_outreach: failed to init Twilio client")
+            return
+
+        sent = 0
+        dbc = get_conn()
+        try:
+            for phone in phones_to_send:
+                try:
+                    client.messages.create(body=full_body, from_=from_number, to=phone)
+                    sent += 1
+                    # Log to smb_outreach_invites
+                    with dbc:
+                        with dbc.cursor() as cur:
+                            cur.execute(
+                                """INSERT INTO smb_outreach_invites
+                                       (tenant_slug, phone_number, offer, sent_at, batch_name)
+                                   VALUES (%s, %s, %s, NOW(), %s)
+                                   ON CONFLICT (tenant_slug, phone_number) DO UPDATE
+                                       SET sent_at = NOW(),
+                                           batch_name = COALESCE(EXCLUDED.batch_name, smb_outreach_invites.batch_name)
+                                   WHERE smb_outreach_invites.claimed_at IS NULL""",
+                                (slug, phone, "custom_outreach", batch_name),
+                            )
+                except Exception:
+                    logger.warning("business_outreach: send to %s failed", phone[-4:])
+        finally:
+            dbc.close()
+
+        logger.info(
+            "business_outreach: sent %d/%d for slug=%s batch=%s",
+            sent, len(phones_to_send), slug, batch_name,
+        )
+
+    threading.Thread(target=_dispatch, daemon=True).start()
+    return jsonify(**result)
 
 
 @api_bp.route("/api/business/blast/preview-count", methods=["POST"])
