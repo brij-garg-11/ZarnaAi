@@ -130,6 +130,9 @@ def dashboard_stats():
         pct = round(abs(diff) / previous * 100)
         return {"pct": pct, "dir": "up" if diff > 0 else "down"}
 
+    import os as _os
+    sms_number = _os.getenv("TWILIO_PHONE_NUMBER", "")
+
     return jsonify(
         total_subscribers=stats.get("total_subscribers", 0),
         total_messages=stats.get("total_messages", 0),
@@ -139,6 +142,7 @@ def dashboard_stats():
         profiled_fans=stats.get("profiled_fans", 0),
         week_delta=pct_delta(stats.get("messages_week", 0), stats.get("messages_prev_week", 0)),
         sub_delta=pct_delta(stats.get("new_subs_week", 0), stats.get("new_subs_prev_week", 0)),
+        sms_number=sms_number,
         messages_by_day=[
             {"date": d, "count": c}
             for d, c in stats.get("messages_by_day", [])
