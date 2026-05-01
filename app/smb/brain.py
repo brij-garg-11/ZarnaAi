@@ -247,7 +247,7 @@ def _get_recent_blast_context(from_number: str, tenant) -> str:
             # Recent tenant-wide blasts (last 48 h) — all subscribers received these
             cur.execute(
                 """SELECT body, sent_at FROM smb_blasts
-                   WHERE tenant_slug=%s AND sent_at >= NOW() - INTERVAL '48 hours'
+                   WHERE tenant_slug=%s AND sent_at >= NOW() - INTERVAL '96 hours'
                    ORDER BY sent_at DESC LIMIT 3""",
                 (tenant.slug,),
             )

@@ -18,6 +18,26 @@
     "menu": "https://www.westsidecomedyclub.com/menu",
     "map": "https://maps.google.com/?q=201+West+75th+Street+New+York+NY"
   },
+  "knowledge_base": {
+    "address": "201 West 75th Street, New York, NY 10023 (Upper West Side)",
+    "hours": "Tue–Fri 4pm–midnight, Sat 1pm–midnight, Sun 2pm–11pm, Mon closed",
+    "website": "https://www.westsidecomedyclub.com",
+    "calendar_url": "https://www.westsidecomedyclub.com",
+    "maps_link": "https://maps.google.com/?q=201+West+75th+Street+New+York+NY",
+    "directions": "On the Upper West Side between Broadway and West End Ave. Closest subway: 1/2/3 at 72nd St or 79th St.",
+    "food_and_drinks": "Full dinner menu from Playa Betty's (Mexican fare), available before and during shows. Two-item minimum per person (food and/or drink). Margaritas are a specialty.",
+    "policies": "Two-item minimum per person (food or drink). Lineups subject to change. All ages 16+ with a guardian; 18+ without.",
+    "ticket_support": "For lost or missing tickets, email the club via the website contact page or reply to your order confirmation from the ticketing platform.",
+    "cancellation_policy": "Tickets are generally non-refundable. Contact the club directly for exceptions — shows sell out fast so they try to be flexible.",
+    "show_transfers": "To transfer or exchange your ticket to a different show, contact the club as early as possible — they'll do their best.",
+    "accidental_purchase": "If you bought tickets by mistake, reach out immediately via the website and they'll try to sort it out.",
+    "billing_errors": "For billing issues or overcharges, contact the ticketing platform first (they process payments), then reach out to WSCC if unresolved.",
+    "accessibility": "Reach out in advance to discuss accessibility or mobility needs — the staff will do everything they can to accommodate.",
+    "late_arrival": "They'll seat you at the next available break — please arrive a few minutes early to get settled before the show starts.",
+    "lost_and_found": "Contact the club via the website for lost items. They hold found items for 30 days.",
+    "private_events": "WSCC hosts private events and corporate outings. Contact via the website for availability and pricing.",
+    "notable_performers": "Regular headliners and past guests include Bill Burr, Ronnie Chieng, Jessica Kirson, and comedians featured on Netflix, Comedy Central, HBO, Amazon, and Late Night TV."
+  },
   "segments": [
     {
       "name": "LOCAL",
