@@ -1,0 +1,16 @@
+# Weekly drip re-engagement cron — creates a blast draft for fans who
+# haven't messaged in 30+ days. Drafts land in the operator dashboard
+# for review before anyone sends anything (--send flag NOT set).
+#
+# Runs every Sunday at 8am UTC (good for a Mon/Tue outreach window).
+#
+# Point a separate Railway cron service at this file:
+#   Service → Settings → Railway config file → operator/railway.drip.toml
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python -u operator/scripts/drip_reengagement.py --days 30"
+cronSchedule = "0 8 * * 0"
+watchPatterns = ["operator/scripts/drip_reengagement.py", "operator/requirements.txt"]

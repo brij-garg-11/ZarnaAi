@@ -29,7 +29,7 @@ class BaseStorage(ABC):
     def get_memory(self, phone_number: str) -> str:
         return ""
 
-    def update_memory(self, phone_number: str, memory: str, tags: list, location: str = "") -> None:
+    def update_memory(self, phone_number: str, memory: str, tags: list, location: str = "", name: str = "") -> None:
         pass
 
     def get_fans_by_tag(self, tag: str) -> list:

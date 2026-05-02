@@ -18,6 +18,7 @@ class InMemoryStorage(BaseStorage):
         self._memory: Dict[str, str] = {}
         self._tags: Dict[str, list] = {}
         self._location: Dict[str, str] = {}
+        self._name: Dict[str, str] = {}
         self._next_id: int = 1
         # engagement context stored by message id
         self._reply_context: Dict[int, dict] = {}
@@ -45,11 +46,13 @@ class InMemoryStorage(BaseStorage):
     def get_memory(self, phone_number: str) -> str:
         return self._memory.get(phone_number, "")
 
-    def update_memory(self, phone_number: str, memory: str, tags: list, location: str = "") -> None:
+    def update_memory(self, phone_number: str, memory: str, tags: list, location: str = "", name: str = "") -> None:
         self._memory[phone_number] = memory[:400]
         self._tags[phone_number] = tags
         if location:
             self._location[phone_number] = location[:100]
+        if name:
+            self._name[phone_number] = name[:80]
 
     def get_fans_by_tag(self, tag: str) -> list:
         results = []

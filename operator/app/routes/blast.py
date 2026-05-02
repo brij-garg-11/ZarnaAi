@@ -466,6 +466,78 @@ def upload_image():
         return jsonify({"error": f"Upload failed: {e}"}), 500
 
 
+@blast_bp.route("/operator/blast/ai-suggest", methods=["POST"])
+@login_required
+def ai_suggest_blast():
+    """
+    Generate an AI-drafted blast body that knows the selected audience segment.
+    POST JSON: {topic, audience_type, audience_filter, creator_slug}
+    Returns: {body: "..."}
+    """
+    from ..routes.auth import current_user as _cu
+    import json as _json
+    try:
+        from google import genai as _genai
+        from app.config import GEMINI_API_KEY, GENERATION_MODEL
+    except ImportError:
+        return jsonify({"error": "AI not available"}), 503
+
+    data = request.get_json(silent=True) or {}
+    topic          = (data.get("topic") or "").strip()[:300]
+    audience_type  = (data.get("audience_type") or "all").strip()
+    audience_filter = (data.get("audience_filter") or "").strip()
+
+    cu = _cu() or {}
+    creator_slug = cu.get("creator_slug") or "zarna"
+
+    # Load creator persona for the prompt
+    try:
+        from app.brain.creator_config import load_creator
+        cfg = load_creator(creator_slug)
+        persona = getattr(cfg, "persona", "") or ""
+        name    = getattr(cfg, "display_name", creator_slug.title()) or creator_slug.title()
+    except Exception:
+        persona = ""
+        name = creator_slug.title()
+
+    # Describe the audience so the AI can tailor the tone
+    if audience_type == "tag" and audience_filter:
+        audience_desc = f"fans tagged '{audience_filter}'"
+    elif audience_type == "location" and audience_filter:
+        audience_desc = f"fans in {audience_filter}"
+    elif audience_type == "tier" and audience_filter:
+        audience_desc = f"'{audience_filter}' tier fans"
+    elif audience_type == "engaged":
+        audience_desc = "the most engaged fans"
+    else:
+        audience_desc = "all fans"
+
+    prompt = f"""You write SMS blasts for {name}, a comedian/creator.
+{('Persona: ' + persona[:400]) if persona else ''}
+
+Write a single SMS blast message for this topic: {topic or 'a general check-in'}
+
+Audience: {audience_desc}
+Tailor the tone slightly toward this audience — e.g. reference shared interests if the tag is specific.
+
+Rules:
+- Max 160 characters (one SMS segment)
+- Warm and personal, sounds like texting a friend
+- First-person voice as {name}
+- Use {{{{name}}}} if a name greeting would feel natural (it auto-fills the fan's name)
+- Do NOT include STOP instructions (operator adds those)
+- Return ONLY the message text, no quotes, no explanation"""
+
+    try:
+        client = _genai.Client(api_key=GEMINI_API_KEY)
+        resp = client.models.generate_content(model=GENERATION_MODEL, contents=prompt)
+        suggested = (resp.text or "").strip().strip('"').strip("'")[:400]
+        return jsonify({"body": suggested})
+    except Exception as e:
+        logger.warning("ai_suggest_blast failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
 @blast_bp.route("/operator/blast/smart-send-preview", methods=["POST"])
 @login_required
 def smart_send_preview():

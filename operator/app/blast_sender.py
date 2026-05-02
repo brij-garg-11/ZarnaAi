@@ -18,6 +18,7 @@ def execute_blast(draft_id: int):
     from .queries import (
         get_blast_draft,
         get_audience_phones,
+        get_audience_fan_data,
         mark_blast_started,
         mark_blast_progress,
         mark_blast_sent,
@@ -137,6 +138,15 @@ def execute_blast(draft_id: int):
     total = len(phones)
     mark_blast_started(draft_id, total)
 
+    # Pre-fetch fan names + locations for {{name}} / {{location}} merge tags.
+    # Only fetches if the body actually uses either tag — avoids unnecessary DB
+    # round-trip for blasts that don't use personalization.
+    needs_merge = "{{name}}" in body or "{{location}}" in body
+    fan_data: dict = {}
+    if needs_merge:
+        fan_data = get_audience_fan_data(phones)
+        logger.info("  merge tags detected — fetched fan data for %d phones", len(fan_data))
+
     # Create the blast_context_sessions row NOW — before the send loop — so
     # fans who reply while the blast is still in-flight (often the fastest
     # repliers!) already have the AI context in place. Previously this ran
@@ -164,15 +174,24 @@ def execute_blast(draft_id: int):
 
     for i, phone in enumerate(phones):
         try:
-            # Build a per-fan body: personalize the tracked URL with ?f=<phone_token>
-            # so clicks can be attributed back to this specific fan.
+            # Build a per-fan body: apply {{name}} / {{location}} merge tags,
+            # then append a personalized tracked URL if one exists.
+            fan_info = fan_data.get(phone, {}) if needs_merge else {}
+            fan_name = fan_info.get("fan_name", "") or "friend"
+            fan_location = fan_info.get("fan_location", "")
+
+            if needs_merge:
+                fan_body_base = body.replace("{{name}}", fan_name).replace("{{location}}", fan_location)
+            else:
+                fan_body_base = body
+
             if tracked_link_slug and main_base_for_token:
                 from base64 import urlsafe_b64encode
                 fan_token = urlsafe_b64encode(phone.encode()).decode()
                 fan_tracked_url = f"{main_base_for_token}/t/{tracked_link_slug}?f={fan_token}"
-                fan_body = f"{body}\n{fan_tracked_url}"
+                fan_body = f"{fan_body_base}\n{fan_tracked_url}"
             else:
-                fan_body = send_body
+                fan_body = fan_body_base if needs_merge else send_body
 
             ok = _send_one(phone, fan_body, channel, media_url=media_url)
             logger.info("  send to ...%s via %s: %s", phone[-4:], channel, "OK" if ok else "FAIL")

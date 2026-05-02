@@ -318,7 +318,34 @@ def get_audience_phones(
         conn.close()
 
 
-def _build_compound_clauses(
+def get_audience_fan_data(phones: list[str]) -> dict[str, dict]:
+    """Return {phone: {fan_name, fan_location}} for a list of phones.
+
+    Used by blast_sender to resolve {{name}} / {{location}} merge tags
+    at send time without re-running the full audience query.
+    Only fetches the two fields needed — no memory blob returned.
+    """
+    if not phones:
+        return {}
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT phone_number,
+                       COALESCE(fan_name, '')     AS fan_name,
+                       COALESCE(fan_location, '') AS fan_location
+                FROM   contacts
+                WHERE  phone_number = ANY(%s)
+                """,
+                (phones,),
+            )
+            return {
+                row[0]: {"fan_name": row[1], "fan_location": row[2]}
+                for row in cur.fetchall()
+            }
+    finally:
+        conn.close()
     filters: list[dict],
     creator_slug: str | None = None,
 ) -> tuple[list[str], list]:

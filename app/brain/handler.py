@@ -297,7 +297,7 @@ class ZarnaBrain:
 
     def _update_memory(self, phone_number: str, message_text: str, current_memory: str) -> None:
         try:
-            new_memory, new_tags, location, minor_detected = extract_memory(current_memory, message_text)
+            new_memory, new_tags, location, minor_detected, name = extract_memory(current_memory, message_text)
 
             if minor_detected:
                 # COPPA / privacy: clear any existing profile for this number
@@ -309,8 +309,8 @@ class ZarnaBrain:
                     )
                 return  # Never store data for minors
 
-            if new_memory != current_memory or new_tags or location:
-                self.storage.update_memory(phone_number, new_memory, new_tags, location)
+            if new_memory != current_memory or new_tags or location or name:
+                self.storage.update_memory(phone_number, new_memory, new_tags, location, name)
         except Exception:
             pass  # Memory update is best-effort; never block a reply
 

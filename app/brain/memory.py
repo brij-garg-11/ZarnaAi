@@ -82,7 +82,7 @@ New message from fan:
 
 PRIVACY RULES — apply strictly before writing anything:
 - If the message suggests the sender is under 18 (mentions school grade, age under 18, etc.),
-  return exactly: {{"memory": "", "location": "", "tags": [], "minor": true}}
+  return exactly: {{"memory": "", "name": "", "location": "", "tags": [], "minor": true}}
 - NEVER store: specific health diagnoses, mental health conditions, immigration legal status,
   precise street address, financial debt or hardship, sexual orientation, religious beliefs,
   or any information the person did not openly and voluntarily share.
@@ -96,21 +96,24 @@ Your job (if not a minor):
    - Max 300 characters. If nothing new was revealed, return the existing profile unchanged.
    - Write in third-person ("Fan is a doctor..."), no first-person.
 
-2. Extract location — city, state, or country only. Empty string if not mentioned.
+2. Extract name — the fan's first name only, if they have stated it. Empty string if unknown.
+   Only use a name the fan explicitly gave (e.g. "I'm Priya" or "My name is Raj").
 
-3. Return tags from this allowed list only (be conservative):
+3. Extract location — city, state, or country only. Empty string if not mentioned.
+
+4. Return tags from this allowed list only (be conservative):
 {allowed_tags}
 
 Respond ONLY with valid JSON — no markdown, no explanation:
-{{"memory": "...", "location": "...", "tags": ["tag1", "tag2"], "minor": false}}"""
+{{"memory": "...", "name": "...", "location": "...", "tags": ["tag1", "tag2"], "minor": false}}"""
 
 
 def extract_memory(
     current_memory: str,
     user_message: str,
-) -> Tuple[str, list, str, bool]:
+) -> Tuple[str, list, str, bool, str]:
     """
-    Returns (memory, tags, location, minor_detected).
+    Returns (memory, tags, location, minor_detected, name).
 
     If minor_detected is True, the caller must clear any existing profile for
     this phone number and skip storage — COPPA compliance.
@@ -120,7 +123,7 @@ def extract_memory(
     # Fast regex check before hitting the API — no cost, no latency
     if _message_may_be_minor(user_message):
         logger.info("Minor signal detected in message — skipping memory storage")
-        return "", [], "", True
+        return "", [], "", True, ""
 
     allowed_str = ", ".join(sorted(_ALLOWED_TAGS))
     prompt = _EXTRACT_PROMPT.format(
@@ -148,13 +151,14 @@ def extract_memory(
         # Check if Gemini itself flagged a minor
         if data.get("minor", False):
             logger.info("Gemini flagged minor in message — skipping memory storage")
-            return "", [], "", True
+            return "", [], "", True, ""
 
         memory   = str(data.get("memory", current_memory or ""))[:400]
         location = str(data.get("location", ""))[:100]
+        name     = str(data.get("name", ""))[:80].strip()
         tags     = [t for t in data.get("tags", []) if t in _ALLOWED_TAGS]
-        return memory, tags, location, False
+        return memory, tags, location, False, name
 
     except Exception as exc:
         logger.warning("Memory extraction failed (non-fatal): %s", exc)
-        return current_memory or "", [], "", False
+        return current_memory or "", [], "", False, ""

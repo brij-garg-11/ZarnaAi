@@ -53,6 +53,7 @@ _MIGRATIONS = """
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_memory    TEXT    DEFAULT '';
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_tags      TEXT[]  DEFAULT '{}';
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_location  TEXT    DEFAULT '';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_name      TEXT    DEFAULT '';
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS creator_slug  TEXT    NOT NULL DEFAULT 'zarna';
 """
 
@@ -632,7 +633,7 @@ class PostgresStorage(BaseStorage):
         finally:
             self._release(conn)
 
-    def update_memory(self, phone_number: str, memory: str, tags: list, location: str = "") -> None:
+    def update_memory(self, phone_number: str, memory: str, tags: list, location: str = "", name: str = "") -> None:
         conn = self._acquire()
         try:
             with conn:
@@ -640,10 +641,13 @@ class PostgresStorage(BaseStorage):
                     cur.execute(
                         """
                         UPDATE contacts
-                        SET fan_memory = %s, fan_tags = %s, fan_location = COALESCE(NULLIF(%s, ''), fan_location)
+                        SET fan_memory   = %s,
+                            fan_tags     = %s,
+                            fan_location = COALESCE(NULLIF(%s, ''), fan_location),
+                            fan_name     = COALESCE(NULLIF(%s, ''), fan_name)
                         WHERE phone_number = %s
                         """,
-                        (memory[:400], tags, location[:100], phone_number),
+                        (memory[:400], tags, location[:100], name[:80], phone_number),
                     )
         finally:
             self._release(conn)

@@ -344,7 +344,18 @@
         <div class="mb-5">
           <div class="flex items-center justify-between mb-2">
             <label class="section-label">Message</label>
-            <span class="text-xs" style="color:var(--text-dim);" x-text="body.length + ' / 1600 chars'"></span>
+            <div class="flex items-center gap-3">
+              <span class="text-xs" style="color:var(--text-dim);" x-text="body.length + ' / 1600 chars'"></span>
+              <button type="button"
+                      @click="suggestBody()"
+                      :disabled="aiSuggesting"
+                      class="text-xs px-3 py-1 rounded-lg border cursor-pointer"
+                      style="border-color:var(--pink);color:var(--pink);background:transparent;"
+                      title="AI writes a draft tuned to your selected audience">
+                <span x-show="!aiSuggesting">✨ AI Suggest</span>
+                <span x-show="aiSuggesting">thinking…</span>
+              </button>
+            </div>
           </div>
           <textarea name="body" class="zarna-input" placeholder="Type your message here…"
                     maxlength="1600" x-model="body" rows="5"
@@ -352,6 +363,22 @@
           <p class="text-xs mt-2" style="color:var(--text-dim);">
             Tip: keep messages warm and personal. Add STOP to stop at the end for compliance.
           </p>
+          <div class="mt-2 flex flex-wrap gap-2">
+            <span class="text-xs font-medium" style="color:var(--text-dim);">Merge tags:</span>
+            <button type="button" @click="body += '{{name}}'"
+                    class="text-xs px-2 py-0.5 rounded-full border cursor-pointer"
+                    style="border-color:var(--border);color:var(--pink);background:transparent;"
+                    title="Fan's first name — falls back to 'friend' if unknown">
+              {{name}}
+            </button>
+            <button type="button" @click="body += '{{location}}'"
+                    class="text-xs px-2 py-0.5 rounded-full border cursor-pointer"
+                    style="border-color:var(--border);color:var(--pink);background:transparent;"
+                    title="Fan's city or region — left blank if unknown">
+              {{location}}
+            </button>
+            <span class="text-xs" style="color:var(--text-dim);">· {{name}} falls back to "friend" · {{location}} is omitted if unknown</span>
+          </div>
         </div>
 
         <!-- Pop Quiz mode (show audiences only) -->
@@ -672,6 +699,7 @@ function blastCompose() {
     countLoading: false,
     smartSend: null,
     smartSendLoading: false,
+    aiSuggesting: false,
     showSchedule: false,
     sendAt: '',
     isQuiz: {{ 'true' if active_draft and active_draft.is_quiz else 'false' }},
@@ -721,6 +749,26 @@ function blastCompose() {
         this.smartSend = null;
       }
       this.smartSendLoading = false;
+    },
+
+    async suggestBody() {
+      const topic = prompt('What\'s this blast about? (brief topic or leave blank for a general check-in)');
+      if (topic === null) return; // user cancelled
+      this.aiSuggesting = true;
+      try {
+        const resp = await fetch('/operator/blast/ai-suggest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            topic: topic,
+            audience_type: this.audienceType,
+            audience_filter: this.resolvedFilter,
+          }),
+        });
+        const data = await resp.json();
+        if (data.body) this.body = data.body;
+      } catch(e) {}
+      this.aiSuggesting = false;
     },
   }
 }
