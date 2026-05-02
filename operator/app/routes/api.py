@@ -481,13 +481,14 @@ def audience_frequency():
                     RIGHT(c.phone_number, 4)                                AS phone_last4,
                     c.fan_tier,
                     c.fan_tags,
+                    c.fan_name,
                     MAX(br.sent_at)                                         AS last_blasted_at,
                     EXTRACT(EPOCH FROM (NOW() - MAX(br.sent_at)))::int / 86400 AS days_since
                 FROM contacts c
                 JOIN blast_recipients br ON br.phone_number = c.phone_number
                 WHERE c.phone_number NOT LIKE 'whatsapp:%%'
                 """ + slug_sql + """
-                GROUP BY c.phone_number, c.fan_tier, c.fan_tags
+                GROUP BY c.phone_number, c.fan_tier, c.fan_tags, c.fan_name
                 ORDER BY last_blasted_at DESC
                 LIMIT 50
             """, slug_params)
@@ -511,6 +512,7 @@ def audience_frequency():
                     "phone_last4": r["phone_last4"],
                     "fan_tier": r["fan_tier"],
                     "fan_tags": list(r["fan_tags"] or []),
+                    "fan_name": r["fan_name"] or "",
                     "last_blasted_at": r["last_blasted_at"].isoformat() if r["last_blasted_at"] else None,
                     "days_since": r["days_since"],
                 }
@@ -573,11 +575,12 @@ def inbox():
                     c.fan_tier,
                     c.fan_tags,
                     c.fan_location,
+                    c.fan_name,
                     LEFT(c.fan_memory, 200) AS fan_memory_preview
                 FROM messages m
                 LEFT JOIN contacts c ON c.phone_number = m.phone_number AND c.creator_slug = m.creator_slug
                 WHERE m.creator_slug = %s
-                GROUP BY m.phone_number, c.fan_tier, c.fan_tags, c.fan_location, c.fan_memory
+                GROUP BY m.phone_number, c.fan_tier, c.fan_tags, c.fan_location, c.fan_name, c.fan_memory
                 ORDER BY last_message_at DESC
                 LIMIT %s OFFSET %s
             """, (_slug, per_page, offset))
@@ -601,6 +604,7 @@ def inbox():
             "fan_tier": r["fan_tier"],
             "fan_tags": tags[:5],
             "fan_location": r["fan_location"] or "",
+            "fan_name": r["fan_name"] or "",
             "fan_memory_preview": (r["fan_memory_preview"] or "")[:200],
         })
 
@@ -658,7 +662,7 @@ def inbox_thread(phone_last4):
             ]
 
             cur.execute("""
-                SELECT fan_tier, fan_tags, fan_location, fan_memory, fan_score, created_at
+                SELECT fan_tier, fan_tags, fan_location, fan_memory, fan_score, fan_name, created_at
                 FROM contacts WHERE phone_number = %s AND creator_slug = %s
             """, (phone, _slug))
             fan_row = cur.fetchone()
@@ -668,6 +672,7 @@ def inbox_thread(phone_last4):
                     "fan_tier": fan_row["fan_tier"],
                     "fan_tags": fan_row["fan_tags"] or [],
                     "fan_location": fan_row["fan_location"] or "",
+                    "fan_name": fan_row["fan_name"] or "",
                     "fan_memory": fan_row["fan_memory"] or "",
                     "fan_score": fan_row["fan_score"],
                     "joined_at": fan_row["created_at"].isoformat() if fan_row["created_at"] else None,
@@ -1653,6 +1658,7 @@ _FOTW_CANDIDATES_SQL = """
         COALESCE(c.fan_score, 0)                 AS fan_score,
         c.fan_tags,
         c.fan_location,
+        c.fan_name,
         c.fan_memory,
         COALESCE(rr.reply_count, 0)              AS reply_count,
         COALESCE(cb.did_come_back, false)        AS came_back,
@@ -1703,7 +1709,7 @@ def fan_of_the_week():
             cur.execute("""
                 SELECT f.phone_number, RIGHT(f.phone_number, 4) AS phone_last4,
                        f.message_text, f.week_of, f.selected_at,
-                       c.fan_tier, c.fan_tags, c.fan_location, c.fan_memory, c.fan_score
+                       c.fan_tier, c.fan_tags, c.fan_location, c.fan_memory, c.fan_score, c.fan_name
                 FROM fan_of_the_week f
                 LEFT JOIN contacts c ON c.phone_number = f.phone_number
                 WHERE f.week_of = DATE_TRUNC('week', CURRENT_DATE)::date
@@ -1724,6 +1730,7 @@ def fan_of_the_week():
                     fan_tier=saved["fan_tier"],
                     fan_tags=tags[:5],
                     fan_location=saved["fan_location"] or "",
+                    fan_name=saved["fan_name"] or "",
                     fan_memory=saved["fan_memory"] or "",
                     fan_score=saved["fan_score"],
                 )
@@ -1752,6 +1759,7 @@ def fan_of_the_week():
         fan_tier=row["fan_tier"],
         fan_tags=tags[:5],
         fan_location=row["fan_location"] or "",
+        fan_name=row["fan_name"] or "",
         fan_memory=row["fan_memory"] or "",
         fan_score=row["fan_score"],
         days_back=days_back,
@@ -1890,6 +1898,7 @@ def fan_of_the_week_history():
                     c.fan_tier,
                     c.fan_tags,
                     c.fan_location,
+                    c.fan_name,
                     c.fan_score
                 FROM fan_of_the_week f
                 LEFT JOIN contacts c ON c.phone_number = f.phone_number AND c.creator_slug = f.creator_slug
@@ -1914,6 +1923,7 @@ def fan_of_the_week_history():
             "fan_tier": r["fan_tier"],
             "fan_tags": tags[:5],
             "fan_location": r["fan_location"] or "",
+            "fan_name": r["fan_name"] or "",
             "fan_score": r["fan_score"],
         })
     return jsonify(history=history)

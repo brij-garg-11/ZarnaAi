@@ -26,7 +26,8 @@
         </div>
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-2 flex-wrap mb-1">
-            <span class="font-bold text-base" style="color:var(--pink-dark);">Fan ···<span x-text="current.phone_last4"></span></span>
+            <span class="font-bold text-base" style="color:var(--pink-dark);" x-text="current.fan_name || ('Fan ···' + current.phone_last4)"></span>
+            <span x-show="current.fan_name" class="font-mono text-xs block" style="color:var(--text-dim);">···<span x-text="current.phone_last4"></span></span>
             <span class="badge" :class="tierBadge(current.fan_tier)" x-text="tierLabel(current.fan_tier)"></span>
             <span class="badge" style="background:#fce7f0;color:#c6235d;border:1px solid #f9c0d8;">⭐ Fan of the Week</span>
           </div>
@@ -85,7 +86,8 @@
                   <div class="flex items-center gap-2">
                     <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
                          style="background: var(--pink-pale); color: var(--pink-dark);">⭐</div>
-                    <span class="font-mono text-sm" style="color:var(--text);">···<span x-text="row.phone_last4"></span></span>
+                    <span class="font-medium text-sm" style="color:var(--text);" x-text="row.fan_name || ('···' + row.phone_last4)"></span>
+                    <span x-show="row.fan_name" class="font-mono text-xs block" style="color:var(--text-dim);">···<span x-text="row.phone_last4"></span></span>
                   </div>
                 </td>
                 <td>
@@ -170,7 +172,8 @@
             <template x-for="fan in recentBlasted" :key="fan.phone_last4 + fan.last_blasted_at">
               <tr>
                 <td>
-                  <span class="font-mono text-sm" style="color:var(--text);">···<span x-text="fan.phone_last4"></span></span>
+                  <span class="font-medium text-sm" style="color:var(--text);" x-text="fan.fan_name || ('···' + fan.phone_last4)"></span>
+                  <span x-show="fan.fan_name" class="font-mono text-xs block" style="color:var(--text-dim);">···<span x-text="fan.phone_last4"></span></span>
                 </td>
                 <td>
                   <span class="badge" :class="tierBadge(fan.fan_tier)" x-text="tierLabel(fan.fan_tier)"></span>
@@ -218,7 +221,8 @@
              style="background:var(--pink-pale);color:var(--pink-dark);">⭐</div>
         <div>
           <div class="font-bold text-sm" style="color:var(--text);">
-            Fan ···<span x-text="phone_last4"></span>
+            <span x-text="fan.fan_name || ('Fan ···' + phone_last4)"></span>
+            <span x-show="fan.fan_name" class="font-mono text-xs block" style="color:var(--text-dim);">···<span x-text="phone_last4"></span></span>
           </div>
           <div class="text-xs" style="color:var(--text-dim);">
             <span class="badge" :class="fanTierBadge()" x-text="fanTierLabel()" style="font-size:11px;padding:2px 8px;"></span>
