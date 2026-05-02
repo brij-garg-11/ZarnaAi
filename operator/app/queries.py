@@ -346,6 +346,9 @@ def get_audience_fan_data(phones: list[str]) -> dict[str, dict]:
             }
     finally:
         conn.close()
+
+
+def _build_compound_clauses(
     filters: list[dict],
     creator_slug: str | None = None,
 ) -> tuple[list[str], list]:
