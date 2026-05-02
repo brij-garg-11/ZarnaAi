@@ -580,7 +580,7 @@ def inbox():
                 FROM messages m
                 LEFT JOIN contacts c ON c.phone_number = m.phone_number AND c.creator_slug = m.creator_slug
                 WHERE m.creator_slug = %s
-                GROUP BY m.phone_number, c.fan_tier, c.fan_tags, c.fan_location, c.fan_name, c.fan_memory
+                GROUP BY m.phone_number, m.creator_slug, c.fan_tier, c.fan_tags, c.fan_location, c.fan_name, c.fan_memory
                 ORDER BY last_message_at DESC
                 LIMIT %s OFFSET %s
             """, (_slug, per_page, offset))
