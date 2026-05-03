@@ -4596,6 +4596,24 @@ def team_invite():
                 _row = _cur.fetchone()
             account_type_for_project = (_row[0] if _row else None) or "performer"
             project_display_name = (_row[1] if _row else None) or slug.replace("_", " ").title()
+            # If the resolved owner is a performer-type super-admin managing an
+            # SMB account (e.g. brij@zarnagarg.com owns west_side_comedy), the
+            # owner's account_type will be 'performer' even though the project is
+            # a business. Override by checking smb_bot_config and smb_subscribers.
+            if account_type_for_project == "performer":
+                _cur.execute(
+                    "SELECT 1 FROM smb_bot_config WHERE tenant_slug=%s LIMIT 1",
+                    (slug,),
+                )
+                if _cur.fetchone():
+                    account_type_for_project = "business"
+                else:
+                    _cur.execute(
+                        "SELECT 1 FROM smb_subscribers WHERE tenant_slug=%s LIMIT 1",
+                        (slug,),
+                    )
+                    if _cur.fetchone():
+                        account_type_for_project = "business"
             logger.info(
                 "[INVITE] account_type lookup for slug=%s → %s (row=%s)",
                 slug, account_type_for_project, dict(_row) if _row else None,
