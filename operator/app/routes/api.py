@@ -4293,6 +4293,88 @@ def admin_billing_overview():
     )
 
 
+@api_bp.route("/api/admin/fix-member-account-type", methods=["POST"])
+@login_required
+def admin_fix_member_account_type():
+    """Super-admin only: correct a user's account_type to match their project.
+
+    Body: { "email": "user@example.com" }
+
+    Looks up the user's current creator_slug, finds the project owner's
+    account_type via team_members.role='owner', then updates the user's row.
+    Used to repair invites that were stamped with the wrong type.
+    """
+    if not _require_super_admin():
+        return jsonify(error="Super-admin access required"), 403
+
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if not email:
+        return jsonify(error="email required"), 400
+
+    conn = get_conn()
+    try:
+        import psycopg2.extras
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                "SELECT id, email, account_type, creator_slug FROM operator_users WHERE lower(email)=%s",
+                (email,),
+            )
+            target = cur.fetchone()
+            if not target:
+                return jsonify(error="User not found"), 404
+
+            slug = target["creator_slug"]
+            if not slug:
+                return jsonify(error="User has no creator_slug assigned"), 400
+
+            # Resolve the correct account_type from the project owner
+            cur.execute(
+                """SELECT u.account_type FROM operator_users u
+                   JOIN team_members tm ON tm.user_id = u.id
+                   WHERE tm.tenant_slug = %s AND tm.role = 'owner'
+                   LIMIT 1""",
+                (slug,),
+            )
+            owner_row = cur.fetchone()
+            if not owner_row:
+                cur.execute(
+                    "SELECT account_type FROM operator_users WHERE creator_slug=%s AND is_active=TRUE ORDER BY id ASC LIMIT 1",
+                    (slug,),
+                )
+                owner_row = cur.fetchone()
+
+            if not owner_row:
+                return jsonify(error=f"Cannot determine account_type for slug '{slug}'"), 400
+
+            correct_type = owner_row["account_type"] or "performer"
+            old_type = target["account_type"]
+
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE operator_users SET account_type=%s WHERE id=%s",
+                    (correct_type, target["id"]),
+                )
+
+        logger.info(
+            "[ADMIN] fix-member-account-type: uid=%s email=%s slug=%s %s→%s",
+            target["id"], email, slug, old_type, correct_type,
+        )
+        return jsonify(
+            success=True,
+            email=email,
+            slug=slug,
+            old_account_type=old_type,
+            new_account_type=correct_type,
+        )
+    except Exception:
+        logger.exception("[ADMIN] fix-member-account-type failed for email=%s", email)
+        return jsonify(error="Internal error"), 500
+    finally:
+        conn.close()
+
+
 # ── Team management ────────────────────────────────────────────────────────────
 
 @api_bp.route("/api/team/members")
