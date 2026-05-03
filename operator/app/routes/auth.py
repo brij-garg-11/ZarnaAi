@@ -631,6 +631,13 @@ def google_callback():
 
             if pending_invite:
                 # Accept the invite: restore slug + team membership
+                logger.info(
+                    "[AUTH] google-oauth: auto-accepting invite for uid=%s email=%s "
+                    "slug=%s account_type=%s (was: creator_slug=%s account_type=%s)",
+                    user["id"], user.get("email"),
+                    pending_invite["creator_slug"], pending_invite["account_type"],
+                    user.get("creator_slug"), user.get("account_type"),
+                )
                 with conn:
                     with conn.cursor() as cur:
                         cur.execute(
@@ -807,14 +814,23 @@ def api_me():
     except Exception:
         logger.exception("[AUTH] /api/auth/me — pending invite check failed for uid=%s", uid)
 
+    resolved_type = user.get("account_type") or "performer"
+    resolved_slug = user.get("creator_slug") or ""
+    logger.info(
+        "[AUTH] /api/auth/me → uid=%s email=%s account_type=%s creator_slug=%s "
+        "is_super_admin=%s pending_invite=%s",
+        user["id"], user["email"], resolved_type, resolved_slug,
+        bool(user.get("is_super_admin")),
+        pending_invite["slug"] if pending_invite else None,
+    )
     return jsonify(
         authenticated=True,
         user={
             "email": user["email"],
             "name": user["name"],
             "is_owner": user["is_owner"],
-            "account_type": user.get("account_type") or "performer",
-            "creator_slug": user.get("creator_slug") or "",
+            "account_type": resolved_type,
+            "creator_slug": resolved_slug,
             "is_super_admin": bool(user.get("is_super_admin")),
             "pending_invite": pending_invite,
         },

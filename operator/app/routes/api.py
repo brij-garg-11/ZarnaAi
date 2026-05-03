@@ -4596,6 +4596,10 @@ def team_invite():
                 _row = _cur.fetchone()
             account_type_for_project = (_row[0] if _row else None) or "performer"
             project_display_name = (_row[1] if _row else None) or slug.replace("_", " ").title()
+            logger.info(
+                "[INVITE] account_type lookup for slug=%s → %s (row=%s)",
+                slug, account_type_for_project, dict(_row) if _row else None,
+            )
     except Exception:
         logger.exception("team_invite: failed to look up account_type for slug=%s", slug)
         account_type_for_project = user.get("account_type") or "performer"
