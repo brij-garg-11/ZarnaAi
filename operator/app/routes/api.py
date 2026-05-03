@@ -4573,6 +4573,8 @@ def team_invite():
     # plan_tier below) because creator_slug on operator_users can match
     # multiple rows — owner + all accepted team members — and a bare LIMIT 1
     # could non-deterministically return a performer-type team member.
+    account_type_for_project = None
+    project_display_name = None
     try:
         with conn.cursor() as _cur:
             _cur.execute(
@@ -4616,11 +4618,16 @@ def team_invite():
                         account_type_for_project = "business"
             logger.info(
                 "[INVITE] account_type lookup for slug=%s → %s (row=%s)",
-                slug, account_type_for_project, dict(_row) if _row else None,
+                slug, account_type_for_project, tuple(_row) if _row else None,
             )
     except Exception:
         logger.exception("team_invite: failed to look up account_type for slug=%s", slug)
+    # Fallbacks only if the try block didn't successfully resolve them — never
+    # overwrite a value that was correctly set before an unrelated error
+    # (e.g. a logging bug) bubbled up.
+    if not account_type_for_project:
         account_type_for_project = user.get("account_type") or "performer"
+    if not project_display_name:
         project_display_name = slug.replace("_", " ").title()
     try:
         with conn:
