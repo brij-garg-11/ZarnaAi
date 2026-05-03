@@ -4486,13 +4486,32 @@ def team_invite():
     # brij@zarnagarg.com (performer) invites Felecia to WSCC (business),
     # the invite must carry account_type="business" so Felecia lands on
     # the business dashboard, not the performer dashboard.
+    #
+    # We query through team_members.role='owner' first (same pattern used for
+    # plan_tier below) because creator_slug on operator_users can match
+    # multiple rows — owner + all accepted team members — and a bare LIMIT 1
+    # could non-deterministically return a performer-type team member.
     try:
         with conn.cursor() as _cur:
             _cur.execute(
-                "SELECT account_type, name FROM operator_users WHERE creator_slug=%s AND is_active=TRUE LIMIT 1",
+                """SELECT u.account_type, u.name
+                   FROM operator_users u
+                   JOIN team_members tm ON tm.user_id = u.id
+                   WHERE tm.tenant_slug = %s AND tm.role = 'owner'
+                   LIMIT 1""",
                 (slug,),
             )
             _row = _cur.fetchone()
+            if not _row:
+                # Fallback for grandfathered slugs with no owner row: pick the
+                # user with the lowest id (oldest = original owner).
+                _cur.execute(
+                    """SELECT account_type, name FROM operator_users
+                       WHERE creator_slug=%s AND is_active=TRUE
+                       ORDER BY id ASC LIMIT 1""",
+                    (slug,),
+                )
+                _row = _cur.fetchone()
             account_type_for_project = (_row[0] if _row else None) or "performer"
             project_display_name = (_row[1] if _row else None) or slug.replace("_", " ").title()
     except Exception:
@@ -4546,11 +4565,29 @@ def team_invite():
                         ), 402
 
                 cur.execute(
-                    "SELECT u.id FROM team_members tm JOIN operator_users u ON u.id=tm.user_id "
+                    "SELECT u.id, u.account_type FROM team_members tm JOIN operator_users u ON u.id=tm.user_id "
                     "WHERE tm.tenant_slug=%s AND lower(u.email)=lower(%s) AND u.is_active=TRUE",
                     (slug, email),
                 )
-                if cur.fetchone():
+                existing_member = cur.fetchone()
+                if existing_member:
+                    existing_id, existing_account_type = existing_member
+                    if existing_account_type != account_type_for_project:
+                        # Correct a mismatched account_type (e.g. invite was previously
+                        # stored with wrong type). Re-inviting serves as a silent fix.
+                        cur.execute(
+                            "UPDATE operator_users SET account_type=%s WHERE id=%s",
+                            (account_type_for_project, existing_id),
+                        )
+                        logger.info(
+                            "team_invite: corrected account_type for uid=%s slug=%s (%s→%s)",
+                            existing_id, slug, existing_account_type, account_type_for_project,
+                        )
+                        return jsonify(
+                            success=True,
+                            corrected=True,
+                            message="Account type corrected. Ask them to refresh their browser.",
+                        )
                     return jsonify(error="This person is already a team member"), 409
 
                 cur.execute(
