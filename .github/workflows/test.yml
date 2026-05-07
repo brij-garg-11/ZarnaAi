@@ -1,0 +1,33 @@
+name: Tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        env:
+          # Tests that require a real DB connection will be skipped without this.
+          # Add DATABASE_URL as a GitHub Secret (Settings → Secrets → Actions)
+          # if you want integration tests to run in CI.
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          CREATOR_SLUG: zarna
+        run: pytest tests/ -v --tb=short

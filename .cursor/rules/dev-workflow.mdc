@@ -1,0 +1,103 @@
+---
+description: Development workflow, branching, PR process, and no-go zones for contributors
+alwaysApply: true
+---
+
+# Development Workflow
+
+## Branch Protection
+
+`main` is **protected** — direct pushes are blocked for everyone. All changes must go through a pull request reviewed and approved by @brij-garg-11 before merging. This protects the live SMS service running for real fans.
+
+---
+
+## Branching
+
+Always branch off `main`:
+
+```bash
+git checkout main && git pull
+git checkout -b feat/my-thing
+```
+
+Branch naming convention:
+
+| Prefix | When to use |
+|---|---|
+| `feat/` | New feature or capability |
+| `fix/` | Bug fix |
+| `chore/` | Deps, config, tooling, refactors with no user-facing change |
+| `docs/` | Documentation only |
+
+Keep branch names short and lowercase with hyphens: `feat/fan-profile-notes`, not `Feature_FanProfileNotes`.
+
+---
+
+## Opening a Pull Request
+
+1. Push your branch and open a PR against `main`
+2. Fill out the PR template fully — don't skip sections
+3. Keep PRs focused: one logical change per PR (easier to review, easier to revert)
+4. CI must be green before requesting review
+5. Never self-merge — always wait for @brij-garg-11 to approve
+6. If you push new commits after getting an approval, the review is dismissed — ask for a re-review
+
+---
+
+## Commit Messages
+
+Use clear, lowercase imperative messages:
+
+```
+feat: add quality score to fan profile page
+fix: handle empty phone number in blast sender
+chore: bump openai to 1.56.0
+docs: add RAG architecture notes
+```
+
+---
+
+## No-Go Zones
+
+These areas touch **live production** and can break service for real fans. Never modify without an explicit conversation with Brij first:
+
+| Area | Why it's risky |
+|---|---|
+| `operator/railway.*.toml` | Cron configs that run against live prod DBs — wrong schedule = real damage |
+| Twilio/SlickText webhook handlers in `main.py` | These are the live SMS pipeline. Mistakes = fans get no replies or wrong replies |
+| `app/storage/postgres.py` | Live schema — bad migrations can corrupt fan data across all clients |
+| `.env` / any credentials | Never commit secrets to the repo |
+| `training_data/` | Large binary files + embeddings. Changes require re-running the ingestion pipeline |
+| `creator_config/*.json` | Live voice configs — a bad change changes how the AI sounds to all fans instantly |
+
+---
+
+## Local Development
+
+See `README.md` for full setup. Quick summary:
+
+```bash
+# Copy env and fill in dev credentials (ask Brij)
+cp .env.example .env
+
+# Install deps
+pip install -r requirements.txt
+
+# Run main app
+python main.py
+
+# Run operator (separate terminal)
+cd operator && pip install -r requirements.txt && python main.py
+
+# Run tests
+pytest tests/
+```
+
+---
+
+## Testing
+
+- Tests live in `tests/` and use pytest
+- Run `pytest tests/` locally before opening a PR
+- Tests that require a live DB connection will be skipped without a `DATABASE_URL` env var
+- When adding a new feature, add a test if the logic is non-trivial

@@ -1,0 +1,103 @@
+---
+description: System architecture and codebase overview for the Zarna AI platform
+alwaysApply: true
+---
+
+# System Architecture
+
+## What This Is
+
+Zarna AI is a **managed AI SMS fan-engagement platform for creators**. Fans text a creator's dedicated number and receive AI-generated replies that sound and feel like the creator. The operator (Brij) owns and runs all infrastructure, and sells it as a service. Currently live for one client: **Zarna Garg (~4,500 subscribers)**.
+
+---
+
+## Two Backend Services
+
+### 1. Main App — `app/` (entry: `main.py`)
+
+The **live SMS-handling service**. One Railway deployment per client. Handles inbound webhooks from Twilio and SlickText, generates AI replies, and sends them back.
+
+| Directory | Purpose |
+|---|---|
+| `app/brain/` | AI response generation, RAG retrieval, LLM orchestration |
+| `app/messaging/` | Twilio and SlickText adapters (inbound + outbound SMS) |
+| `app/admin/` | Flask blueprint — admin dashboard (2,000+ lines, use submodules for new tabs) |
+| `app/analytics/` | Analytics Flask blueprint |
+| `app/live_shows/` | Live show, quiz, and blast features |
+| `app/smb/` | SMB portal Flask blueprint |
+| `app/storage/postgres.py` | All DB schema definitions and queries — migrations only, no new logic |
+| `app/inbound_security.py` | Webhook signature validation and security helpers |
+| `main.py` | App entry point — registers all blueprints, webhook route handlers |
+
+### 2. Operator Service — `operator/`
+
+The **internal HQ dashboard** — billing, Notion sync, CRM, quality scoring, and all scheduled cron jobs. Separate Railway deployment, separate codebase.
+
+| File/Dir | Purpose |
+|---|---|
+| `operator/app/routes/api.py` | Main route file (5,200+ lines — treat carefully) |
+| `operator/railway.*.toml` | One file per cron job (drip, Notion sync, quality digest, score fans, etc.) |
+| `operator/Dockerfile` | Operator container build |
+
+### 3. Frontend — `lovable-frontend/`
+
+React + Vite + TypeScript + Tailwind + shadcn/ui. Calls the operator API. Built with Lovable.
+
+---
+
+## Multi-Tenant Architecture
+
+**One Railway project = one client.** The `CREATOR_SLUG` env var controls everything:
+
+- **Voice config:** `creator_config/[slug].json` — personality, tone, response rules
+- **Training data:** `training_data/[slug]_chunks.json` + `[slug]_embeddings.json.gz` — the creator's knowledge base for RAG
+- **Database:** Completely separate PostgreSQL DB per client — fan data from one creator never touches another's
+
+Adding a new client requires zero code changes — copy the template config, set `CREATOR_SLUG`, deploy.
+
+---
+
+## Key Infrastructure Files
+
+| File | Purpose |
+|---|---|
+| `railway.toml` | Main app Railway deploy config |
+| `operator/railway.toml` | Operator service Railway config |
+| `Dockerfile` / `operator/Dockerfile` | Container builds |
+| `Procfile` | Gunicorn entry (`main:app`) |
+| `requirements.txt` | Python dependencies |
+| `CLIENTS.md` | Multi-client architecture guide |
+
+---
+
+## AI Stack
+
+- **Google GenAI** (primary LLM)
+- **OpenAI** and **Anthropic** (fallback / specialized tasks)
+- All configured per creator via `creator_config/[slug].json`
+
+---
+
+## Database
+
+PostgreSQL via `psycopg2`. All schema and queries live in `app/storage/postgres.py`. **Never add new logic there** — only append migrations to existing tuples. See file-organisation rule.
+
+---
+
+## Scripts and Cron
+
+- `scripts/` — one-off ingestion, backfill, and tooling scripts (~61 files)
+- `operator/railway.*.toml` — scheduled cron jobs (Railway-managed, touch prod DBs)
+- `tests/` — pytest suite (~38 modules)
+
+---
+
+## Logging (Railway)
+
+Log lines are prefixed by service area for easy filtering:
+- `[ZARNA]` — brain, messaging, live shows
+- `[ADMIN]` — admin dashboard
+- `[DB]` — storage layer
+- `[SMB]` — SMB portal
+- `[STATS]` — analytics
+- `[WEB]` — everything else
