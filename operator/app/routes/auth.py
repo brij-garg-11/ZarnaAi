@@ -314,7 +314,7 @@ def api_login():
             conn.close()
             return jsonify(
                 success=True,
-                redirect_to="/operator/dashboard",
+                redirect_to="/dashboard",
                 user={
                     "email": user["email"],
                     "name": user["name"],
