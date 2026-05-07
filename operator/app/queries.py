@@ -303,7 +303,7 @@ def get_audience_phones(
             else:
                 cur.execute(
                     "SELECT DISTINCT phone_number FROM contacts "
-                    "WHERE phone_number NOT LIKE 'whatsapp:%'" + slug_sql,
+                    "WHERE phone_number NOT LIKE 'whatsapp:%%'" + slug_sql,
                     tuple(slug_params),
                 )
 
