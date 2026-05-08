@@ -1728,9 +1728,9 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
         <div class="stat-trend" style="color:#64748b;font-size:12px">from fans (all time)</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Messages Today</div>
+        <div class="stat-label">Last 24 Hours</div>
         <div class="stat-value teal">{stats["messages_today"]:,}</div>
-        <div class="stat-trend" style="color:#64748b;font-size:12px">last 24 hours</div>
+        <div class="stat-trend" style="color:#64748b;font-size:12px">rolling window</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">This Week</div>

@@ -303,6 +303,14 @@ def _process_slicktext_message(phone_number: str, message_text: str, quiz_contex
         logging.warning("AI at capacity — SlickText message dropped (...%s)", phone_number[-4:])
         return
     try:
+        slug = getattr(brain, "slug", None) or ""
+        if not _has_credits_remaining(slug):
+            ops_bump("ai_reply_credit_exhausted")
+            logging.warning(
+                "AI reply blocked: credits exhausted for slug=%s (...%s)",
+                slug, phone_number[-4:] if phone_number else "?",
+            )
+            return
         try:
             reply = brain.handle_incoming_message(phone_number, message_text, quiz_context=quiz_context, blast_context=blast_context)
         except Exception as e:
@@ -435,6 +443,14 @@ def _process_twilio_message(phone_number: str, message_text: str, quiz_context: 
         logging.warning("AI at capacity — Twilio message dropped (...%s)", phone_number[-4:])
         return
     try:
+        slug = getattr(brain, "slug", None) or ""
+        if not _has_credits_remaining(slug):
+            ops_bump("ai_reply_credit_exhausted")
+            logging.warning(
+                "AI reply blocked: credits exhausted for slug=%s (...%s)",
+                slug, phone_number[-4:] if phone_number else "?",
+            )
+            return
         try:
             reply = brain.handle_incoming_message(phone_number, message_text, quiz_context=quiz_context, blast_context=blast_context)
         except Exception as e:
@@ -448,6 +464,81 @@ def _process_twilio_message(phone_number: str, message_text: str, quiz_context: 
         _consume_message_credits(reply, message_text, source=f"twilio:{phone_number[-4:]}")
     finally:
         ai_reply_leave()
+
+
+def _has_credits_remaining(slug: str) -> bool:
+    """Return True if this slug can still send AI replies.
+
+    Used as an optional pre-flight gate (BILLING_HARD_GATE=true). Fail-open:
+    on DB or schema error we return True so a billing bug never silently
+    kills the bot. The audit caller logs ops_bump('ai_reply_credit_exhausted')
+    when this returns False so we can monitor blocks.
+    """
+    if not slug:
+        return True
+
+    if (os.getenv("BILLING_HARD_GATE") or "").strip().lower() not in ("1", "true", "yes"):
+        return True
+
+    try:
+        from app.admin_auth import get_db_connection  # type: ignore
+        conn = get_db_connection()
+        if conn is None:
+            return True
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT u.id, u.plan_tier, u.trial_credits_remaining,
+                               u.billing_cycle_anchor
+                        FROM   operator_users u
+                        LEFT JOIN team_members tm
+                               ON tm.user_id = u.id AND tm.tenant_slug = %s
+                        WHERE  u.creator_slug = %s
+                        ORDER BY CASE WHEN tm.role = 'owner' THEN 0 ELSE 1 END, u.id
+                        LIMIT 1
+                        """,
+                        (slug, slug),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return True
+                    user_id, plan_tier, trial_left, billing_anchor = row
+                    pt = (plan_tier or "").lower()
+
+                    # Unlimited tiers always have credits
+                    if pt in {"grandfathered", "founder", "internal"}:
+                        return True
+
+                    # Trial: fail when trial_credits_remaining hits 0
+                    if pt == "trial":
+                        return (trial_left or 0) > 0
+
+                    # Paid plans: compare current period usage to credits_included.
+                    if billing_anchor:
+                        period_start = billing_anchor.date()
+                    else:
+                        import datetime as _dt
+                        period_start = _dt.date.today()
+                    cur.execute(
+                        """
+                        SELECT COALESCE(credits_included, 0), COALESCE(credits_used, 0)
+                        FROM   operator_credit_usage
+                        WHERE  operator_user_id=%s AND period_start=%s
+                        """,
+                        (user_id, period_start),
+                    )
+                    usage_row = cur.fetchone()
+                    if not usage_row:
+                        return True
+                    included, used = usage_row
+                    return used < included
+        finally:
+            conn.close()
+    except Exception:
+        logging.exception("_has_credits_remaining: check failed for slug=%s — fail-open", slug)
+        return True
 
 
 def _consume_message_credits(outbound_text: str, inbound_text: str, *, source: str) -> None:

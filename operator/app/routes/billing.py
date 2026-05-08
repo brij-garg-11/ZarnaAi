@@ -317,7 +317,15 @@ def stripe_webhook():
         return jsonify(error="Invalid signature"), 400
 
     etype = event["type"]
-    logger.info("stripe_webhook: received %s id=%s", etype, event.get("id"))
+    event_id = event.get("id") or ""
+    logger.info("stripe_webhook: received %s id=%s", etype, event_id)
+
+    # Idempotency: Stripe retries on any non-2xx (including network blips).
+    # Insert event_id; if it already existed, this is a retry — return 200
+    # immediately so Stripe stops retrying, but skip handler invocation.
+    if event_id and not _claim_stripe_event(event_id, etype):
+        logger.info("stripe_webhook: duplicate event ignored id=%s type=%s", event_id, etype)
+        return jsonify(received=True, duplicate=True)
 
     try:
         if etype == "checkout.session.completed":
@@ -334,9 +342,55 @@ def stripe_webhook():
             logger.info("stripe_webhook: ignoring event type %s", etype)
     except Exception:
         logger.exception("stripe_webhook: handler failed for %s", etype)
+        # Roll back the idempotency claim so Stripe can retry this event.
+        # Otherwise a transient handler bug would permanently lose the event.
+        _release_stripe_event(event_id)
         return jsonify(error="handler failed"), 500
 
     return jsonify(received=True)
+
+
+def _claim_stripe_event(event_id: str, event_type: str) -> bool:
+    """Insert event_id into stripe_webhook_events. Returns True if inserted
+    (we own this event), False if it was already present (duplicate retry).
+    Fail-open: on DB error we return True so the handler still runs — better
+    to risk a duplicate than silently drop a real payment event.
+    """
+    try:
+        conn = get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO stripe_webhook_events (event_id, event_type) "
+                        "VALUES (%s, %s) ON CONFLICT (event_id) DO NOTHING",
+                        (event_id, event_type),
+                    )
+                    return cur.rowcount > 0
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception("stripe_webhook: idempotency claim failed for id=%s", event_id)
+        return True
+
+
+def _release_stripe_event(event_id: str) -> None:
+    """Remove an event_id claim so Stripe's next retry is processed normally."""
+    if not event_id:
+        return
+    try:
+        conn = get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM stripe_webhook_events WHERE event_id=%s",
+                        (event_id,),
+                    )
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception("stripe_webhook: idempotency release failed for id=%s", event_id)
 
 
 # ── Webhook handlers ───────────────────────────────────────────────────────

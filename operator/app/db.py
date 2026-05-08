@@ -284,6 +284,20 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_fotw_week ON fan_of_the_week (week_of DESC)",
         "CREATE INDEX IF NOT EXISTS idx_fotw_phone ON fan_of_the_week (phone_number)",
 
+        # ── Stripe webhook idempotency ─────────────────────────────────────
+        # Stripe retries events aggressively on any non-200 response. Without
+        # an event_id ledger, the same checkout.session.completed could grant
+        # booster credits or update a plan twice. Insert each event_id and skip
+        # if it already exists.
+        """
+        CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+            event_id     TEXT PRIMARY KEY,
+            event_type   TEXT NOT NULL,
+            received_at  TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_stripe_webhook_events_received ON stripe_webhook_events (received_at DESC)",
+
         # ── Multi-tenant backfill: add creator_slug to originally single-tenant tables ──
         # contacts, messages, and fan_of_the_week were built for Zarna only.
         # Default existing rows to 'zarna'; new rows get the slug from the bot pipeline.
