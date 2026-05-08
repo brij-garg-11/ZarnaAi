@@ -29,9 +29,9 @@
   </div>
 
   <div class="stat-card">
-    <div class="stat-label-sm">Messages Today</div>
+    <div class="stat-label-sm">Last 24 Hours</div>
     <div class="stat-num" style="color:#16a34a;">{{ "{:,}".format(stats.get("messages_today", 0)) }}</div>
-    <div class="mt-2" style="color:var(--text-dim);font-size:12px;">last 24 hours</div>
+    <div class="mt-2" style="color:var(--text-dim);font-size:12px;">rolling window</div>
   </div>
 
   <div class="stat-card">
