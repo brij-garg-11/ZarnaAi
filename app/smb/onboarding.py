@@ -102,6 +102,39 @@ def _looks_like_question_or_request(text: str) -> bool:
     return False
 
 
+def _send_contact_card_enabled(conn, tenant: BusinessTenant) -> bool:
+    """Resolve the send_contact_card toggle.
+
+    Precedence:
+      1. smb_bot_config.config_json.send_contact_card (DB) — what the My Bot
+         UI writes when an owner toggles the switch.
+      2. tenant.raw['send_contact_card'] (on-disk JSON) — legacy/static fallback.
+      3. Default True.
+
+    Before this fix the on-disk file was the only source, so the My Bot UI
+    appeared to do nothing. This restores parity between the dashboard and
+    the runtime SMS pipeline.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT config_json FROM smb_bot_config WHERE tenant_slug = %s",
+                (tenant.slug,),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                cfg = row[0] if isinstance(row[0], dict) else {}
+                if "send_contact_card" in cfg:
+                    return bool(cfg["send_contact_card"])
+    except Exception:
+        logger.exception(
+            "SMB onboarding: failed to read send_contact_card from smb_bot_config "
+            "for tenant=%s — falling back to on-disk default",
+            tenant.slug,
+        )
+    return bool(tenant.raw.get("send_contact_card", True))
+
+
 def get_onboarding_reply(
     phone_number: str, message_text: str, tenant: BusinessTenant
 ) -> Optional[str]:
@@ -148,8 +181,9 @@ def get_onboarding_reply(
                     )
 
                 # Only send the contact card if the tenant has it enabled.
-                # Default is True (send it) unless explicitly disabled in config.
-                if tenant.raw.get("send_contact_card", True):
+                # Reads the smb_bot_config DB row first so the My Bot UI toggle
+                # actually controls behavior; falls back to on-disk default.
+                if _send_contact_card_enabled(conn, tenant):
                     threading.Thread(
                         target=_send_vcard_mms,
                         args=(phone_number, tenant),

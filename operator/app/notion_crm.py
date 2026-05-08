@@ -64,6 +64,51 @@ def _create_page(database_id: str, properties: dict, children: list) -> Optional
         return None
 
 
+def _resolve_monthly_fee_from_db(conn, slug: str) -> Optional[float]:
+    """Look up the customer's true monthly fee using the plan catalog.
+
+    Reads operator_users.plan_tier + billing_cycle for the slug, then resolves
+    the Plan dataclass from `billing.plans.ALL_PLANS`. Returns the monthly
+    price (annual price ÷ 12 for annual cycles), or None if we can't resolve
+    a plan (which happens for trial / grandfathered / unknown tiers).
+
+    This replaces a circular "read Monthly Fee back from Notion" query that
+    let stale Notion edits silently mask real plan changes from Stripe.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT plan_tier, billing_cycle
+                FROM   operator_users
+                WHERE  creator_slug = %s
+                ORDER BY id ASC
+                LIMIT 1
+                """,
+                (slug,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        plan_tier = (row[0] or "").strip()
+        billing_cycle = (row[1] or "monthly").strip().lower()
+        if not plan_tier:
+            return None
+        try:
+            from .billing.plans import ALL_PLANS
+        except Exception:
+            return None
+        plan = ALL_PLANS.get(plan_tier)
+        if not plan:
+            return None
+        if billing_cycle == "annual" and getattr(plan, "annual_price_usd", 0):
+            return round(plan.annual_price_usd / 12.0, 2)
+        return float(getattr(plan, "monthly_price_usd", 0) or 0)
+    except Exception:
+        logger.exception("_resolve_monthly_fee_from_db: lookup failed for slug=%s", slug)
+        return None
+
+
 def _update_page(page_id: str, properties: dict) -> bool:
     try:
         resp = requests.patch(
@@ -360,6 +405,33 @@ def create_customer_in_notion(
 
     database_id = PERFORMERS_DB_ID if account_type == "performer" else BUSINESSES_DB_ID
 
+    # Idempotency: if onboarding fires twice (user retries, transient failure,
+    # webhook race), don't create a second Notion row for the same slug. Older
+    # behavior left duplicate pages that had to be merged manually.
+    existing_page_id = _find_page_by_slug(database_id, slug)
+    if existing_page_id:
+        logger.info(
+            "notion_crm: page already exists for slug=%s (page_id=%s) — skipping create",
+            slug, existing_page_id,
+        )
+        if db_conn is None:
+            try:
+                from .db import get_conn
+                conn2 = get_conn()
+                with conn2:
+                    with conn2.cursor() as cur:
+                        cur.execute(
+                            "ALTER TABLE bot_configs ADD COLUMN IF NOT EXISTS notion_page_id TEXT DEFAULT NULL"
+                        )
+                        cur.execute(
+                            "UPDATE bot_configs SET notion_page_id=%s WHERE creator_slug=%s AND (notion_page_id IS NULL OR notion_page_id = '')",
+                            (existing_page_id, slug),
+                        )
+                conn2.close()
+            except Exception:
+                logger.exception("notion_crm: failed to backfill notion_page_id for %s", slug)
+        return
+
     properties: dict = {
         "Name":    {"title": _rich_text(display_name)},
         "Slug":    {"rich_text": _rich_text(slug)},
@@ -574,18 +646,28 @@ def sync_customer_costs(slug: str, account_type: str, conn) -> bool:
 
         total_cost = round(PHONE_RENTAL_MONTHLY + est_ai_cost + est_sms_cost, 2)
 
-        # Get monthly fee from existing Notion page to compute margin
-        monthly_fee = 0.0
-        try:
-            resp = requests.get(f"{NOTION_API}/pages/{page_id}", headers=_headers(), timeout=10)
-            props = resp.json().get("properties", {})
-            fee_prop = props.get("Monthly Fee ($)", {}).get("number")
-            if fee_prop is not None:
-                monthly_fee = float(fee_prop)
-        except Exception:
-            pass
+        # Resolve monthly fee from the actual plan in operator_users + plans
+        # catalog (NOT from Notion's own page — that was circular: a stale or
+        # manually-edited "Monthly Fee" on Notion would feed itself back into
+        # the margin calculation, masking real plan changes from Stripe).
+        monthly_fee = _resolve_monthly_fee_from_db(conn, slug)
+        if monthly_fee is None:
+            # Fall back to the previous behavior so we still return *something*
+            # rather than zero out margin for unknown plans.
+            try:
+                resp = requests.get(f"{NOTION_API}/pages/{page_id}", headers=_headers(), timeout=10)
+                props = resp.json().get("properties", {})
+                fee_prop = props.get("Monthly Fee ($)", {}).get("number")
+                if fee_prop is not None:
+                    monthly_fee = float(fee_prop)
+            except Exception:
+                logger.warning(
+                    "notion_crm: could not resolve monthly_fee from DB or Notion for slug=%s — margin will be incorrect",
+                    slug,
+                )
+                monthly_fee = 0.0
 
-        net_margin = round(monthly_fee - total_cost, 2)
+        net_margin = round((monthly_fee or 0.0) - total_cost, 2)
 
         update_props = {
             "Subscribers":           {"number": subscribers},
@@ -614,18 +696,26 @@ def sync_customer_costs(slug: str, account_type: str, conn) -> bool:
         ai_fully_exact   = (untracked == 0) if account_type == "performer" else False
         sms_exact        = sms_cost_row >= 0
 
-        # blasts / fans this month
+        # blasts / fans this month — MUST be tenant-scoped or every customer's
+        # Notion row receives the same global blast counts (audit C8).
         try:
             with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur2:
                 cur2.execute(
                     """SELECT COUNT(*) AS blasts, COALESCE(SUM(sent_count), 0) AS fans
                        FROM blast_drafts
-                       WHERE status='sent' AND sent_at >= DATE_TRUNC('month', NOW())"""
+                       WHERE status='sent'
+                         AND sent_at >= DATE_TRUNC('month', NOW())
+                         AND creator_slug = %s""",
+                    (slug,),
                 )
                 brow = cur2.fetchone()
                 blasts_month     = int(brow["blasts"] or 0)
                 fans_month       = int(brow["fans"] or 0)
         except Exception:
+            logger.exception(
+                "notion_crm.sync_customer_costs: blast count query failed for slug=%s",
+                slug,
+            )
             blasts_month = fans_month = 0
 
         sync_monthly_cost_row(

@@ -1,3 +1,4 @@
+import hashlib
 import json as _json
 import logging
 import os
@@ -173,12 +174,21 @@ app = Flask(__name__)
 # Required so Flask sessions (used by the SMB interactive portal and the
 # admin views below) actually work. Without this any session.set() crashes
 # with "The session is unavailable because no secret key was set." in prod.
+_FLASK_SECRET_DEFAULT = "dev-only-do-not-use-in-prod"
 app.secret_key = (
     os.getenv("FLASK_SECRET_KEY")
     or os.getenv("SECRET_KEY")
     or os.getenv("OPERATOR_SECRET_KEY")
-    or "dev-only-do-not-use-in-prod"
+    or _FLASK_SECRET_DEFAULT
 )
+if running_in_production() and app.secret_key == _FLASK_SECRET_DEFAULT:
+    # Sessions signed with a public default secret can be forged. This is
+    # a critical misconfiguration if it ever ships to prod.
+    logging.error(
+        "[ZARNA] FLASK SECRET KEY IS USING THE HARDCODED DEFAULT. "
+        "Set FLASK_SECRET_KEY (or SECRET_KEY / OPERATOR_SECRET_KEY) in Railway. "
+        "All session cookies are forgeable until this is fixed."
+    )
 app.register_blueprint(admin_bp)
 app.register_blueprint(analytics_bp)
 app.register_blueprint(live_shows_bp)
@@ -348,14 +358,32 @@ def slicktext_webhook():
 
     slicktext_webhook_log_line(payload)
 
+    # Dedup key. Two webhook shapes from SlickText:
+    #   v1 form-POST: payload['data'] is a JSON string containing
+    #                 ChatMessage.ChatMessageId — use that directly.
+    #   v2 JSON     : no stable message ID is sent. Fall back to a synthetic
+    #                 key derived from (event_name, contact_id, message_body)
+    #                 so the same retried payload can't trigger two AI replies
+    #                 within the dedup window.
+    message_id = ""
     try:
-        raw_data = _json.loads(payload.get("data", "{}")) if isinstance(payload.get("data"), str) else payload
-        message_id = str(raw_data.get("ChatMessage", {}).get("ChatMessageId", ""))
+        if isinstance(payload.get("data"), str):
+            raw_data = _json.loads(payload.get("data", "{}"))
+            message_id = str(raw_data.get("ChatMessage", {}).get("ChatMessageId", ""))
+        elif isinstance(payload.get("data"), dict):
+            v2 = payload.get("data") or {}
+            event = str(payload.get("name", "") or "")
+            contact_id = str(v2.get("contact_id", "") or "")
+            body = str(v2.get("last_message", "") or "")
+            if contact_id and body:
+                # Body is included so a fan can re-ask the same question later
+                # and still get a reply — we only block exact-duplicate retries.
+                message_id = f"v2:{event}:{contact_id}:{hashlib.sha1(body.encode()).hexdigest()[:16]}"
     except Exception:
         message_id = ""
 
-    if _already_processed(message_id):
-        logging.info("Duplicate SlickText webhook ignored (ChatMessageId=%s)", message_id)
+    if message_id and _already_processed(message_id):
+        logging.info("Duplicate SlickText webhook ignored (id=%s)", message_id)
         return jsonify({"status": "duplicate"}), 200
 
     raw_phone, raw_body = slicktext.peek_inbound(payload)

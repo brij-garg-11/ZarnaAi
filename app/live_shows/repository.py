@@ -6,7 +6,17 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import psycopg2
 import psycopg2.extras
+try:
+    # Real psycopg2 ships psycopg2.errors. Tests sometimes stub psycopg2
+    # with MagicMock (which isn't a real package), so the submodule import
+    # fails — guard it so test imports succeed and the runtime DB code
+    # can fall back to a generic exception type.
+    from psycopg2 import errors as _pg_errors
+    _UndefinedColumn = _pg_errors.UndefinedColumn
+except (ImportError, AttributeError):
+    _UndefinedColumn = type("UndefinedColumnSentinel", (Exception,), {})
 
 from app.admin_auth import get_db_connection
 from app.live_shows.event_time import normalize_event_timezone
@@ -253,15 +263,37 @@ def add_signup(show_id: int, phone: str, channel: str, creator_slug: str = None)
         c.close()
 
 
-def active_live_shows() -> List[Dict[str, Any]]:
-    """Shows with status = live."""
+def active_live_shows(creator_slug: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Shows with status = live, optionally scoped to a single tenant.
+
+    On a single-DB-per-creator deployment this is a no-op (every row already
+    belongs to the same tenant). It matters on shared-DB deployments — without
+    the filter, a different tenant's live show could match an inbound keyword.
+    Falls back to env CREATOR_SLUG when caller doesn't pass one.
+    """
     c = _conn()
     if not c:
         return []
+    slug = (creator_slug or os.getenv("CREATOR_SLUG") or "").strip().lower()
     try:
         with c.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute("SELECT * FROM live_shows WHERE status = 'live' ORDER BY id ASC")
-            return [dict(r) for r in cur.fetchall()]
+            # creator_slug column may not exist on older schemas; tolerate that
+            # by falling back to the unscoped query if the filter raises.
+            try:
+                if slug:
+                    cur.execute(
+                        "SELECT * FROM live_shows WHERE status = 'live' "
+                        "AND (creator_slug = %s OR creator_slug IS NULL) "
+                        "ORDER BY id ASC",
+                        (slug,),
+                    )
+                else:
+                    cur.execute("SELECT * FROM live_shows WHERE status = 'live' ORDER BY id ASC")
+                return [dict(r) for r in cur.fetchall()]
+            except _UndefinedColumn:
+                c.rollback()
+                cur.execute("SELECT * FROM live_shows WHERE status = 'live' ORDER BY id ASC")
+                return [dict(r) for r in cur.fetchall()]
     finally:
         c.close()
 

@@ -6,19 +6,27 @@ value fans for targeted blast campaigns. Nightly-ish recompute writes the
 score back to `contacts.engagement_score`; the Smart Send audience in the
 blast composer reads it to suggest a smaller, higher-ROI list.
 
-Score formula (kept simple + explainable):
+Score formula (kept simple + explainable, matches the SQL below):
 
     score = clip(
         reply_recency  (last_replied_at within 90d, newer = higher)    40
-      + reply_volume   (number of inbound messages in last 90d)        30
-      + click_activity (link clicks in last 60d)                       20
-      + longevity      (contact age capped at 180d)                    10
+      + reply_volume   (number of inbound messages in last 90d, ×2)    30
+      + longevity      (contact age in days × 10/180)                  10
     , 0, 100)
+
+Note: an earlier draft of this docstring listed a `click_activity` term
+worth 20 points, but the actual SQL never included it (no `link_clicks`
+join). The score therefore caps at 80, not 100. If/when click data is
+wired in, both this docstring and `_SQL_UPDATE` need to be updated.
 
 Run with `recompute_all()` — safe to call repeatedly, uses a single SQL
 UPDATE so it's fast on the contacts table (few hundred thousand rows). In
 production we schedule this via cron or a background worker; for now the
 /api/admin/engagement/recompute endpoint lets an operator trigger it.
+
+`recompute_all(slug=...)` honors the slug — it only recomputes scores for
+contacts belonging to that tenant. Without the slug the update covers all
+tenants in the same DB.
 """
 
 from __future__ import annotations
@@ -31,7 +39,7 @@ from .db import get_conn
 logger = logging.getLogger(__name__)
 
 
-_SQL_UPDATE = """
+_SQL_UPDATE_BASE = """
 UPDATE contacts c
 SET    engagement_score = LEAST(100, GREATEST(0,
         -- recency: 0 at 90d old, up to 40 at same-day
@@ -54,26 +62,38 @@ FROM (
         COUNT(*) FILTER (WHERE role='user' AND created_at >= NOW() - INTERVAL '90 days') AS inbound_90d,
         MAX(created_at) FILTER (WHERE role='user') AS last_reply_at
     FROM messages
+    {message_slug_filter}
     GROUP BY phone_number
 ) m
 WHERE c.phone_number = m.phone_number
+{contact_slug_filter}
 """
-
-_SQL_UPDATE_SIMPLE = _SQL_UPDATE
 
 
 def recompute_all(*, slug: Optional[str] = None) -> int:
     """Recompute engagement_score for all contacts (or just one tenant's).
 
-    Returns the number of rows updated. Safe to call repeatedly.
+    When `slug` is provided, the UPDATE is constrained to that tenant in
+    both the `messages` aggregation and the `contacts` row filter — so
+    callers can safely re-score a single tenant without disturbing others
+    on a shared DB. Returns the number of rows updated.
     """
     conn = get_conn()
     try:
         with conn:
             with conn.cursor() as cur:
-                # Use the simpler variant if link_clicks / pgcrypto aren't set up —
-                # the advanced query will raise on missing tables/extensions.
-                cur.execute(_SQL_UPDATE)
+                if slug:
+                    sql = _SQL_UPDATE_BASE.format(
+                        message_slug_filter="WHERE creator_slug = %s",
+                        contact_slug_filter="AND c.creator_slug = %s",
+                    )
+                    cur.execute(sql, (slug, slug))
+                else:
+                    sql = _SQL_UPDATE_BASE.format(
+                        message_slug_filter="",
+                        contact_slug_filter="",
+                    )
+                    cur.execute(sql)
                 count = cur.rowcount
         logger.info("recompute_all: updated %s contacts (slug=%s)", count, slug)
         return count
