@@ -106,10 +106,18 @@ class TwilioAdapter:
     # ------------------------------------------------------------------
 
     def validate_signature(self, url: str, post_data: dict, signature: str) -> bool:
-        """Return True if the request is genuinely from Twilio."""
+        """Return True if the request is genuinely from Twilio.
+
+        Fail-safe: if no auth token is configured, we REJECT rather than accept.
+        An unconfigured validator in production means anyone could forge webhooks.
+        To intentionally disable validation, set TWILIO_VALIDATE_SIGNATURE=false.
+        """
         if not self._validator:
-            logger.warning("Twilio validator not configured — skipping signature check.")
-            return True
+            logger.error(
+                "Twilio validator not configured (TWILIO_AUTH_TOKEN missing) — "
+                "rejecting request. Set TWILIO_VALIDATE_SIGNATURE=false to disable validation."
+            )
+            return False
         return self._validator.validate(url, post_data, signature)
 
     # ------------------------------------------------------------------

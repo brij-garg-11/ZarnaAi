@@ -237,7 +237,7 @@ def _get_all_subscriber_phones(slug: str):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT phone_number FROM smb_subscribers WHERE tenant_slug = %s",
+                "SELECT phone_number FROM smb_subscribers WHERE tenant_slug = %s AND status = 'active'",
                 (slug,),
             )
             return [r[0] for r in cur.fetchall()]

@@ -63,8 +63,9 @@ logging.root.addHandler(_log_handler)
 logging.root.handlers = [_log_handler]  # replace any handlers basicConfig may have added
 
 
-def _record_blast_optout() -> None:
-    """Increment opt_out_count on the most recent sent blast (within 7 days)."""
+def _record_blast_optout(phone_number: str = None) -> None:
+    """Record a STOP/opt-out: persist the phone to broadcast_optouts (suppresses
+    future blasts) and increment opt_out_count on the most recent sent blast."""
     try:
         from app.admin_auth import get_db_connection
         conn = get_db_connection()
@@ -72,6 +73,14 @@ def _record_blast_optout() -> None:
             return
         with conn:
             with conn.cursor() as cur:
+                # Persist phone to broadcast_optouts so future blast audience
+                # queries exclude this number via _get_optouts().
+                if phone_number:
+                    cur.execute(
+                        "INSERT INTO broadcast_optouts (phone_number) VALUES (%s) "
+                        "ON CONFLICT DO NOTHING",
+                        (phone_number,),
+                    )
                 cur.execute(
                     """
                     UPDATE blast_drafts
@@ -173,6 +182,12 @@ if running_in_production() and not slicktext_webhook_secret_configured():
         "Production: SLICKTEXT_WEBHOOK_SECRET is not set — anyone who can POST /slicktext/webhook "
         "may trigger your bot. Generate a long random secret, set it in Railway, and add header "
         "X-Zarna-Webhook-Secret on SlickText's webhook (if their UI supports custom headers)."
+    )
+
+if running_in_production() and not os.getenv("TWILIO_AUTH_TOKEN"):
+    logging.error(
+        "Production: TWILIO_AUTH_TOKEN is not set — Twilio webhook signature validation will "
+        "REJECT all inbound messages. Set TWILIO_AUTH_TOKEN in Railway env vars."
     )
 
 # ---------------------------------------------------------------------------
@@ -287,7 +302,7 @@ def _process_slicktext_message(phone_number: str, message_text: str, quiz_contex
             reply = brain.handle_incoming_message(phone_number, message_text, quiz_context=quiz_context, blast_context=blast_context)
         except Exception as e:
             ops_bump("ai_reply_error")
-            logging.error("Error processing SlickText message from %s: %s", phone_number, e)
+            logging.error("Error processing SlickText message from ...%s: %s", phone_number[-4:] if phone_number else "?", e)
             return
         if not (reply or "").strip():
             logging.info("No reply for ...%s (conversation ender or empty)", phone_number[-4:])
@@ -338,10 +353,10 @@ def slicktext_webhook():
             signup_res.join_confirmation_sms,
         )
 
-    # Track opt-outs on the most recent blast (within 7 days)
+    # Track opt-outs: persist phone to broadcast_optouts and increment blast counter.
     _OPT_OUT_KEYWORDS = {"stop", "stopall", "unsubscribe", "cancel", "end", "quit"}
     if raw_phone and raw_body and raw_body.strip().lower() in _OPT_OUT_KEYWORDS:
-        threading.Thread(target=_record_blast_optout, daemon=True).start()
+        threading.Thread(target=_record_blast_optout, args=(raw_phone,), daemon=True).start()
 
     phone_number, message_text = slicktext.filter_inbound_for_ai(raw_phone, raw_body)
 
@@ -419,7 +434,7 @@ def _process_twilio_message(phone_number: str, message_text: str, quiz_context: 
             reply = brain.handle_incoming_message(phone_number, message_text, quiz_context=quiz_context, blast_context=blast_context)
         except Exception as e:
             ops_bump("ai_reply_error")
-            logging.error("Error processing Twilio message from %s: %s", phone_number, e)
+            logging.error("Error processing Twilio message from ...%s: %s", phone_number[-4:] if phone_number else "?", e)
             return
         if not (reply or "").strip():
             logging.info("No Twilio reply for ...%s (conversation ender or empty)", phone_number[-4:])
@@ -600,6 +615,11 @@ def twilio_webhook():
             signup_res.confirmation_channel or "twilio",
             signup_res.join_confirmation_sms,
         )
+
+    # Track opt-outs: persist phone to broadcast_optouts and increment blast counter.
+    _TW_OPT_OUT_KEYWORDS = {"stop", "stopall", "unsubscribe", "cancel", "end", "quit"}
+    if raw_from and raw_body and raw_body.strip().lower() in _TW_OPT_OUT_KEYWORDS:
+        threading.Thread(target=_record_blast_optout, args=(raw_from,), daemon=True).start()
 
     phone_number, message_text = twilio.filter_inbound_for_ai(raw_from, raw_body)
 
