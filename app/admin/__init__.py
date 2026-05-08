@@ -1515,6 +1515,33 @@ def admin():
       <p style="color:#64748b;font-size:12px;margin-top:10px">Set <code>AI_REPLY_MAX_CONCURRENT</code> (default 16) to tune load.</p>
     </div>"""
 
+    def _tier_label(t: str) -> str:
+        return (
+            "⭐ Superfan" if t == "superfan" else
+            "✅ Engaged"  if t == "engaged"  else
+            "👀 Lurker"   if t == "lurker"   else
+            "💤 Dormant"
+        )
+
+    def _tier_desc(t: str) -> str:
+        return (
+            "Highly engaged fans — multiple sessions, fast replies, show sign-ups." if t == "superfan" else
+            "Active fans who reply and engage with the bot regularly." if t == "engaged" else
+            "Opted in but rarely reply — still reading, just quiet." if t == "lurker" else
+            "No activity in 60+ days. Good for re-engagement blasts (monthly max)."
+        )
+
+    _tier_breakdown_html = "".join(
+        f'<details style="margin-bottom:8px;border:1px solid #2d2d2d;border-radius:8px;overflow:hidden">'
+        f'<summary style="padding:10px 14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;background:#1a1a1a;list-style:none;user-select:none">'
+        f'<span style="font-weight:600;color:#e2e8f0;text-transform:capitalize">{_tier_label(tier)}</span>'
+        f'<span style="background:#374151;color:#94a3b8;font-size:12px;font-weight:700;padding:2px 10px;border-radius:999px">{cnt:,}</span>'
+        f"</summary>"
+        f'<div style="padding:10px 14px;font-size:13px;color:#94a3b8;background:#111">{_tier_desc(tier)}</div>'
+        f"</details>"
+        for tier, cnt in stats["tier_breakdown"]
+    ) or '<p style="color:#64748b;font-size:13px">Tiers will appear after the nightly scoring cron runs.</p>'
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1788,24 +1815,7 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
     <div class="card">
       <div class="card-title">Fan Tiers — updated nightly</div>
       <div style="margin-top:8px">
-        {''.join(f"""
-        <details style="margin-bottom:8px;border:1px solid #2d2d2d;border-radius:8px;overflow:hidden">
-          <summary style="padding:10px 14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;background:#1a1a1a;list-style:none;user-select:none">
-            <span style="font-weight:600;color:#e2e8f0;text-transform:capitalize">{
-              '⭐ Superfan' if tier == 'superfan' else
-              '✅ Engaged'  if tier == 'engaged'  else
-              '👀 Lurker'   if tier == 'lurker'   else
-              '💤 Dormant'
-            }</span>
-            <span style="background:#374151;color:#94a3b8;font-size:12px;font-weight:700;padding:2px 10px;border-radius:999px">{cnt:,}</span>
-          </summary>
-          <div style="padding:10px 14px;font-size:13px;color:#94a3b8;background:#111">
-            {'Highly engaged fans — multiple sessions, fast replies, show sign-ups.' if tier == 'superfan' else
-             'Active fans who reply and engage with the bot regularly.' if tier == 'engaged' else
-             'Opted in but rarely reply — still reading, just quiet.' if tier == 'lurker' else
-             'No activity in 60+ days. Good for re-engagement blasts (monthly max).'}
-          </div>
-        </details>""" for tier, cnt in stats["tier_breakdown"]) or '<p style="color:#64748b;font-size:13px">Tiers will appear after the nightly scoring cron runs.</p>'}
+        {_tier_breakdown_html}
       </div>
     </div>
 

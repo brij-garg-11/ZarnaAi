@@ -118,8 +118,14 @@ def test_webhook_spawns_daemon_thread():
         m.start = lambda: None
         return m
 
+    # The blueprint checks is_smb_number(to_number) before spawning a thread.
+    # Patch the registry so our test number is recognised as an SMB line.
+    mock_registry = MagicMock()
+    mock_registry.is_smb_number.return_value = True
+
     with app.test_client() as client:
-        with patch("app.smb.blueprint.threading.Thread", side_effect=capture):
+        with patch("app.smb.blueprint.threading.Thread", side_effect=capture), \
+             patch("app.smb.tenants.get_registry", return_value=mock_registry):
             _post_webhook(client, from_number="+15550003333", to_number="+15550002222", body="Opening tonight!")
 
     assert captured.get("daemon") is True
@@ -140,7 +146,8 @@ def test_process_smb_message_sends_reply_when_brain_returns_text():
             _process_smb_message("+15550003333", "+15550002222", "COMEDY")
 
     mock_brain.handle_message.assert_called_once_with("+15550003333", "+15550002222", "COMEDY")
-    mock_twilio.send_reply.assert_called_once_with("+15550003333", "Opening tonight 8pm!")
+    # send_reply is called with from_number=to_number so the reply comes from the SMB line
+    mock_twilio.send_reply.assert_called_once_with("+15550003333", "Opening tonight 8pm!", from_number="+15550002222")
     print("✓ _process_smb_message sends reply when brain returns text")
 
 

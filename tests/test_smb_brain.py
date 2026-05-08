@@ -139,7 +139,7 @@ def test_active_subscriber_routes_to_conversational_reply():
                             with patch("app.smb.brain._conversational_reply", return_value="Great question!") as mock_conv:
                                 result = brain.handle_message(SUBSCRIBER, SMB_NUMBER, "what time do you open?")
 
-    mock_conv.assert_called_once_with("what time do you open?", tenant, history=[])
+    mock_conv.assert_called_once_with("what time do you open?", tenant, history=[], from_number=SUBSCRIBER)
     assert result == "Great question!"
     print("✓ active subscriber message routes to conversational reply")
 

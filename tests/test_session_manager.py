@@ -12,8 +12,11 @@ from unittest.mock import MagicMock, patch, call
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# Stub psycopg2 if not installed
-if "psycopg2" not in sys.modules:
+# Stub psycopg2 only when the package is genuinely absent.
+try:
+    import psycopg2 as _psycopg2_real
+    import psycopg2.extras as _psycopg2_extras_real  # noqa: F401
+except ImportError:
     _stub = MagicMock()
     _stub.extras = MagicMock()
     _stub.extras.DictCursor = None

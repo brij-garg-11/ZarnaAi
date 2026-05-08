@@ -48,14 +48,19 @@ def test_exclude_mode_filters_podcast_transcript_chunks_on_load():
         {"text": "fact", "source": "zarna_facts", "embedding": [1.0]},
     ]
 
+    # Populate the sources set BEFORE _load() runs so the filter takes effect.
+    # Sources are stored lowercase; _is_podcast_transcript_source also lowercases
+    # the chunk source before comparison, so the mixed-case video ID matches.
+    def _setup_sources(self):
+        self._podcast_transcript_sources = {"xcggmezjvho_transcript.json"}
+
     with patch("app.retrieval.embedding.PODCAST_TRANSCRIPTS_MODE", "exclude"), patch.object(
-        EmbeddingRetriever, "_load_podcast_transcript_sources"
+        EmbeddingRetriever, "_load_podcast_transcript_sources", _setup_sources
     ), patch("app.retrieval.embedding.gzip.open") as gzopen:
         gzopen.return_value.__enter__.return_value = object()
         with patch("app.retrieval.embedding.json.load", return_value=fake_chunks):
             retriever = EmbeddingRetriever()
 
-    retriever._podcast_transcript_sources = {"xcggmezjvho_transcript.json"}
     remaining = [c["source"] for c in retriever._chunks]
     assert "zarna_facts" in remaining
     assert "XCggmEzjvHo_transcript.json" not in remaining

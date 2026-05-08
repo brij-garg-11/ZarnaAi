@@ -15,9 +15,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from tests.gemini_test_util import ensure_placeholder_key_for_import
 ensure_placeholder_key_for_import()
 
-# psycopg2 is not installed in the local dev environment — stub it out so the
-# blueprint's `import psycopg2.extras` doesn't blow up during testing.
-if "psycopg2" not in sys.modules:
+# Stub psycopg2 only when the package is genuinely absent.
+# Using sys.modules membership alone is unreliable — the package may be
+# installed but not yet imported, causing the stub to override the real
+# package and break later tests that need psycopg2.pool (e.g. import main).
+try:
+    import psycopg2 as _psycopg2_real
+    import psycopg2.extras as _psycopg2_extras_real  # noqa: F401
+except ImportError:
     _psycopg2_stub = MagicMock()
     _psycopg2_stub.extras = MagicMock()
     _psycopg2_stub.extras.DictCursor = None

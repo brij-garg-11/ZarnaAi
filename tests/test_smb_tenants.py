@@ -162,14 +162,25 @@ def test_is_owner_true_and_false():
 
 def test_real_west_side_comedy_config_loads():
     """West Side Comedy config in the actual repo loads without errors."""
-    registry = TenantRegistry()
-    tenant = registry.get_by_slug("west_side_comedy")
+    from unittest.mock import patch
+
+    # Strip SMB env overrides so this test is stable regardless of .env contents.
+    # (main.py calls load_dotenv() which can inject real phone numbers into the
+    # environment when tests run in a full suite after test_slicktext_adapter.py.)
+    clean_env = {
+        k: v for k, v in os.environ.items()
+        if not k.startswith("SMB_WEST_SIDE_COMEDY_")
+    }
+    with patch.dict(os.environ, clean_env, clear=True):
+        registry = TenantRegistry()
+        tenant = registry.get_by_slug("west_side_comedy")
+
     assert tenant is not None
     assert tenant.display_name == "West Side Comedy Club"
     assert tenant.business_type == "comedy_club"
     assert len(tenant.value_content_topics) > 0
     assert len(tenant.blast_triggers) > 0
-    # TBD fields are None, not the string "TBD"
+    # Without env overrides, TBD fields resolve to None not the string "TBD"
     assert tenant.owner_phone is None
     assert tenant.sms_number is None
     print("✓ west_side_comedy config loads; TBD fields are None not strings")
