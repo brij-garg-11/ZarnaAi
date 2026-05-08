@@ -134,15 +134,15 @@ class SlickTextAdapter:
             return phone, message
 
         if _is_reserved_keyword(message):
-            logger.info(f"Ignoring reserved keyword from {phone}: {message!r}")
+            logger.info("Ignoring reserved keyword from ...%s: %r", phone[-4:] if phone else "?", message)
             return None, None
 
         if _is_reaction(message):
-            logger.info(f"Ignoring reaction from {phone}: {message[:60]}")
+            logger.info("Ignoring reaction from ...%s: %.60s", phone[-4:] if phone else "?", message)
             return None, None
 
         if _is_emoji_only(message):
-            logger.info(f"Ignoring emoji-only message from {phone}: {message[:60]}")
+            logger.info("Ignoring emoji-only message from ...%s: %.60s", phone[-4:] if phone else "?", message)
             return None, None
 
         return phone, message
