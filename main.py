@@ -27,11 +27,11 @@ from app.analytics.blueprint import analytics_bp
 from app.live_shows.blueprint import live_shows_bp
 from app.smb.blueprint import smb_bp
 from app.smb.portal import portal_bp
-# portal_interactive_bp intentionally unregistered — the canonical interactive
-# client portal lives in operator/app/routes/smb_portal.py and runs on the
-# operator service. Keeping a second copy here led to two divergent /portal/
-# /<slug>/login implementations (see audit). Re-add only if you're moving the
-# portal back into the main app.
+# Note: the canonical interactive client portal lives in
+# operator/app/routes/smb_portal.py and runs on the operator service.
+# A second unregistered copy used to live at app/smb/portal_interactive.py;
+# it was deleted in the cleanup pass to remove drift risk between the two
+# implementations.
 from app.live_shows.signup import LiveShowSignupResult, try_live_show_signup
 from app.live_shows.quiz import get_active_quiz_for_fan, record_quiz_response, build_quiz_context
 from app.live_shows.blast_context import get_active_blast_context, build_blast_context_prompt
@@ -176,7 +176,9 @@ if running_in_production() and not slicktext_webhook_secret_configured():
     )
 
 # ---------------------------------------------------------------------------
-# Deduplication: last 200 message IDs (SlickText + Twilio)
+# Deduplication: last 1000 message IDs (SlickText + Twilio).
+# Per-process LRU — multi-worker deploys still risk processing the same
+# message twice across workers; tracked in the audit (H4).
 # ---------------------------------------------------------------------------
 
 _seen_message_ids: OrderedDict = OrderedDict()
