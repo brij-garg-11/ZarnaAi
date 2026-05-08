@@ -33,6 +33,36 @@ logger = logging.getLogger(__name__)
 blast_bp = Blueprint("blast", __name__)
 
 
+def _parse_local_datetime_to_utc(send_at_str: str, send_at_tz: str) -> datetime:
+    """Convert a `<input type="datetime-local">` value into a UTC datetime.
+
+    HTML datetime-local sends a naive wall-clock string ("2026-04-01T14:30")
+    with no timezone information. The browser submits it in whatever the
+    operator's local time is, but the backend used to call
+    `replace(tzinfo=timezone.utc)` on it — meaning a 2:30 PM Eastern entry
+    fired at 2:30 PM UTC (4-5 hours early). The blast template now also
+    submits a hidden `send_at_tz` IANA name; we use it to localize the wall
+    clock value, then convert to UTC for storage.
+
+    Falls back to UTC if the timezone hint is missing or not recognized
+    (preserving the previous behavior, which was at least consistent for
+    operators who already learned to enter UTC).
+    """
+    naive = datetime.fromisoformat(send_at_str)
+    if not send_at_tz:
+        return naive.replace(tzinfo=timezone.utc)
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(send_at_tz)
+    except Exception:
+        logger.warning(
+            "blast schedule: unknown timezone %r — falling back to UTC interpretation",
+            send_at_tz,
+        )
+        return naive.replace(tzinfo=timezone.utc)
+    return naive.replace(tzinfo=tz).astimezone(timezone.utc)
+
+
 def _get_tier_counts() -> dict:
     """Return {tier: count} for all four tiers. Fast single query."""
     from ..db import get_conn
@@ -563,6 +593,11 @@ def smart_send_preview():
     """
     from ..db import get_conn as _get_conn
     CADENCE_DAYS = {"superfan": 5, "engaged": 7, "lurker": 14, "dormant": 30}
+    # Tenant scope — super-admins see global stats; everyone else gets their
+    # own slug. Without this the preview leaks every tenant's fan counts to
+    # every other tenant on shared-DB deployments.
+    cu = current_user() or {}
+    slug = None if cu.get("is_super_admin") else (cu.get("creator_slug") or None)
     conn = _get_conn()
     result = {"tiers": {}, "total_sending": 0, "total_suppressed": 0}
     try:
@@ -573,25 +608,48 @@ def smart_send_preview():
 
             for tier, cadence in CADENCE_DAYS.items():
                 # All fans in this tier (excluding WhatsApp + optouts)
-                cur.execute(
-                    "SELECT DISTINCT phone_number FROM contacts "
-                    "WHERE fan_tier = %s AND phone_number NOT LIKE 'whatsapp:%%'",
-                    (tier,),
-                )
+                if slug:
+                    cur.execute(
+                        "SELECT DISTINCT phone_number FROM contacts "
+                        "WHERE fan_tier = %s AND phone_number NOT LIKE 'whatsapp:%%' "
+                        "AND creator_slug = %s",
+                        (tier, slug),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT DISTINCT phone_number FROM contacts "
+                        "WHERE fan_tier = %s AND phone_number NOT LIKE 'whatsapp:%%'",
+                        (tier,),
+                    )
                 all_phones = {r[0] for r in cur.fetchall()} - optouts
 
                 # Fans in this tier blasted within cadence window
-                cur.execute(
-                    """
-                    SELECT DISTINCT br.phone_number
-                    FROM   blast_recipients br
-                    JOIN   blast_drafts bd ON bd.id = br.blast_id
-                    JOIN   contacts c ON c.phone_number = br.phone_number
-                    WHERE  c.fan_tier = %s
-                      AND  br.sent_at >= NOW() - (%s || ' days')::INTERVAL
-                    """,
-                    (tier, str(cadence)),
-                )
+                if slug:
+                    cur.execute(
+                        """
+                        SELECT DISTINCT br.phone_number
+                        FROM   blast_recipients br
+                        JOIN   blast_drafts bd ON bd.id = br.blast_id
+                        JOIN   contacts c ON c.phone_number = br.phone_number
+                        WHERE  c.fan_tier = %s
+                          AND  c.creator_slug = %s
+                          AND  bd.creator_slug = %s
+                          AND  br.sent_at >= NOW() - (%s || ' days')::INTERVAL
+                        """,
+                        (tier, slug, slug, str(cadence)),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT DISTINCT br.phone_number
+                        FROM   blast_recipients br
+                        JOIN   blast_drafts bd ON bd.id = br.blast_id
+                        JOIN   contacts c ON c.phone_number = br.phone_number
+                        WHERE  c.fan_tier = %s
+                          AND  br.sent_at >= NOW() - (%s || ' days')::INTERVAL
+                        """,
+                        (tier, str(cadence)),
+                    )
                 recently_blasted = {r[0] for r in cur.fetchall()}
 
                 suppressed = len(all_phones & recently_blasted)
@@ -731,12 +789,13 @@ def save_draft():
 
     if intent == "schedule":
         send_at_str = (request.form.get("send_at") or "").strip()
-        logger.info("  SCHEDULE intent: send_at=%r draft=%s", send_at_str, new_id)
+        send_at_tz = (request.form.get("send_at_tz") or "").strip()
+        logger.info("  SCHEDULE intent: send_at=%r tz=%r draft=%s", send_at_str, send_at_tz, new_id)
         if not send_at_str:
             flash("Pick a send time before scheduling.", "error")
             return redirect(url_for("blast.blast_compose", draft_id=new_id))
         try:
-            send_at = datetime.fromisoformat(send_at_str).replace(tzinfo=timezone.utc)
+            send_at = _parse_local_datetime_to_utc(send_at_str, send_at_tz)
         except ValueError:
             flash("Invalid date — use the date/time picker.", "error")
             return redirect(url_for("blast.blast_compose", draft_id=new_id))
@@ -862,13 +921,16 @@ def schedule(draft_id: int):
         return redirect(url_for("blast.blast_index"))
 
     send_at_str = (request.form.get("send_at") or "").strip()
+    send_at_tz = (request.form.get("send_at_tz") or "").strip()
     if not send_at_str:
         flash("A scheduled time is required.", "error")
         return redirect(url_for("blast.blast_compose", draft_id=draft_id))
 
     try:
-        # datetime-local format: "2026-04-01T14:30"
-        send_at = datetime.fromisoformat(send_at_str).replace(tzinfo=timezone.utc)
+        # datetime-local format: "2026-04-01T14:30" — interpret as the
+        # operator's browser timezone (passed via send_at_tz hint), then
+        # convert to UTC for storage.
+        send_at = _parse_local_datetime_to_utc(send_at_str, send_at_tz)
     except ValueError:
         flash("Invalid date format.", "error")
         return redirect(url_for("blast.blast_compose", draft_id=draft_id))

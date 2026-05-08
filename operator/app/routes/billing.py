@@ -445,6 +445,18 @@ def _sync_plan_to_notion(
         logger.exception("_sync_plan_to_notion failed for slug=%s", slug)
 
 
+def _credits_for_cycle(plan, billing_cycle: str) -> int:
+    """Return the included-credit count for one billing period.
+
+    Annual subscriptions pay for 12 months upfront, so they should also
+    receive 12 months of credits to last until renewal. Without this helper
+    the previous code wrote `monthly_credits` regardless of cycle, leaving
+    annual customers with one month's credits stretched across a year.
+    """
+    base = int(getattr(plan, "monthly_credits", 0) or 0)
+    return base * 12 if (billing_cycle or "").strip().lower() == "annual" else base
+
+
 def _handle_checkout_completed(session: dict) -> None:
     """First-time Checkout success.
 
@@ -490,7 +502,7 @@ def _handle_checkout_completed(session: dict) -> None:
             stripe_customer_id=customer_id,
             stripe_subscription_id=sub_id,
             billing_cycle_anchor=datetime.now(timezone.utc),
-            included_credits=plan.monthly_credits,
+            included_credits=_credits_for_cycle(plan, billing_cycle),
         )
         _sync_plan_to_notion(
             slug=slug,
@@ -558,7 +570,7 @@ def _handle_invoice_paid(invoice: dict) -> None:
         stripe_customer_id=customer_id,
         stripe_subscription_id=sub_id,
         billing_cycle_anchor=anchor,
-        included_credits=plan.monthly_credits,
+        included_credits=_credits_for_cycle(plan, billing_cycle),
     )
     _sync_plan_to_notion(
         slug=user.get("creator_slug") or "",
@@ -610,7 +622,7 @@ def _handle_subscription_updated(sub: dict) -> None:
         stripe_customer_id=customer_id,
         stripe_subscription_id=sub.get("id"),
         billing_cycle_anchor=anchor,
-        included_credits=plan.monthly_credits,
+        included_credits=_credits_for_cycle(plan, billing_cycle),
     )
     _sync_plan_to_notion(
         slug=user.get("creator_slug") or "",

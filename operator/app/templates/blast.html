@@ -560,11 +560,18 @@
           <p class="text-xs mb-3" style="color:var(--text-muted);">Pick a time — your message and audience will be saved automatically.</p>
           <div class="flex items-end gap-3 flex-wrap">
             <div class="flex-1">
-              <label class="section-label mb-1 block">Send at (UTC)</label>
+              <label class="section-label mb-1 block">Send at (your local time)</label>
               <input type="datetime-local" name="send_at" x-model="sendAt" class="zarna-input">
+              <p class="text-xs mt-1" style="color:var(--text-muted);">
+                Interpreted in <span x-text="(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC')"></span>.
+              </p>
             </div>
             <button type="submit" name="intent" value="schedule" class="btn-pink">Schedule →</button>
           </div>
+          <!-- Hint to the backend: parse send_at in this timezone, then convert
+               to UTC for storage. Without this, datetime-local strings get
+               interpreted as UTC and blasts fire at the wrong wall-clock time. -->
+          <input type="hidden" name="send_at_tz" x-init="$el.value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'" />
         </div>
         {% endif %}
 
