@@ -12,8 +12,18 @@ test_blast_optout.py and test_billing_accuracy.py for prior parts.
 import re
 from pathlib import Path
 
+import pytest
+
 
 REPO = Path(__file__).resolve().parents[1]
+
+# lovable-frontend is a separate git repo (zar-connect) and is gitignored here,
+# so it's absent in CI. Check for package.json specifically because Vite can
+# recreate an empty lovable-frontend/.vite/ cache directory on dev machines.
+needs_frontend = pytest.mark.skipif(
+    not (REPO / "lovable-frontend" / "package.json").is_file(),
+    reason="lovable-frontend not present (separate zar-connect repo)",
+)
 
 
 def _read(rel: str) -> str:
@@ -256,17 +266,20 @@ def test_create_customer_in_notion_skips_duplicate_slug():
 # L4 — Footer anchor points to a real section id
 # ---------------------------------------------------------------------------
 
+@needs_frontend
 def test_footer_proof_anchor_points_to_real_section():
     src = _read("lovable-frontend/src/components/Footer.tsx")
     assert '"/#proof"' in src, "Proof link should anchor /#proof (matches ProofZarna section id)"
     assert '"/#real-people"' not in src, "Old broken anchor should be removed"
 
 
+@needs_frontend
 def test_proof_section_actually_has_id_proof():
     src = _read("lovable-frontend/src/components/ProofZarna.tsx")
     assert 'id="proof"' in src, "ProofZarna section must keep id=\"proof\" for the footer anchor"
 
 
+@needs_frontend
 def test_by_the_numbers_section_has_id():
     src = _read("lovable-frontend/src/components/ByTheNumbers.tsx")
     assert 'id="by-the-numbers"' in src, "ByTheNumbers section must keep its id for footer anchor"
@@ -276,6 +289,7 @@ def test_by_the_numbers_section_has_id():
 # L5 — Early Access dialog submits via mailto
 # ---------------------------------------------------------------------------
 
+@needs_frontend
 def test_early_access_dialog_uses_mailto_not_fake_toast():
     src = _read("lovable-frontend/src/components/EarlyAccessDialog.tsx")
     assert "mailto:brij@zarnagarg.com" in src, (

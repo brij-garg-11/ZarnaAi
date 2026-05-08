@@ -14,7 +14,18 @@ Covers (source-inspection — frontend has no Vitest setup yet):
 import os
 import re
 
+import pytest
+
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+# lovable-frontend lives in a separate git repo (zar-connect) and is gitignored
+# in ZarnaAi. Skip the whole module when the actual frontend isn't checked out
+# (e.g. on GitHub Actions). Check for package.json specifically because Vite
+# can recreate an empty `lovable-frontend/.vite/` cache on dev machines.
+pytestmark = pytest.mark.skipif(
+    not os.path.isfile(os.path.join(PROJECT_ROOT, "lovable-frontend", "package.json")),
+    reason="lovable-frontend not present (separate zar-connect repo)",
+)
 
 
 def _read(rel_path: str) -> str:
