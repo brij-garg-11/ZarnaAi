@@ -91,9 +91,14 @@ def _record_blast_optout() -> None:
 
 
 def _safe_try_live_show_signup(phone_number: str, message_text: str, channel: str) -> LiveShowSignupResult:
-    """Never let live-show DB logic break inbound webhooks."""
+    """Never let live-show DB logic break inbound webhooks.
+
+    Passes the current tenant's creator_slug so the contact insert is tagged
+    with the right creator in multi-tenant deployments.
+    """
     try:
-        return try_live_show_signup(phone_number, message_text, channel)
+        slug = getattr(brain, "slug", None) or os.getenv("CREATOR_SLUG") or None
+        return try_live_show_signup(phone_number, message_text, channel, creator_slug=slug)
     except Exception:
         logging.exception("Live show signup failed; continuing with reply pipeline")
         return LiveShowSignupResult()
