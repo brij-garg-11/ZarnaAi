@@ -2896,7 +2896,15 @@ def business_stats():
 @api_bp.route("/api/business/inbox")
 @login_required
 def business_inbox():
-    """Latest conversations for the business tenant, grouped by subscriber."""
+    """
+    Latest conversations for the business tenant, grouped by subscriber.
+
+    Returns one thread per phone that is either (a) a subscriber, or
+    (b) has at least one row in smb_messages. Subscribers with no messages
+    yet still appear so a freshly-onboarded fan shows up in the inbox right
+    away — without this they were invisible until their second message,
+    because the onboarding turn historically wasn't logged.
+    """
     slug = _get_tenant_slug()
     if not slug:
         return jsonify(error="No tenant slug configured for this account"), 400
@@ -2905,39 +2913,60 @@ def business_inbox():
     try:
         import psycopg2.extras
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # One query that unions subscribers + message-only phones, then
+            # joins back the latest message preview, message counts, and
+            # subscriber status. Single round-trip instead of N+1.
             cur.execute(
-                """SELECT DISTINCT ON (phone_number)
-                       phone_number, body AS last_message, role AS last_role, created_at
-                   FROM smb_messages
-                   WHERE tenant_slug=%s
-                   ORDER BY phone_number, created_at DESC""",
-                (slug,),
+                """
+                WITH phones AS (
+                    SELECT phone_number FROM smb_subscribers WHERE tenant_slug=%(slug)s
+                    UNION
+                    SELECT DISTINCT phone_number FROM smb_messages WHERE tenant_slug=%(slug)s
+                ),
+                latest AS (
+                    SELECT DISTINCT ON (phone_number)
+                           phone_number,
+                           body AS last_message,
+                           role AS last_role,
+                           created_at AS last_message_at
+                    FROM smb_messages
+                    WHERE tenant_slug=%(slug)s
+                    ORDER BY phone_number, created_at DESC
+                ),
+                stats AS (
+                    SELECT phone_number,
+                           COUNT(*) AS message_count,
+                           MIN(created_at) AS first_message_at
+                    FROM smb_messages
+                    WHERE tenant_slug=%(slug)s
+                    GROUP BY phone_number
+                )
+                SELECT p.phone_number,
+                       l.last_message,
+                       l.last_role,
+                       l.last_message_at,
+                       COALESCE(st.message_count, 0) AS message_count,
+                       st.first_message_at,
+                       s.status,
+                       s.created_at AS joined_at
+                FROM phones p
+                LEFT JOIN latest l USING (phone_number)
+                LEFT JOIN stats  st USING (phone_number)
+                LEFT JOIN smb_subscribers s
+                       ON s.phone_number = p.phone_number
+                      AND s.tenant_slug  = %(slug)s
+                ORDER BY COALESCE(l.last_message_at, s.created_at) DESC NULLS LAST
+                """,
+                {"slug": slug},
             )
-            latest_rows = cur.fetchall()
+            rows = cur.fetchall()
 
             threads = []
-            for r in latest_rows:
+            for r in rows:
                 phone = r["phone_number"]
-
-                cur.execute(
-                    """SELECT status, created_at AS joined_at
-                       FROM smb_subscribers
-                       WHERE tenant_slug=%s AND phone_number=%s""",
-                    (slug, phone),
-                )
-                sub = cur.fetchone()
-
-                cur.execute(
-                    "SELECT COUNT(*) FROM smb_messages WHERE tenant_slug=%s AND phone_number=%s",
-                    (slug, phone),
-                )
-                msg_count = cur.fetchone()[0]
-
-                cur.execute(
-                    "SELECT MIN(created_at) FROM smb_messages WHERE tenant_slug=%s AND phone_number=%s",
-                    (slug, phone),
-                )
-                first_msg_at = cur.fetchone()[0]
+                # Fall back to join time so subscribers without messages still
+                # have a sortable timestamp the frontend can render.
+                last_at = r["last_message_at"] or r["joined_at"]
 
                 # Never send the full E.164 to the browser — last 4 is all
                 # the UI uses, and exposing the full number means a stolen
@@ -2946,14 +2975,13 @@ def business_inbox():
                     "phone_last4": phone[-4:],
                     "last_message": r["last_message"] or "",
                     "last_role": r["last_role"],
-                    "last_message_at": r["created_at"].isoformat(),
-                    "message_count": msg_count,
-                    "first_message_at": first_msg_at.isoformat() if first_msg_at else None,
-                    "status": sub["status"] if sub else "unknown",
-                    "joined_at": sub["joined_at"].isoformat() if sub and sub["joined_at"] else None,
+                    "last_message_at": last_at.isoformat() if last_at else "",
+                    "message_count": r["message_count"],
+                    "first_message_at": r["first_message_at"].isoformat() if r["first_message_at"] else None,
+                    "status": r["status"] if r["status"] else "unknown",
+                    "joined_at": r["joined_at"].isoformat() if r["joined_at"] else None,
                 })
 
-            threads.sort(key=lambda x: x["last_message_at"], reverse=True)
             return jsonify(threads=threads)
     finally:
         conn.close()

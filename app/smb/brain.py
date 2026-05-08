@@ -92,6 +92,8 @@ class SMBBrain:
                 "SMB brain: show check-in keyword matched (tenant=%s phone=...%s)",
                 tenant.slug, from_number[-4:] if from_number else "?",
             )
+            # Persist the check-in turn so it surfaces in the inbox and digest.
+            _persist_turn(from_number, tenant, message_text, checkin_reply)
             return checkin_reply
 
         # --- Onboarding flow (keyword or mid-intake reply) ---
@@ -103,6 +105,9 @@ class SMBBrain:
                 "SMB brain: onboarding message → onboarding handler (tenant=%s phone=...%s)",
                 tenant.slug, from_number[-4:] if from_number else "?",
             )
+            # Persist both sides of the opt-in turn so the new subscriber appears
+            # in the operator inbox immediately, not only after their next reply.
+            _persist_turn(from_number, tenant, message_text, onboarding_reply)
             return onboarding_reply
 
         # --- Regular subscriber or unknown sender ---
@@ -409,6 +414,39 @@ def _persist_message(phone_number: str, tenant: BusinessTenant, text: str, role:
             smb_storage.save_message(conn, tenant.slug, phone_number, role, text)
     except Exception:
         logger.exception("SMB brain: failed to persist assistant message")
+    finally:
+        conn.close()
+
+
+def _persist_turn(
+    phone_number: str,
+    tenant: BusinessTenant,
+    inbound_text: str,
+    outbound_text: str,
+) -> None:
+    """
+    Persist one full inbound→outbound turn (user message + bot reply) atomically.
+
+    Used by branches that don't need the conversation history back (onboarding,
+    check-in). Without this, those branches return a reply but never write to
+    smb_messages, which means brand-new subscribers stay invisible in the
+    operator inbox until they happen to send a second message.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        with conn:
+            smb_storage.save_message(conn, tenant.slug, phone_number, "user", inbound_text)
+            if outbound_text:
+                smb_storage.save_message(
+                    conn, tenant.slug, phone_number, "assistant", outbound_text
+                )
+    except Exception:
+        logger.exception(
+            "SMB brain: failed to persist conversation turn (tenant=%s)",
+            tenant.slug,
+        )
     finally:
         conn.close()
 
