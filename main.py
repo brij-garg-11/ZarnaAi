@@ -47,6 +47,13 @@ class _ServiceFormatter(logging.Formatter):
         ("app.live_shows","[ZARNA] "),
         ("app.messaging", "[ZARNA] "),
         ("app.storage",   "[DB]    "),
+        # main.py uses the root logger via direct `logging.info(...)` calls.
+        # Tag those as [ZARNA] too — main.py IS the Zarna inbound pipeline,
+        # so [WEB] is misleading. Real non-Zarna paths (Werkzeug etc.) won't
+        # match any of these prefixes and still get the [WEB] default.
+        ("__main__",      "[ZARNA] "),
+        ("root",          "[ZARNA] "),
+        ("main",          "[ZARNA] "),
     )
     def format(self, record: logging.LogRecord) -> str:
         tag = "[WEB]   "

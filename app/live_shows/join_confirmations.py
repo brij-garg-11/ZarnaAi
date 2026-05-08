@@ -1,11 +1,17 @@
-"""Random SMS copy for comedy live-show keyword joins (Zarna voice, positive).
+"""Random SMS copy for live-show keyword joins.
 
-Structure per message: (1) you're in, (2) joke in Zarna tone, (3) enjoy the show.
+Structure per message: (1) you're in, (2) joke / personality, (3) enjoy the show.
 Does not promise a real person will reply — this number is automated.
+
+The Zarna-specific copy below references her family/MIL/desi-auntie material.
+For any other creator we fall back to neutral, voice-agnostic copy. To plug
+in creator-specific copy, set CREATOR_SLUG and add an entry here, or extend
+this module to read from creator_config/<slug>.json.
 """
 
 from __future__ import annotations
 
+import os
 import secrets
 
 # Multi-part SMS is fine for show welcomes; keep each variant scannable.
@@ -105,12 +111,52 @@ _COMEDY_REPEAT = [
 ]
 
 
+# Neutral, voice-agnostic copy used when CREATOR_SLUG != 'zarna'. Keep these
+# generic — no name-drops, no "MIL"/"desi"/"husband" jokes.
+_GENERIC_COMEDY_NEW = [
+    "You're IN — officially on the list! See you at the show — bring the energy, leave the worries.",
+    "Welcome aboard! You're confirmed for the show. Save your loudest laughs for tonight.",
+    "Confirmed! You're on the roster. Enjoy the show — laughs guaranteed.",
+    "You're set — see you there! Comedy night is better with you in it.",
+    "Locked in! You're on the list. Enjoy the show tonight.",
+]
+
+_GENERIC_COMEDY_REPEAT = [
+    "Still on the list — you're good! See you at the show.",
+    "Got you — already in! Enjoy tonight.",
+    "Already confirmed — see you there!",
+    "Yes, you're still on the list. Enjoy the show!",
+]
+
+_GENERIC_LIVE_STREAM_NEW = [
+    "You're IN — welcome to the live! Grab your snacks, settle in, enjoy the stream.",
+    "Confirmed for the live stream! Tune in and enjoy.",
+    "On the list for the live — see you online!",
+    "Welcome — you're set for the stream. Enjoy!",
+]
+
+_GENERIC_LIVE_STREAM_REPEAT = [
+    "Still on the list for the live — you're good! Enjoy the stream.",
+    "Already in — see you on the live!",
+    "Confirmed twice; enjoy the stream.",
+    "You're set for the live. Have fun!",
+]
+
+
+def _is_zarna() -> bool:
+    """True only when this deployment is running the Zarna voice (the original
+    creator the comedy/live-show copy was authored for)."""
+    return (os.getenv("CREATOR_SLUG") or "zarna").strip().lower() == "zarna"
+
+
 def random_comedy_confirmation_new() -> str:
-    return secrets.choice(_COMEDY_NEW)
+    pool = _COMEDY_NEW if _is_zarna() else _GENERIC_COMEDY_NEW
+    return secrets.choice(pool)
 
 
 def random_comedy_confirmation_repeat() -> str:
-    return secrets.choice(_COMEDY_REPEAT)
+    pool = _COMEDY_REPEAT if _is_zarna() else _GENERIC_COMEDY_REPEAT
+    return secrets.choice(pool)
 
 
 # Live stream — same shape: you're in → Zarna-tone joke → enjoy the stream (automated; no human promise).
@@ -202,8 +248,10 @@ _LIVE_STREAM_REPEAT = [
 
 
 def random_live_stream_confirmation_new() -> str:
-    return secrets.choice(_LIVE_STREAM_NEW)
+    pool = _LIVE_STREAM_NEW if _is_zarna() else _GENERIC_LIVE_STREAM_NEW
+    return secrets.choice(pool)
 
 
 def random_live_stream_confirmation_repeat() -> str:
-    return secrets.choice(_LIVE_STREAM_REPEAT)
+    pool = _LIVE_STREAM_REPEAT if _is_zarna() else _GENERIC_LIVE_STREAM_REPEAT
+    return secrets.choice(pool)
