@@ -31,9 +31,23 @@ CREATOR_SLUG = os.getenv("CREATOR_SLUG", "zarna").strip().lower()
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _chunks_candidate = os.path.join(_BASE_DIR, "training_data", f"{CREATOR_SLUG}_chunks.json")
 _embeddings_candidate = os.path.join(_BASE_DIR, "training_data", f"{CREATOR_SLUG}_embeddings.json.gz")
-# Keep backward-compat: if slug-specific file doesn't exist, fall back to zarna files
-CHUNKS_PATH = _chunks_candidate if os.path.exists(_chunks_candidate) else os.path.join(_BASE_DIR, "training_data", "zarna_chunks.json")
-EMBEDDINGS_PATH = _embeddings_candidate if os.path.exists(_embeddings_candidate) else os.path.join(_BASE_DIR, "training_data", "zarna_embeddings.json.gz")
+# Keep backward-compat: if slug-specific file doesn't exist, fall back to zarna files.
+# This silent fallback used to mean a misconfigured non-Zarna client would
+# load Zarna's training corpus and the AI would talk like Zarna with no
+# warning. Emit a loud log so the issue is visible at startup.
+_chunks_using_fallback = not os.path.exists(_chunks_candidate)
+_embeddings_using_fallback = not os.path.exists(_embeddings_candidate)
+CHUNKS_PATH = _chunks_candidate if not _chunks_using_fallback else os.path.join(_BASE_DIR, "training_data", "zarna_chunks.json")
+EMBEDDINGS_PATH = _embeddings_candidate if not _embeddings_using_fallback else os.path.join(_BASE_DIR, "training_data", "zarna_embeddings.json.gz")
+
+if (_chunks_using_fallback or _embeddings_using_fallback) and CREATOR_SLUG.lower() != "zarna":
+    import logging as _bootstrap_logging
+    _bootstrap_logging.getLogger(__name__).error(
+        "[CONFIG] Training data missing for CREATOR_SLUG=%r — falling back to Zarna corpus. "
+        "The AI will sound like Zarna for this client. Generate %s_chunks.json and "
+        "%s_embeddings.json.gz via scripts/ and redeploy.",
+        CREATOR_SLUG, CREATOR_SLUG, CREATOR_SLUG,
+    )
 
 # --- Retrieval / Generation ---
 TOP_K_CHUNKS = int(os.getenv("TOP_K_CHUNKS", "7"))

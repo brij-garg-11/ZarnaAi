@@ -847,14 +847,33 @@ def _produce_raw_text(
     prompt: str,
     routing_tier: Optional[str],
 ) -> str:
-    """Choose provider; fall back to Gemini on errors or missing keys."""
+    """Choose provider; fall back to Gemini on errors or missing keys.
+
+    Structured intents (SHOW/BOOK/PODCAST/CLIP/MERCH) default to Gemini for
+    consistency with the prompt format, but fall through to OpenAI →
+    Anthropic if Gemini errors. Without these fallbacks a Gemini outage
+    silently kills every ticket/merch link reply across all clients.
+    """
     structured = intent in _STRUCTURED_INTENTS
     if structured or not _multi_model_enabled():
         try:
             return _generate_gemini_raw(prompt)
         except Exception as exc:
             _LOGGER.error("Gemini generation error: %s", exc)
-            return ""
+        # Cross-provider fallback so structured intents survive a Gemini outage.
+        if (OPENAI_API_KEY or "").strip():
+            try:
+                _LOGGER.warning("Falling back to OpenAI for intent=%s after Gemini failure", intent)
+                return _generate_openai_raw(prompt)
+            except Exception as exc:
+                _LOGGER.warning("OpenAI fallback error for intent=%s: %s", intent, exc)
+        if (ANTHROPIC_API_KEY or "").strip():
+            try:
+                _LOGGER.warning("Falling back to Anthropic for intent=%s after OpenAI failure", intent)
+                return _generate_anthropic_raw(prompt)
+            except Exception as exc:
+                _LOGGER.warning("Anthropic fallback error for intent=%s: %s", intent, exc)
+        return ""
 
     # Explicit tier only (handler passes low|medium|high). No tier => legacy Gemini-only.
     if routing_tier is None:
@@ -960,6 +979,21 @@ def generate_zarna_reply(
     if not (raw or "").strip():
         return _get_fallback(creator_config)
 
+    # Enforce per-creator banned_words: if the model emitted any forbidden term,
+    # log it and substitute the safe fallback rather than ship a brand-violating
+    # reply. This was previously loaded into CreatorConfig but never applied.
+    if creator_config and getattr(creator_config, "banned_words", None):
+        violation = _find_banned_word(raw, creator_config.banned_words)
+        if violation:
+            _LOGGER.warning(
+                "banned_words violation detected for slug=%s intent=%s word=%r — "
+                "returning safe fallback instead of raw reply",
+                getattr(creator_config, "slug", "?"),
+                intent.value if intent else "?",
+                violation,
+            )
+            return _get_fallback(creator_config)
+
     # SHOW, BOOK, PODCAST, CLIP, and MERCH replies include a link on its own line — preserve both lines but still cap
     if intent in (Intent.SHOW, Intent.BOOK, Intent.PODCAST, Intent.CLIP, Intent.MERCH):
         lines = raw.splitlines()
@@ -970,3 +1004,24 @@ def generate_zarna_reply(
     # Strip echo-mock opener before final trimming so the char limit is applied to clean text
     cleaned = _strip_echo_mock(raw, user_message)
     return _apply_emphasis_policy(_trim_reply(cleaned), emphasis_suppress_all)
+
+
+def _find_banned_word(text: str, banned: tuple) -> Optional[str]:
+    """Return the first banned word found in `text`, or None.
+
+    Match is case-insensitive and word-boundary aware so 'shit' matches but
+    'shitake' does not. Whitespace and punctuation count as boundaries.
+    """
+    if not text or not banned:
+        return None
+    import re as _re
+    lower = text.lower()
+    for raw_word in banned:
+        word = (raw_word or "").strip().lower()
+        if not word:
+            continue
+        # Word-boundary match — uses regex \b which respects punctuation.
+        pattern = r"\b" + _re.escape(word) + r"\b"
+        if _re.search(pattern, lower):
+            return raw_word
+    return None

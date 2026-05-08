@@ -199,9 +199,17 @@ class ZarnaBrain:
                         intent.value, str(tone_mode) if tone_mode else ""
                     ) or None
                 except Exception:
-                    pass
+                    _logger.debug(
+                        "winning_examples legacy fallback also failed for intent=%s",
+                        intent.value,
+                    )
             except Exception:
-                pass  # learning is best-effort, never block a reply
+                # Learning is best-effort but failures must be visible — silent
+                # exceptions previously hid real DB schema drift in production.
+                _logger.exception(
+                    "winning_examples lookup failed for intent=%s slug=%s",
+                    intent.value, self.slug,
+                )
 
         # Per-fan sell context (Step 5) and A/B variant (Step 7) — sell intents only.
         # sell_context: fan's most recent show attendance + their stored location.
@@ -220,7 +228,10 @@ class ZarnaBrain:
                     parts.append(f"Fan is from {location}.")
                 sell_context = " ".join(parts) if parts else None
             except Exception:
-                pass  # context enrichment is best-effort
+                _logger.exception(
+                    "sell_context enrichment failed for phone=...%s slug=%s",
+                    phone_number[-4:] if phone_number else "?", self.slug,
+                )
 
         reply = generate_zarna_reply(
             intent=intent,
@@ -248,7 +259,10 @@ class ZarnaBrain:
             from app.link_tracker import rewrite_bot_reply
             reply = rewrite_bot_reply(reply, phone_number=phone_number)
         except Exception:
-            pass  # never block a reply over tracking
+            _logger.exception(
+                "link_tracker.rewrite_bot_reply failed for phone=...%s",
+                phone_number[-4:] if phone_number else "?",
+            )
 
         if LOG_REPLY_METRICS:
             provider = infer_reply_provider(intent, routing_tier)
@@ -312,7 +326,10 @@ class ZarnaBrain:
             if new_memory != current_memory or new_tags or location or name:
                 self.storage.update_memory(phone_number, new_memory, new_tags, location, name)
         except Exception:
-            pass  # Memory update is best-effort; never block a reply
+            _logger.exception(
+                "_update_memory failed for phone=...%s slug=%s",
+                phone_number[-4:] if phone_number else "?", self.slug,
+            )
 
 
 def create_brain(slug: Optional[str] = None) -> ZarnaBrain:
