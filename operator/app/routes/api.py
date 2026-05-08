@@ -277,8 +277,11 @@ def audience():
     except Exception:
         logger.exception("api: failed to fetch tier counts")
 
-    tier_order = ["superfan", "engaged", "casual", "dormant"]
-    tier_icons = {"superfan": "⭐", "engaged": "✅", "casual": "💬", "dormant": "😴"}
+    # Tier names must match the DB (operator/scripts/score_fans.py writes 'lurker').
+    # Using 'casual' here previously caused the audience tier card to always show 0
+    # because no contact row ever had fan_tier='casual'.
+    tier_order = ["superfan", "engaged", "lurker", "dormant"]
+    tier_icons = {"superfan": "⭐", "engaged": "✅", "lurker": "👀", "dormant": "😴"}
 
     return jsonify(
         tag_breakdown=[
