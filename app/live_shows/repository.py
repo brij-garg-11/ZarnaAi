@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -211,14 +212,20 @@ def signup_phones_for_show(show_id: int) -> List[str]:
     return [r["phone_number"] for r in rows]
 
 
-def add_signup(show_id: int, phone: str, channel: str) -> bool:
-    """Insert signup (normalized E.164 without whatsapp:). Returns True if inserted."""
+def add_signup(show_id: int, phone: str, channel: str, creator_slug: str = None) -> bool:
+    """Insert signup (normalized E.164 without whatsapp:). Returns True if inserted.
+
+    creator_slug: which tenant's bot received this signup. Falls back to env
+    CREATOR_SLUG (or 'zarna') for backward compatibility. Without this, multi-
+    tenant deployments would silently tag every new contact as 'zarna'.
+    """
     norm = normalize_e164(phone)
     if not norm:
         return False
     c = _conn()
     if not c:
         return False
+    slug = (creator_slug or os.getenv("CREATOR_SLUG") or "zarna").strip().lower()
     try:
         with c:
             with c.cursor() as cur:
@@ -235,11 +242,11 @@ def add_signup(show_id: int, phone: str, channel: str) -> bool:
                 # show-acquired fans from organic fans (source preserved if already set).
                 cur.execute(
                     """
-                    INSERT INTO contacts (phone_number, source)
-                    VALUES (%s, 'live_show')
+                    INSERT INTO contacts (phone_number, source, creator_slug)
+                    VALUES (%s, 'live_show', %s)
                     ON CONFLICT (phone_number) DO NOTHING
                     """,
-                    (norm,),
+                    (norm, slug),
                 )
                 return inserted
     finally:

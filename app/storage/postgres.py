@@ -109,6 +109,12 @@ _LIVE_SHOW_MIGRATIONS = (
 
 # Engagement analytics — idempotent column additions on messages.
 _ENGAGEMENT_ANALYTICS_MIGRATIONS = (
+    # Multi-tenant scoping: every inbound/outbound message is tagged with the
+    # creator slug at write time. Without this column, save_message() crashes
+    # on a fresh deploy because the operator service owns the equivalent ALTER.
+    # Existing single-tenant rows default to 'zarna' to preserve historical data.
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS creator_slug        TEXT NOT NULL DEFAULT 'zarna'",
+    "CREATE INDEX IF NOT EXISTS idx_messages_creator_slug ON messages (creator_slug)",
     # Context columns written at reply generation time
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS intent              TEXT",
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS tone_mode           TEXT",
@@ -489,12 +495,17 @@ class PostgresStorage(BaseStorage):
                         cur.execute(sql)
                     for sql in _SMB_OUTREACH_MIGRATIONS:
                         cur.execute(sql)
-                # conversation_sessions lives in session_manager — ensure it exists here too
+                # conversation_sessions lives in session_manager — ensure it exists here too.
+                # Failures here are non-fatal (analytics-only), but must be visible in logs:
+                # silently swallowing them previously hid real schema-drift bugs in prod.
                 try:
                     from app.analytics.session_manager import ensure_session_tables
                     ensure_session_tables()
                 except Exception:
-                    pass
+                    logger.exception(
+                        "ensure_session_tables() failed during _ensure_tables — "
+                        "conversation_sessions analytics may be degraded"
+                    )
         except (psycopg2.errors.UniqueViolation, psycopg2.errors.DeadlockDetected):
             # Another worker won the race and already ran the migrations.
             # All DDL is idempotent (IF NOT EXISTS / ADD COLUMN IF NOT EXISTS)

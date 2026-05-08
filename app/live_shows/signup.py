@@ -64,9 +64,18 @@ def _event_category(show: dict) -> str:
     return v
 
 
-def try_live_show_signup(phone_number: str, message_text: str, channel: str) -> LiveShowSignupResult:
+def try_live_show_signup(
+    phone_number: str,
+    message_text: str,
+    channel: str,
+    creator_slug: Optional[str] = None,
+) -> LiveShowSignupResult:
     """
     Record signup when a live show's rules match.
+
+    creator_slug: which tenant's bot received this signup. Propagated to
+    contacts.creator_slug so multi-tenant deployments don't silently tag every
+    new contact as 'zarna'.
 
     Comedy or live stream + keyword-only: random confirmation SMS (new vs repeat);
     other categories: keyword-only suppresses AI, no SMS.
@@ -104,7 +113,7 @@ def try_live_show_signup(phone_number: str, message_text: str, channel: str) -> 
                     continue
 
             sid = show["id"]
-            inserted = repo.add_signup(sid, phone_number, channel)
+            inserted = repo.add_signup(sid, phone_number, channel, creator_slug=creator_slug)
             if inserted:
                 logger.info(
                     "Live show signup: show_id=%s phone=...%s channel=%s",
