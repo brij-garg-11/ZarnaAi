@@ -1,0 +1,4 @@
+{
+  "_note": "Empty facts file for staging test creator. RAG retrieval will return nothing, the bot will rely entirely on the persona in creator_config/brij-test.json.",
+  "facts": []
+}
