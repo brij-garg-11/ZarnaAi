@@ -77,9 +77,10 @@ def _target_slug() -> Optional[str]:
     user = current_user()
     if not user:
         return None
-    # If super-admin is currently "viewing as" another project, use that slug.
-    # resolve_slug() centralises that logic.
-    return resolve_slug() or user.get("creator_slug")
+    # resolve_slug() returns (slug, error_code). Use the slug if it's
+    # available; fall back to the user's own creator_slug otherwise.
+    slug, _err = resolve_slug()
+    return slug or user.get("creator_slug")
 
 
 # ── POST /api/admin/staging/add-test-fan ──────────────────────────────────────
