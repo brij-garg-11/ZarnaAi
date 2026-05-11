@@ -49,12 +49,18 @@ CREATE INDEX IF NOT EXISTS messages_phone_created
 """
 
 # Additive migrations — safe to run on every startup (idempotent)
+# fan_score + fan_tier were previously created lazily by the
+# operator/scripts/score_fans.py cron, but the operator dashboard's inbox
+# query references them and 500s if the cron hasn't run yet (e.g. on a
+# fresh staging DB). Add them here so every main-app boot self-heals.
 _MIGRATIONS = """
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_memory    TEXT    DEFAULT '';
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_tags      TEXT[]  DEFAULT '{}';
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_location  TEXT    DEFAULT '';
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_name      TEXT    DEFAULT '';
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS creator_slug  TEXT    NOT NULL DEFAULT 'zarna';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_score     INT     DEFAULT 0;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_tier      TEXT    DEFAULT 'engaged';
 """
 
 # One statement per execute — psycopg2 limitation.
