@@ -93,6 +93,7 @@ def create_app() -> Flask:
     from .routes.smb_portal import smb_portal_bp
     from .routes.api import api_bp
     from .routes.billing import billing_bp
+    from .routes.staging import staging_bp
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(shows_bp)
@@ -101,6 +102,7 @@ def create_app() -> Flask:
     app.register_blueprint(smb_portal_bp)
     app.register_blueprint(api_bp)
     app.register_blueprint(billing_bp)
+    app.register_blueprint(staging_bp)
 
     # ── CSRF protection for state-changing API requests ────────────────────
     # All /api/* POST/PUT/PATCH/DELETE requests must originate from an allowed

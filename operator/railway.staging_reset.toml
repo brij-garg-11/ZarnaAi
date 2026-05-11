@@ -1,0 +1,32 @@
+# Daily 3am UTC cron that wipes + re-seeds staging test data.
+#
+# IMPORTANT — staging only. Wired to ENVIRONMENT=staging service vars and the
+# staging Postgres URL. Never deploy this against the prod operator project.
+#
+# Deploy (one-time, when you want auto-reset on):
+#   railway link --project zarna-operator-staging
+#   railway up --service staging-reset --config operator/railway.staging_reset.toml
+#
+# Deploys as a separate Railway service that runs the reset script on a cron
+# schedule. The script connects to STAGING_MAIN_DB_URL via the public viaduct
+# proxy because cross-service DATABASE_URL access is project-scoped on Railway.
+
+[build]
+  builder = "DOCKERFILE"
+  dockerfilePath = "operator/Dockerfile"
+
+[deploy]
+  startCommand = "python scripts/reset_staging_db.py"
+  restartPolicyType = "NEVER"
+
+[deploy.cron]
+  # Every day at 03:00 UTC (~7pm Pacific previous day, 11pm Eastern previous
+  # day). Quietest hour for testing — most contributors are off-hours.
+  schedule = "0 3 * * *"
+
+# Required service env vars (set via Railway UI on the staging-reset service):
+#   STAGING_MAIN_DB_URL        DATABASE_PUBLIC_URL of zarna-staging Postgres
+#   STAGING_OWNER_PASSWORD     bootstrap password from 1Password
+#
+# Already-set service vars (auto-imported, no action needed):
+#   none — this service has no other dependencies
