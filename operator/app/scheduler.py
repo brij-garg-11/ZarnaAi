@@ -57,26 +57,39 @@ def _check_trial_alerts():
         rows_low = rows_exhausted = []
         try:
             with conn.cursor() as cur:
-                # Low-credits alert (< 200 remaining, not yet notified)
+                # Low-credits alert (< 200 remaining, not yet notified).
+                # Only email the account owner — team members share the owner's
+                # credits and should not receive billing emails themselves.
                 cur.execute("""
-                    SELECT id, email
-                    FROM   operator_users
-                    WHERE  plan_tier = 'trial'
-                      AND  trial_credits_remaining IS NOT NULL
-                      AND  trial_credits_remaining > 0
-                      AND  trial_credits_remaining < 200
-                      AND  (sent_trial_low_alert IS NULL OR sent_trial_low_alert = FALSE)
+                    SELECT u.id, u.email
+                    FROM   operator_users u
+                    WHERE  u.plan_tier = 'trial'
+                      AND  u.trial_credits_remaining IS NOT NULL
+                      AND  u.trial_credits_remaining > 0
+                      AND  u.trial_credits_remaining < 200
+                      AND  (u.sent_trial_low_alert IS NULL OR u.sent_trial_low_alert = FALSE)
+                      AND  NOT EXISTS (
+                               SELECT 1 FROM team_members tm
+                               WHERE  tm.user_id = u.id
+                                 AND  tm.role = 'member'
+                           )
                 """)
                 rows_low = cur.fetchall()
 
-                # Exhausted alert (0 remaining, not yet notified)
+                # Exhausted alert (0 remaining, not yet notified).
+                # Same owner-only restriction.
                 cur.execute("""
-                    SELECT id, email
-                    FROM   operator_users
-                    WHERE  plan_tier = 'trial'
-                      AND  trial_credits_remaining IS NOT NULL
-                      AND  trial_credits_remaining <= 0
-                      AND  (sent_trial_exhausted_alert IS NULL OR sent_trial_exhausted_alert = FALSE)
+                    SELECT u.id, u.email
+                    FROM   operator_users u
+                    WHERE  u.plan_tier = 'trial'
+                      AND  u.trial_credits_remaining IS NOT NULL
+                      AND  u.trial_credits_remaining <= 0
+                      AND  (u.sent_trial_exhausted_alert IS NULL OR u.sent_trial_exhausted_alert = FALSE)
+                      AND  NOT EXISTS (
+                               SELECT 1 FROM team_members tm
+                               WHERE  tm.user_id = u.id
+                                 AND  tm.role = 'member'
+                           )
                 """)
                 rows_exhausted = cur.fetchall()
         finally:

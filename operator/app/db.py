@@ -486,6 +486,14 @@ def init_db():
         WHERE  creator_slug IN ('zarna', 'west_side_comedy')
           AND  plan_tier <> 'grandfathered'
         """,
+        # Grandfather the operator owner account by email (pre-dates Stripe signup).
+        """
+        UPDATE operator_users
+        SET    plan_tier = 'grandfathered',
+               trial_credits_remaining = 0
+        WHERE  email = 'brijgarg286@gmail.com'
+          AND  plan_tier <> 'grandfathered'
+        """,
 
         # ── Smart Send: engagement score on contacts ──────────────────────
         # Recomputed nightly based on reply recency, session depth, click activity.
@@ -543,6 +551,42 @@ def init_db():
                     AND  LENGTH(oi.data_b64) > 0
                )
         """,
+
+        # ── Client alerts ──────────────────────────────────────────────────────
+        # Persisted failures/warnings per creator_slug. The client-facing API
+        # strips the `detail` field — only operator admins see the raw detail.
+        """
+        CREATE TABLE IF NOT EXISTS client_alerts (
+            id           BIGSERIAL PRIMARY KEY,
+            creator_slug TEXT NOT NULL,
+            alert_type   TEXT NOT NULL,
+            severity     TEXT NOT NULL DEFAULT 'warning',
+            title        TEXT NOT NULL,
+            summary      TEXT NOT NULL,
+            detail       TEXT,
+            occurred_at  TIMESTAMPTZ DEFAULT NOW(),
+            resolved_at  TIMESTAMPTZ,
+            is_resolved  BOOLEAN DEFAULT FALSE
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_client_alerts_slug ON client_alerts(creator_slug, is_resolved, occurred_at DESC)",
+
+        # ── AI cost log ────────────────────────────────────────────────────────
+        # One row per successful LLM call. Used for operator-internal P&L.
+        # Clients never see this data.
+        """
+        CREATE TABLE IF NOT EXISTS ai_cost_log (
+            id             BIGSERIAL PRIMARY KEY,
+            creator_slug   TEXT NOT NULL,
+            log_date       DATE NOT NULL,
+            model          TEXT NOT NULL,
+            input_tokens   BIGINT DEFAULT 0,
+            output_tokens  BIGINT DEFAULT 0,
+            cost_usd       NUMERIC(10,6) DEFAULT 0,
+            logged_at      TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_ai_cost_log_slug_date ON ai_cost_log(creator_slug, log_date)",
     ]
 
     conn = get_conn()
