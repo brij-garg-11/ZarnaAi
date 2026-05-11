@@ -9,27 +9,32 @@
 
 | Thing | Value |
 |---|---|
-| **Main app (SMS)** | https://web-production-d7b70.up.railway.app |
+| **Main app (SMS) — brij-test** | https://web-production-d7b70.up.railway.app — answers `+1 (573) 229-0656` |
+| **Main app (SMS) — alice-test** | https://web-alice-test-production.up.railway.app — answers `+1 (701) 587-2535` |
 | **Operator (API + dashboard backend)** | https://operator-production-9330.up.railway.app |
 | **Lovable frontend (staging dashboard)** | https://zar-chat-magic.lovable.app — remix of prod `zar-fan-connect`, hardcoded API base + Stripe test key + Google Client ID, orange "STAGING" banner pinned to the top of every page |
-| **Staging Twilio number** | `+1 (573) 229-0656` |
-| **Operator login email** | `brijgarg286@gmail.com` |
-| **Operator login password** | (ask Brij — stored in 1Password as "Zarna Staging — operator login") |
-| **Trial credits seeded** | `10` (so credit limit hits fast) |
+| **Staging Twilio numbers** | `+1 (573) 229-0656` (brij-test) and `+1 (701) 587-2535` (alice-test) |
+| **Seeded operator logins** (same shared password — see 1Password) | `brijgarg286@gmail.com` (brij-test, performer, owner) · `alice-test@staging.zar.bot` (alice-test, performer) · `westside-test@staging.zar.bot` (westside-test, business) |
+| **Trial credits seeded** | `50` per account |
 | **Stripe test card** | `4242 4242 4242 4242`, any future expiry, any CVC, any ZIP |
 | **Stripe webhook ID** | `we_1TVLc9HCxNGsWyPBXmx3NavI` → `https://operator-production-9330.up.railway.app/api/billing/webhook` |
-| **Twilio webhook** | SMS → `https://web-production-d7b70.up.railway.app/twilio/webhook` |
+| **Twilio webhook (brij-test)** | SMS → `https://web-production-d7b70.up.railway.app/twilio/webhook` |
+| **Twilio webhook (alice-test)** | SMS → `https://web-alice-test-production.up.railway.app/twilio/webhook` |
 | **API_SECRET_KEY** (for direct `/message` tests, no Twilio sig needed) | (ask Brij — stored in 1Password as "Zarna Staging — API_SECRET_KEY") |
 
-Pre-seeded test fans (creator_slug = `brij-test`):
-| Phone | Notes |
-|---|---|
-| `+15005550006` | Twilio "magic" number — accepts SMS (no real delivery, but the send succeeds) |
-| `+15005550008` | Twilio magic — invalid number (use to test failure paths) |
-| `+15005550010` | Twilio magic — unavailable (use to test retry/queue) |
-| `+15005550003` | Twilio magic — international forbidden |
+**Pre-seeded test fans** — 20 per creator (`brij-test`, `alice-test`, `westside-test`):
+- 4 Twilio magic numbers (`+15005550006`, `+15005550008`, `+15005550010`, `+15005550003`) — useful for credit-deduction tests but **don't deliver real SMS** with our real-subaccount creds (Twilio rejects pre-billing).
+- 16 fake numbers in the `+1 555 0100–0102 XXXX` range — look like real phones in the UI but Twilio won't deliver. Used to populate the audience UI to a realistic size.
 
-> Twilio magic numbers don't deliver real SMS but the API call returns success/failure as if it did. To test a real-phone delivery, add your own number as a fan via the operator dashboard, then send a blast.
+> Want to test **actual SMS delivery** to your phone? Use the new staging-only endpoint:
+> ```bash
+> curl -X POST https://operator-production-9330.up.railway.app/api/admin/staging/add-test-fan \
+>   -H "Content-Type: application/json" \
+>   -H "Cookie: <your operator-session cookie from your browser DevTools>" \
+>   -d '{"phone": "415-555-1234", "name": "My phone"}'
+> ```
+> The endpoint returns 404 unless `ENVIRONMENT=staging` so it can never run on prod.
+> List/delete companions: `GET /api/admin/staging/test-fans`, `DELETE /api/admin/staging/test-fans/<phone>`.
 
 ### One-line smoke tests
 
@@ -89,15 +94,15 @@ This means: open a PR to `staging`, deploys to staging automatically, test there
 
 | Resource | Details |
 |---|---|
-| Twilio staging subaccount | Name: "Zarna Staging" — SID + auth token in Brij's 1Password and on both Railway services as `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` |
-| Staging phone number | `+1 (573) 229-0656` — SID stored alongside the subaccount creds |
+| Twilio staging subaccount | Name: "Zarna Staging" — SID + auth token in Brij's 1Password and on every Railway service as `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` |
+| Staging phone numbers | `+1 (573) 229-0656` (brij-test, SID stored in 1Password) and `+1 (701) 587-2535` (alice-test, SID stored in 1Password) |
 | Railway `zarna-staging` project | ID: `010345f4-4e61-48d1-bfcc-4b256cfa49f7`, Env ID: `4daaf956-b9b0-49fe-a799-1c9e6796a244` |
-| Railway `zarna-staging` web service | ID: `0d3be54b-3b8c-433f-9224-e51f52dca732`, root: `/`, branch: `staging` |
-| Railway `zarna-staging` Postgres | ID: `4481f2f8-08e5-4c81-9dc6-2a6be5287ec7` (provisioned via `templateDeployV2` — failed image-only attempt was 0e5cdcd7) |
+| Railway `zarna-staging` web service (brij-test) | ID: `0d3be54b-3b8c-433f-9224-e51f52dca732`, root: `/`, branch: `staging`, `CREATOR_SLUG=brij-test` |
+| Railway `zarna-staging` web-alice-test service | ID: `aeda864f-57dc-48e1-aec3-1d020a764e32`, root: `/`, branch: `staging`, `CREATOR_SLUG=alice-test`, domain: `web-alice-test-production.up.railway.app` |
+| Railway `zarna-staging` Postgres | ID: `4481f2f8-08e5-4c81-9dc6-2a6be5287ec7` — used by **all three** services (web brij-test, web-alice-test, operator). Cross-project access via the public `viaduct.proxy.rlwy.net` URL. |
 | Railway `zarna-operator-staging` project | ID: `ee8ee891-7ace-44d0-8582-d6b0078d263e`, Env ID: `41f7beda-dea2-445c-9d13-86383f6f7caf` |
-| Railway `zarna-operator-staging` operator service | ID: `0b929cca-565b-4ec4-ab97-57cee3094d4c`, root: `/operator`, branch: `staging` |
-| Railway `zarna-operator-staging` Postgres | ID: `2f5fa17f-c929-4f12-8387-df4217e443d1` |
-| Stripe webhook | ID: `we_1TVLc9HCxNGsWyPBXmx3NavI`, secret stored on both Railway services as `STRIPE_WEBHOOK_SECRET` |
+| Railway `zarna-operator-staging` operator service | ID: `0b929cca-565b-4ec4-ab97-57cee3094d4c`, root: `/operator`, branch: `staging` — `DATABASE_URL` points at the **main-app Postgres** (the operator's own Postgres `2f5fa17f-c929-4f12-8387-df4217e443d1` is now an unused orphan, safe to delete). |
+| Stripe webhook | ID: `we_1TVLc9HCxNGsWyPBXmx3NavI`, secret stored on all 3 services as `STRIPE_WEBHOOK_SECRET` |
 
 > All Twilio creds, Stripe keys, and Railway IDs are also stored in `.env` and on the Railway services themselves — single source of truth is Railway.
 
@@ -122,6 +127,11 @@ For posterity / future debugging — the actual sequence that was executed:
 13. ✅ Added `API_SECRET_KEY` so direct `POST /message` testing works without Twilio sigs.
 14. ✅ Remixed the prod `zar-fan-connect` Lovable project into a new "Zar Staging" project (`zar-chat-magic.lovable.app`). Hardcoded API base, Stripe test publishable key, Google Client ID. Added the orange "STAGING — test environment" banner pinned to the top of every page.
 15. ✅ Set `FRONTEND_URL` + Stripe checkout redirect URLs + `CORS_ALLOWED_ORIGINS` on the operator to point at the Lovable staging URL. CORS preflight verified.
+16. ✅ **Architectural fix**: pointed the operator's `DATABASE_URL` at the main-app Postgres so it can read `contacts` / `messages` (matches prod, where one project = one Postgres = both services share it). The original split-DB layout had the operator inbox showing zero conversations because each service was hitting its own table.
+17. ✅ **Multi-account fixtures**: added `creator_config/alice-test.json` (performer) and `creator_config/westside-test.json` (business) on the staging branch with empty training stubs. Rewrote `scripts/seed_staging_db.py` to seed all three creators with werkzeug password hashes (the original bcrypt hashes silently failed `check_password_hash`), 20 fake fans per creator, and a few sample messages.
+18. ✅ **Multi-tenant inbound**: bought a second Twilio number `+1 (701) 587-2535` from the staging subaccount, created `web-alice-test` Railway service in the same project pointing at the staging branch with `CREATOR_SLUG=alice-test`, configured the new number's webhook to that service. Brij can now text either number and get the right persona.
+19. ✅ **Staging-only utility endpoints**: added `operator/app/routes/staging.py` blueprint with POST `/api/admin/staging/add-test-fan`, GET `/api/admin/staging/test-fans`, DELETE `/api/admin/staging/test-fans/<phone>`. All return 404 unless `ENVIRONMENT=staging`.
+20. ✅ **Reset script**: `scripts/reset_staging_db.py` does an idempotent wipe of all `staging-seed`/`staging-manual` data and re-runs the seed. `--keep-real-fans` preserves anything not added by the seed. `operator/railway.staging_reset.toml` is a ready-to-deploy nightly cron config (file only — not deployed yet).
 
 ---
 
