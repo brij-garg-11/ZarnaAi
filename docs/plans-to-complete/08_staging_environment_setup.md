@@ -1,6 +1,6 @@
 # Staging Environment Setup Plan
 
-**Status:** LIVE as of 2026-05-09. Both backend services deploy on every push to the `staging` branch. Lovable frontend wiring is the only outstanding piece (see "Manual frontend setup" below).  
+**Status:** FULLY LIVE end-to-end as of 2026-05-10. Both backend services deploy on every push to the `staging` branch. The Lovable staging frontend (`zar-chat-magic.lovable.app`, a remix of the prod `zar-fan-connect`) is wired to the staging operator with CORS verified. You can sign up, log in, view the dashboard, send blasts, hit credit limits, and run Stripe test checkouts — all in your browser, nothing touches prod.  
 **Goal:** A fully isolated staging environment that mirrors prod so we can test blasts, credit limits, billing plans, and Stripe flows without touching real fans or charging real money.
 
 ---
@@ -11,7 +11,7 @@
 |---|---|
 | **Main app (SMS)** | https://web-production-d7b70.up.railway.app |
 | **Operator (API + dashboard backend)** | https://operator-production-9330.up.railway.app |
-| **Lovable frontend** | (pending — not yet wired to staging operator URL, currently still pointing at prod) |
+| **Lovable frontend (staging dashboard)** | https://zar-chat-magic.lovable.app — remix of prod `zar-fan-connect`, hardcoded API base + Stripe test key + Google Client ID, orange "STAGING" banner pinned to the top of every page |
 | **Staging Twilio number** | `+1 (573) 229-0656` |
 | **Operator login email** | `brijgarg286@gmail.com` |
 | **Operator login password** | (ask Brij — stored in 1Password as "Zarna Staging — operator login") |
@@ -120,8 +120,8 @@ For posterity / future debugging — the actual sequence that was executed:
 11. ✅ Configured Twilio webhook on `+15732290656` to `https://web-production-d7b70.up.railway.app/twilio/webhook` (NOT `/sms` — that's a common mistake).
 12. ✅ Wrote + ran `scripts/seed_staging_db.py` to seed operator user + 4 test fans.
 13. ✅ Added `API_SECRET_KEY` so direct `POST /message` testing works without Twilio sigs.
-
-Outstanding: Lovable frontend wiring (see "Manual frontend setup" below).
+14. ✅ Remixed the prod `zar-fan-connect` Lovable project into a new "Zar Staging" project (`zar-chat-magic.lovable.app`). Hardcoded API base, Stripe test publishable key, Google Client ID. Added the orange "STAGING — test environment" banner pinned to the top of every page.
+15. ✅ Set `FRONTEND_URL` + Stripe checkout redirect URLs + `CORS_ALLOWED_ORIGINS` on the operator to point at the Lovable staging URL. CORS preflight verified.
 
 ---
 
@@ -264,13 +264,15 @@ To add more (different plan tiers, opted-out fan, etc.), edit the `TEST_FANS` li
 
 ---
 
-## Manual frontend setup (the only remaining piece)
+## Frontend setup (DONE — for reference / future rebuilds)
 
-The Lovable frontend (`zar-fan-connect`) cannot be automated — Lovable's public API doesn't support project duplication or programmatic build-time env var changes (`VITE_*` vars need to be in the bundle at build time, and Lovable's "Cloud Secrets" only inject runtime/Edge-Function secrets, not Vite vars).
+The Lovable frontend setup cannot be automated — Lovable's public API doesn't support project duplication or programmatic build-time env var changes (`VITE_*` vars need to be in the bundle at build time, and Lovable's "Cloud Secrets" only inject runtime/Edge-Function secrets, not Vite vars).
 
-You have two paths:
+What we actually did: **remixed** the prod `zar-fan-connect` project into a new "Zar Staging" project (Lovable doesn't allow branches on the current plan, so a remix is the equivalent), and hardcoded staging URLs into the remix. The remix publishes to its own URL (`zar-chat-magic.lovable.app`) and the prod project (`zar-fan-connect.lovable.app`) is untouched.
 
-### Path A — Hardcode test values via Lovable AI chat (fastest, ~5 min)
+If you need to redo this from scratch (e.g. someone deletes the staging remix), use:
+
+### Path A — Remix + hardcode test values via Lovable AI chat (fastest, ~5 min)
 
 In Lovable's AI chat for the existing project, paste this prompt:
 
@@ -292,15 +294,17 @@ Lovable will give you a URL like `https://staging--zar-fan-connect.lovable.app`.
 
 If you don't need a UI, everything works via curl + the seed script. See "How to test things without the frontend" below.
 
-### After the frontend is wired
+### After the frontend is wired (DONE for the current setup)
 
-Send the staging frontend URL to the AI and ask it to update three env vars on the operator service:
-- `FRONTEND_URL=<staging frontend URL>`
-- `STRIPE_CHECKOUT_SUCCESS_URL=<staging frontend URL>/billing?status=success`
-- `STRIPE_CHECKOUT_CANCEL_URL=<staging frontend URL>/billing?status=cancel`
-- `CORS_ALLOWED_ORIGINS=<staging frontend URL>`
+These four operator env vars are set on `zarna-operator-staging` and pointed at `https://zar-chat-magic.lovable.app`:
+- `FRONTEND_URL`
+- `STRIPE_CHECKOUT_SUCCESS_URL` → `<frontend>/billing?status=success`
+- `STRIPE_CHECKOUT_CANCEL_URL` → `<frontend>/billing?status=cancel`
+- `CORS_ALLOWED_ORIGINS`
 
-Currently these point at the prod Lovable URL because that was the only known frontend at setup time. Stripe checkout flows will redirect users to prod until this is updated.
+CORS verified: `OPTIONS /api/auth/me` from `Origin: https://zar-chat-magic.lovable.app` returns `Access-Control-Allow-Origin: https://zar-chat-magic.lovable.app` and `Access-Control-Allow-Credentials: true`.
+
+If a future rebuild creates a frontend at a different URL, swap these four values via Railway's variable upsert API (or just ask the AI in this repo to do it for you).
 
 ---
 
@@ -360,10 +364,10 @@ The staging environment is a **deployed website**. Team members open a URL in th
 
 This is the default for Veer or any dev who wants to test features, create accounts, or verify UI changes.
 
-**What Brij does once (after deployment is live):**
-1. Share the staging operator dashboard URL with Veer (e.g. `https://zarna-operator-staging.up.railway.app`)
-2. Optionally: create a pre-made account for Veer in the staging DB so he can log in immediately
-3. Tell him: "Use test card `4242 4242 4242 4242` for any Stripe payment. SMS goes to/from `+1 (573) 229-0656`."
+**What Brij does once:**
+1. Share the staging dashboard URL with Veer: **https://zar-chat-magic.lovable.app**
+2. Optionally: create a pre-made account for Veer by adding a row to `operator_users` in the staging operator DB, OR have him sign up himself at `/signup`.
+3. Tell him: "Use test card `4242 4242 4242 4242` for any Stripe checkout. SMS goes to/from `+1 (573) 229-0656`. The orange banner at the top tells you you're on staging."
 
 **What Veer does:**
 - Opens the URL
