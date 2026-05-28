@@ -26,6 +26,7 @@ from twilio.rest import Client
 from app.config import (
     TWILIO_ACCOUNT_SID,
     TWILIO_AUTH_TOKEN,
+    TWILIO_MESSAGING_SERVICE_SID,
     TWILIO_PHONE_NUMBER,
 )
 
@@ -93,13 +94,18 @@ class TwilioAdapter:
         account_sid: str = TWILIO_ACCOUNT_SID,
         auth_token: str = TWILIO_AUTH_TOKEN,
         from_number: str = TWILIO_PHONE_NUMBER,
+        messaging_service_sid: str = TWILIO_MESSAGING_SERVICE_SID,
     ):
         self._account_sid = account_sid
         self._auth_token = auth_token
         self._from_number = from_number
+        self._messaging_service_sid = messaging_service_sid
         self._client = Client(account_sid, auth_token) if account_sid and auth_token else None
         self._validator = RequestValidator(auth_token) if auth_token else None
-        logger.info("TwilioAdapter initialised (from=%s)", from_number or "not set")
+        if messaging_service_sid:
+            logger.info("TwilioAdapter initialised (messaging_service_sid=%s)", messaging_service_sid)
+        else:
+            logger.info("TwilioAdapter initialised (from=%s)", from_number or "not set")
 
     # ------------------------------------------------------------------
     # Webhook signature validation (call this in the route)
@@ -198,14 +204,31 @@ class TwilioAdapter:
             final_to = _strip_whatsapp_prefix(to_number)
             final_from = _strip_whatsapp_prefix(effective_from)
 
-        logger.info(
-            "Sending Twilio reply via channel=%s from=%s to=%s",
-            "whatsapp" if is_whatsapp else "sms",
-            final_from,
-            final_to,
-        )
+        # Route through the verified A2P messaging service when available.
+        # WhatsApp still requires an explicit from_ number, so only use the
+        # messaging service SID for standard SMS.
+        use_service_sid = self._messaging_service_sid and not is_whatsapp
 
-        create_kwargs: dict = {"to": final_to, "from_": final_from, "body": body}
+        if use_service_sid:
+            logger.info(
+                "Sending Twilio reply via A2P messaging service %s to=%s",
+                self._messaging_service_sid,
+                final_to,
+            )
+            create_kwargs: dict = {
+                "to": final_to,
+                "messaging_service_sid": self._messaging_service_sid,
+                "body": body,
+            }
+        else:
+            logger.info(
+                "Sending Twilio reply via channel=%s from=%s to=%s",
+                "whatsapp" if is_whatsapp else "sms",
+                final_from,
+                final_to,
+            )
+            create_kwargs: dict = {"to": final_to, "from_": final_from, "body": body}
+
         if media_url:
             create_kwargs["media_url"] = [media_url]
 
