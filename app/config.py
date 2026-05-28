@@ -112,8 +112,9 @@ SLICKTEXT_BRAND_ID = os.getenv("SLICKTEXT_BRAND_ID", "")
 # console.twilio.com → Account Dashboard → Account SID + Auth Token
 # Phone number in E.164 format, e.g. +18557689537
 TWILIO_ACCOUNT_SID  = os.getenv("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN   = os.getenv("TWILIO_AUTH_TOKEN", "")
-TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
+TWILIO_AUTH_TOKEN            = os.getenv("TWILIO_AUTH_TOKEN", "")
+TWILIO_PHONE_NUMBER          = os.getenv("TWILIO_PHONE_NUMBER", "")
+TWILIO_MESSAGING_SERVICE_SID = os.getenv("TWILIO_MESSAGING_SERVICE_SID", "")
 
 # --- Live show broadcasts (optional) ---
 # LIVE_SHOW_BROADCAST_PROVIDER = slicktext | twilio | auto (default: auto)
