@@ -2343,6 +2343,7 @@ def bot_data():
 
     # ── Performer bot config ──
     # 1. Try DB first (self-serve accounts always have a bot_configs row)
+    from ..branding import PERFORMER_COMPLIANCE_FOOTER
     db_cfg = _load_performer_config_from_db(slug)
     if db_cfg is not None:
         links = db_cfg.get("links", {})
@@ -2360,9 +2361,16 @@ def bot_data():
                 "merch": links.get("merch", ""),
                 "book": links.get("book", ""),
                 "youtube": links.get("youtube", ""),
+                "website": links.get("website", db_cfg.get("website_url", "")),
             },
             banned_words=db_cfg.get("banned_words", []),
             name_variants=db_cfg.get("name_variants", []),
+            # SMS profile + first-message (opt-in) — new My Bot sections
+            sms_display_name=db_cfg.get("sms_display_name", db_cfg.get("name", "")),
+            profile_photo_url=db_cfg.get("profile_photo_url", ""),
+            send_contact_card=bool(db_cfg.get("send_contact_card", False)),
+            first_message=db_cfg.get("first_message", ""),
+            compliance_footer=PERFORMER_COMPLIANCE_FOOTER,
             edits_used=0,
             edits_limit=20,
         )
@@ -2378,7 +2386,7 @@ def bot_data():
 
     links = cfg.get("links", {})
     return jsonify(
-        name=cfg.get("name", ""),
+        name=cfg.get("name", cfg.get("display_name", "")),
         bio=cfg.get("bio", ""),
         description=cfg.get("description", ""),
         voice_style=cfg.get("voice_style", ""),
@@ -2391,9 +2399,16 @@ def bot_data():
             "merch": links.get("merch", ""),
             "book": links.get("book", ""),
             "youtube": links.get("youtube", ""),
+            "website": links.get("website", cfg.get("website_url", "")),
         },
         banned_words=cfg.get("banned_words", []),
         name_variants=cfg.get("name_variants", []),
+        # SMS profile + first-message (opt-in) — new My Bot sections
+        sms_display_name=cfg.get("sms_display_name", cfg.get("name", cfg.get("display_name", ""))),
+        profile_photo_url=cfg.get("profile_photo_url", ""),
+        send_contact_card=bool(cfg.get("send_contact_card", False)),
+        first_message=cfg.get("first_message", ""),
+        compliance_footer=PERFORMER_COMPLIANCE_FOOTER,
         edits_used=0,
         edits_limit=20,
     )
@@ -2456,6 +2471,8 @@ def save_bot_data():
     allowed_performer = {
         "name", "bio", "description", "tone", "voice_style",
         "website_url", "podcast_url", "media_urls", "banned_words", "links",
+        # SMS profile + first-message (opt-in) — new My Bot sections
+        "sms_display_name", "profile_photo_url", "send_contact_card", "first_message",
     }
     updates = {k: v for k, v in data.items() if k in allowed_performer}
     if not updates:
