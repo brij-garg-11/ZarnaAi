@@ -378,6 +378,23 @@ def init_db():
             USING hnsw ((embedding::halfvec(3072)) halfvec_cosine_ops)
         """,
 
+        # creator_numbers: phone-number → creator routing registry. Written by
+        # the provisioning phone step (operator); READ by the main app's
+        # /twilio/webhook to pick the right creator's brain for an inbound
+        # message (multi-tenant "apartment building" routing). number_sid is
+        # kept so the number can be released back to Twilio on cancellation.
+        """
+        CREATE TABLE IF NOT EXISTS creator_numbers (
+            phone_number TEXT PRIMARY KEY,
+            creator_slug TEXT NOT NULL,
+            number_sid   TEXT DEFAULT '',
+            account_type TEXT NOT NULL DEFAULT 'performer',
+            status       TEXT NOT NULL DEFAULT 'active',
+            created_at   TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_creator_numbers_slug ON creator_numbers(creator_slug, status)",
+
         # Provisioning status tracking on bot_configs — surfaces pipeline
         # failures to the frontend (e.g. scraper broke, Gemini rate-limited).
         "ALTER TABLE bot_configs ADD COLUMN IF NOT EXISTS error_message TEXT",
@@ -587,6 +604,29 @@ def init_db():
         )
         """,
         "CREATE INDEX IF NOT EXISTS idx_ai_cost_log_slug_date ON ai_cost_log(creator_slug, log_date)",
+
+        # ── Access requests (B2B "Apply for access" leads) ──────────────────
+        # Public apply form writes here. A lead is NOT an account — it creates
+        # no operator_users / bot_configs row. An operator reviews leads in HQ
+        # and, on approval, builds the bot + invites the client.
+        """
+        CREATE TABLE IF NOT EXISTS access_requests (
+            id               BIGSERIAL    PRIMARY KEY,
+            name             TEXT         NOT NULL,
+            email            TEXT         NOT NULL,
+            account_type     TEXT         NOT NULL DEFAULT 'performer',
+            link             TEXT         NOT NULL DEFAULT '',
+            goal             TEXT         NOT NULL DEFAULT '',
+            phone            TEXT         NOT NULL DEFAULT '',
+            source           TEXT         NOT NULL DEFAULT '',
+            status           TEXT         NOT NULL DEFAULT 'new',
+            operator_user_id BIGINT       REFERENCES operator_users(id) ON DELETE SET NULL,
+            reviewed_by      BIGINT       REFERENCES operator_users(id) ON DELETE SET NULL,
+            reviewed_at      TIMESTAMPTZ,
+            created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_access_requests_status ON access_requests(status, created_at)",
     ]
 
     conn = get_conn()
