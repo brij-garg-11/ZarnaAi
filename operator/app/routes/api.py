@@ -481,6 +481,7 @@ def audience_frequency():
 
             cur.execute("""
                 SELECT
+                    c.phone_number                                          AS phone_number,
                     RIGHT(c.phone_number, 4)                                AS phone_last4,
                     c.fan_tier,
                     c.fan_tags,
@@ -512,6 +513,7 @@ def audience_frequency():
             ],
             recent_blasted=[
                 {
+                    "phone_number": r["phone_number"],
                     "phone_last4": r["phone_last4"],
                     "fan_tier": r["fan_tier"],
                     "fan_tags": list(r["fan_tags"] or []),
@@ -597,6 +599,7 @@ def inbox():
     for r in rows:
         tags = r["fan_tags"] or []
         conversations.append({
+            "phone_number": r["phone_number"],
             "phone_last4": r["phone_last4"],
             "last_message_at": r["last_message_at"].isoformat() if r["last_message_at"] else None,
             "first_message_at": r["first_message_at"].isoformat() if r["first_message_at"] else None,
@@ -619,13 +622,55 @@ def inbox():
     )
 
 
+def _resolve_fan_phone(cur, ident: str, slug: str):
+    """
+    Resolve a fan's full phone number from a URL identifier, scoped to a creator.
+
+    Accepts either the last-4 digits (legacy) OR a full phone number — so the
+    dashboard can route by the full number now that it's displayed. If multiple
+    fans share the same last-4, returns the most recently active one.
+    Returns the full phone string, or None.
+    """
+    import re
+    digits = re.sub(r"\D", "", ident or "")
+    if len(digits) > 4:
+        # Treat as a full number; match on trailing digits so +1 / formatting
+        # differences don't cause a miss.
+        cur.execute(
+            r"""
+            SELECT phone_number FROM messages
+            WHERE creator_slug = %s
+              AND regexp_replace(phone_number, '\D', '', 'g') LIKE %s
+            GROUP BY phone_number
+            ORDER BY MAX(created_at) DESC
+            LIMIT 1
+            """,
+            (slug, "%" + digits),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT phone_number FROM messages
+            WHERE RIGHT(phone_number, 4) = %s AND creator_slug = %s
+            GROUP BY phone_number
+            ORDER BY MAX(created_at) DESC
+            LIMIT 1
+            """,
+            (digits, slug),
+        )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return row[0]
+
+
 @api_bp.route("/api/inbox/<phone_last4>/thread")
 @login_required
 def inbox_thread(phone_last4):
     """
-    Full message thread for a fan identified by their last-4 phone digits.
-    If multiple fans share the same last-4, returns the most recently active one.
-    Scoped to the logged-in user's authorized creator_slug.
+    Full message thread for a fan identified by their last-4 phone digits OR
+    full phone number. Returns the complete stored conversation (no limit),
+    scoped to the logged-in user's authorized creator_slug.
     """
     _require_performer_account()
     _slug = _slug_or_abort()
@@ -633,19 +678,9 @@ def inbox_thread(phone_last4):
         conn = get_conn()
         import psycopg2.extras
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            # Find the full phone number (most recent match, scoped to this creator)
-            cur.execute("""
-                SELECT phone_number FROM messages
-                WHERE RIGHT(phone_number, 4) = %s AND creator_slug = %s
-                GROUP BY phone_number
-                ORDER BY MAX(created_at) DESC
-                LIMIT 1
-            """, (phone_last4, _slug))
-            row = cur.fetchone()
-            if not row:
+            phone = _resolve_fan_phone(cur, phone_last4, _slug)
+            if not phone:
                 return jsonify(messages=[], fan={}), 404
-
-            phone = row["phone_number"]
 
             cur.execute("""
                 SELECT role, text AS body, created_at, intent, tone_mode, sell_variant
@@ -685,7 +720,12 @@ def inbox_thread(phone_last4):
         logger.exception("api: failed to fetch thread for %s", phone_last4)
         return jsonify(messages=[], fan={}), 500
 
-    return jsonify(messages=messages, fan=fan, phone_last4=phone_last4)
+    return jsonify(
+        messages=messages,
+        fan=fan,
+        phone_number=phone,
+        phone_last4=phone[-4:],
+    )
 
 
 @api_bp.route("/api/inbox/<phone_last4>/send", methods=["POST"])
@@ -738,23 +778,14 @@ def api_inbox_send(phone_last4):
     try:
         conn = get_conn()
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT phone_number FROM messages
-                WHERE RIGHT(phone_number, 4) = %s AND creator_slug = %s
-                GROUP BY phone_number
-                ORDER BY MAX(created_at) DESC
-                LIMIT 1
-            """, (phone_last4, _slug_for_send))
-            row = cur.fetchone()
+            phone = _resolve_fan_phone(cur, phone_last4, _slug_for_send)
         conn.close()
     except Exception as e:
         logger.exception("api_inbox_send: phone lookup failed")
         return jsonify(success=False, error="Could not resolve phone number."), 500
 
-    if not row:
-        return jsonify(success=False, error=f"No fan found with last-4 '{phone_last4}'."), 404
-
-    phone = row[0]
+    if not phone:
+        return jsonify(success=False, error=f"No fan found for '{phone_last4}'."), 404
 
     # Send via SlickText (all outbound messages use SlickText until Twilio inbound is live)
     try:
@@ -1726,6 +1757,7 @@ def fan_of_the_week():
                 return jsonify(
                     found=True,
                     saved=True,
+                    phone_number=saved["phone_number"],
                     phone_last4=saved["phone_last4"],
                     body=saved["message_text"] or "",
                     week_of=saved["week_of"].isoformat(),
@@ -1756,6 +1788,7 @@ def fan_of_the_week():
     return jsonify(
         found=True,
         saved=False,
+        phone_number=row["phone_number"],
         phone_last4=row["phone_last4"],
         body=row["message_text"],
         created_at=row["msg_at"].isoformat(),
@@ -1798,6 +1831,7 @@ def fan_of_the_week_candidates():
     for r in rows:
         tags = r["fan_tags"] or []
         candidates.append({
+            "phone_number": r["phone_number"],
             "phone_last4": r["phone_last4"],
             "message_text": r["message_text"],
             "msg_at": r["msg_at"].isoformat(),
@@ -1818,36 +1852,27 @@ def fan_of_the_week_candidates():
 def fan_of_the_week_select():
     """
     Save the chosen Fan of the Week for the current week.
-    Body: { "phone_last4": "1234", "message_text": "..." }
+    Body: { "phone_number": "+12125551234" (or "phone_last4": "1234"), "message_text": "..." }
     Also tags the contact with 'fan_of_the_week'.
     """
     _require_performer_account()
     _slug_fotw = _slug_or_abort()
     import psycopg2.extras
     data = request.get_json(silent=True) or {}
-    phone_last4 = (data.get("phone_last4") or "").strip()
+    # Accept either the full number (preferred now that it's shown) or last-4.
+    ident = (data.get("phone_number") or data.get("phone_last4") or "").strip()
     message_text = (data.get("message_text") or "").strip()[:500]
 
-    if not phone_last4:
-        return jsonify(ok=False, error="phone_last4 required"), 400
+    if not ident:
+        return jsonify(ok=False, error="phone_number or phone_last4 required"), 400
 
     try:
         conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            # Resolve last-4 to full phone number, scoped to this creator
-            cur.execute("""
-                SELECT phone_number FROM messages
-                WHERE RIGHT(phone_number, 4) = %s AND creator_slug = %s
-                GROUP BY phone_number
-                ORDER BY MAX(created_at) DESC
-                LIMIT 1
-            """, (phone_last4, _slug_fotw))
-            row = cur.fetchone()
-            if not row:
+            phone = _resolve_fan_phone(cur, ident, _slug_fotw)
+            if not phone:
                 conn.close()
                 return jsonify(ok=False, error="Fan not found"), 404
-
-            phone = row["phone_number"]
 
             # Upsert the pick for this week, scoped to this creator
             cur.execute("""
@@ -1876,7 +1901,7 @@ def fan_of_the_week_select():
         logger.exception("api: failed to save fan of the week selection")
         return jsonify(ok=False, error="DB error"), 500
 
-    return jsonify(ok=True, phone_last4=phone_last4)
+    return jsonify(ok=True, phone_number=phone, phone_last4=phone[-4:])
 
 
 @api_bp.route("/api/fan-of-the-week/history")
@@ -1897,6 +1922,7 @@ def fan_of_the_week_history():
                     f.week_of,
                     f.message_text,
                     f.selected_at,
+                    f.phone_number            AS phone_number,
                     RIGHT(f.phone_number, 4)  AS phone_last4,
                     c.fan_tier,
                     c.fan_tags,
@@ -1920,6 +1946,7 @@ def fan_of_the_week_history():
         tags = r["fan_tags"] or []
         history.append({
             "week_of": r["week_of"].isoformat(),
+            "phone_number": r["phone_number"],
             "phone_last4": r["phone_last4"],
             "message_text": (r["message_text"] or "")[:200],
             "selected_at": r["selected_at"].isoformat() if r["selected_at"] else None,

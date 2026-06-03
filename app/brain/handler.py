@@ -2,6 +2,7 @@ import logging
 import os
 import random
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
@@ -13,6 +14,7 @@ from app.analytics.outcome_scorer import (
 from app.analytics.session_manager import get_or_create_session
 from app.brain.conversation_end import is_conversation_ender
 from app.brain.creator_config import CreatorConfig, load_creator
+from app.brain.cost_logger import log_ai_cost as _log_ai_cost
 from app.brain.emphasis import should_suppress_all_emphasis
 import app.brain.generator as _generator_mod
 from app.brain.generator import generate_zarna_reply, infer_reply_provider
@@ -253,6 +255,9 @@ class ZarnaBrain:
         ai_provider, ai_prompt_tokens, ai_completion_tokens = _generator_mod.get_last_usage()
         ai_cost = _generator_mod.calc_ai_cost(ai_provider, ai_prompt_tokens, ai_completion_tokens)
 
+        # Log AI spend to operator DB for per-client P&L (internal only, non-blocking).
+        _log_ai_cost(self.slug, ai_provider, ai_prompt_tokens, ai_completion_tokens, ai_cost)
+
         # Silently rewrite known URLs (website, podcast) to tracked /t/<slug> links
         # Phone number is embedded as ?f=<token> so clicks can be attributed to this fan.
         try:
@@ -396,3 +401,48 @@ def create_brain(slug: Optional[str] = None) -> ZarnaBrain:
         slug=slug,  # CRITICAL: drives load_creator() so multi-tenant brains
                     # use their own personality config, not Zarna's defaults.
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-slug brain cache (multi-tenant "apartment building")
+# ---------------------------------------------------------------------------
+# One main-app process serves many creators. Building a brain is non-trivial
+# (loads personality config + a retriever), so we memoise one brain per slug
+# and reuse it across inbound messages. Bounded so a flood of signups can't
+# grow memory without limit — least-recently-built brains are evicted (an
+# evicted brain stays alive until its in-flight requests release it; the next
+# message simply rebuilds it).
+_BRAIN_CACHE: "dict[str, ZarnaBrain]" = {}
+_BRAIN_CACHE_LOCK = threading.Lock()
+_BRAIN_CACHE_MAX = int(os.getenv("BRAIN_CACHE_MAX", "256"))
+
+
+def get_brain(slug: Optional[str]) -> ZarnaBrain:
+    """
+    Return a cached brain for `slug`, building it on first use.
+
+    Thread-safe. The (possibly slow) brain construction happens outside the
+    lock; `setdefault` collapses any concurrent first-builds for the same slug.
+    """
+    key = (slug or "").strip().lower() or "zarna"
+
+    with _BRAIN_CACHE_LOCK:
+        cached = _BRAIN_CACHE.get(key)
+        if cached is not None:
+            return cached
+
+    brain = create_brain(key)
+
+    with _BRAIN_CACHE_LOCK:
+        if key not in _BRAIN_CACHE and len(_BRAIN_CACHE) >= _BRAIN_CACHE_MAX:
+            # Evict the oldest-inserted brain to bound memory.
+            oldest = next(iter(_BRAIN_CACHE))
+            _BRAIN_CACHE.pop(oldest, None)
+            _logger.info("brain cache full — evicted %s to make room for %s", oldest, key)
+        return _BRAIN_CACHE.setdefault(key, brain)
+
+
+def reset_brain_cache() -> None:
+    """Clear the per-slug brain cache (used by tests and after config changes)."""
+    with _BRAIN_CACHE_LOCK:
+        _BRAIN_CACHE.clear()

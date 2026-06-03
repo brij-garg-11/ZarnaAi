@@ -100,6 +100,25 @@ Backend API contract you can rely on:
 >   renames are one line.
 > - Do not change API URLs or the `API_BASE` value.
 
+## Prompt 7 — Fix the leftover "ZarBot" logo on auth + dashboard screens
+
+> The marketing header/footer now say "twowaybot", but there's still a
+> hardcoded old wordmark elsewhere: the text **"Zar"** immediately followed by
+> **"Bot"** rendered in the accent color (`<span>Zar</span><span
+> class="text-accent">Bot</span>`). It appears on:
+> - the Apply page card (`/apply`)
+> - the Login page
+> - the Reset Password and Forgot Password pages
+> - the dashboard sidebar/header (the `DashboardShell`)
+>
+> Replace **every** instance of this "Zar"+"Bot" wordmark with the same
+> "twowaybot" wordmark used in the marketing site header. Centralize it into a
+> single shared `<Logo />` component (reading `BRAND` from `src/lib/brand.ts`)
+> and use that everywhere so the brand only lives in one place.
+>
+> Do NOT change API URLs, the `API_BASE` / `https://api.zar.bot` value, or any
+> localStorage keys (e.g. `zar.viewingAs`, `zar.previewAccountType`).
+
 ---
 
 ## Verify after submitting
@@ -109,4 +128,5 @@ Backend API contract you can rely on:
 3. A new lead appears in Operator HQ → **Leads** tab.
 4. `/login` still works and lands existing customers on `/dashboard`.
 5. No pricing/billing anywhere public.
-6. Brand reads "twowaybot" throughout.
+6. Brand reads "twowaybot" throughout — including the Apply card, Login,
+   Reset/Forgot Password, and the dashboard sidebar/header (no "ZarBot").

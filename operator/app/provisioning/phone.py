@@ -20,12 +20,39 @@ import hashlib
 import logging
 import os
 from typing import Optional
+from urllib.parse import quote
 
 from ..db import get_conn
+from . import twilio_numbers
 
 _log = logging.getLogger(__name__)
 
-_MODE = os.getenv("PROVISIONING_PHONE_MODE", "stub").lower()
+
+def _mode() -> str:
+    """Read the mode lazily so tests / env flips take effect without reimport."""
+    return os.getenv("PROVISIONING_PHONE_MODE", "stub").lower()
+
+
+def _webhook_url(slug: str, account_type: str) -> str:
+    """
+    Build the inbound-SMS webhook URL Twilio should POST to for this number.
+
+    TWILIO_WEBHOOK_BASE must point at the MAIN APP (where /twilio/webhook and
+    /smb/inbound live), NOT the operator service.
+
+    Performer numbers carry their tenant in `?slug=` so the multi-tenant main
+    app can pick the right brain; business numbers use the existing SMB router.
+    """
+    base = os.getenv("TWILIO_WEBHOOK_BASE", "").rstrip("/")
+    if not base:
+        raise RuntimeError(
+            "TWILIO_WEBHOOK_BASE is not set — cannot wire the inbound webhook. "
+            "Set it to the main app's public URL (e.g. https://app.zar.bot)."
+        )
+    q = quote(slug, safe="")
+    if account_type == "business":
+        return f"{base}/smb/inbound?tenant={q}"
+    return f"{base}/twilio/webhook?slug={q}"
 
 
 def _stub_phone_for_slug(slug: str) -> str:
@@ -86,6 +113,42 @@ def _save_phone_to_user(slug: str, phone_number: str) -> None:
         conn.close()
 
 
+def _save_number_registry(
+    phone_number: str,
+    slug: str,
+    number_sid: str = "",
+    account_type: str = "performer",
+) -> None:
+    """
+    Upsert the phone→slug routing row the main app reads on every inbound text.
+    Idempotent: re-provisioning the same number updates its row in place.
+    """
+    conn = get_conn()
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO creator_numbers
+                    (phone_number, creator_slug, number_sid, account_type, status)
+                VALUES (%s, %s, %s, %s, 'active')
+                ON CONFLICT (phone_number) DO UPDATE SET
+                    creator_slug = EXCLUDED.creator_slug,
+                    number_sid   = EXCLUDED.number_sid,
+                    account_type = EXCLUDED.account_type,
+                    status       = 'active'
+                """,
+                (phone_number, slug, number_sid, account_type),
+            )
+    except Exception:
+        # Never let a registry write failure abort provisioning — the orchestrator
+        # will still mark the slug live, and the main app falls back to the
+        # operator_users.phone_number → slug lookup if this row is missing.
+        _log.exception("phone[%s]: failed to write creator_numbers row", slug)
+    finally:
+        conn.close()
+
+
 def _ensure_phone_number_column() -> None:
     """
     Idempotent safety net: add phone_number column to operator_users if it
@@ -105,11 +168,12 @@ def _ensure_phone_number_column() -> None:
         conn.close()
 
 
-def buy_and_configure(slug: str) -> str:
+def buy_and_configure(slug: str, account_type: str = "performer") -> str:
     """
     Get (or create) a dedicated phone number for this creator.
 
-    Returns the E.164 phone number string.
+    Returns the E.164 phone number string. Idempotent: if a number is already
+    on file for this slug, it is returned without buying another.
     """
     _ensure_phone_number_column()
 
@@ -118,49 +182,110 @@ def buy_and_configure(slug: str) -> str:
         _log.info("phone[%s]: already provisioned (%s) — skipping", slug, existing)
         return existing
 
-    if _MODE == "real":
-        return _buy_real_number(slug)
+    if _mode() == "real":
+        return _buy_real_number(slug, account_type)
 
     stub = _stub_phone_for_slug(slug)
     _save_phone_to_user(slug, stub)
+    _save_number_registry(stub, slug, number_sid="", account_type=account_type)
     _log.info("phone[%s]: STUB assigned %s (PROVISIONING_PHONE_MODE=stub)", slug, stub)
     return stub
 
 
-def _buy_real_number(slug: str) -> str:
+def _twilio_client():
+    """Build a Twilio REST client from env. Raises if credentials are missing."""
+    from twilio.rest import Client  # deferred import — keeps module cheap for tests
+
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+    if not account_sid or not auth_token:
+        raise RuntimeError(
+            "TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN not set — cannot provision a number."
+        )
+    return Client(account_sid, auth_token)
+
+
+def _buy_real_number(slug: str, account_type: str = "performer") -> str:
     """
-    Real Twilio provisioning. NOT ACTIVE until PROVISIONING_PHONE_MODE=real
-    and TWILIO_MESSAGING_SERVICE_SID is set. Left as a clear TODO with the
-    exact Twilio SDK calls spelled out.
+    Buy a real Twilio number, wire its inbound webhook, and attach it to our
+    approved A2P messaging service. Active when PROVISIONING_PHONE_MODE=real.
+
+    The actual Twilio calls live in the dependency-free `twilio_numbers` module
+    (so they can be unit-tested with a fake client); this function supplies the
+    env-derived config and persists the result.
     """
-    # from twilio.rest import Client
-    # account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-    # auth_token  = os.getenv("TWILIO_AUTH_TOKEN")
-    # msg_svc_sid = os.getenv("TWILIO_MESSAGING_SERVICE_SID")
-    # webhook_base = os.getenv("TWILIO_WEBHOOK_BASE", "https://zarnaai.up.railway.app")
-    # client = Client(account_sid, auth_token)
-    #
-    # # 1. Find an available number
-    # available = client.available_phone_numbers("US").local.list(sms_enabled=True, limit=5)
-    # if not available:
-    #     raise RuntimeError("No Twilio numbers available in the US local pool")
-    # number_to_buy = available[0].phone_number
-    #
-    # # 2. Purchase it with the webhook wired to the SMB tenant router
-    # purchased = client.incoming_phone_numbers.create(
-    #     phone_number=number_to_buy,
-    #     sms_url=f"{webhook_base}/smb/inbound?tenant={slug}",
-    #     sms_method="POST",
-    # )
-    #
-    # # 3. Add it to the platform A2P messaging service
-    # client.messaging.v1.services(msg_svc_sid).phone_numbers.create(
-    #     phone_number_sid=purchased.sid,
-    # )
-    #
-    # _save_phone_to_user(slug, purchased.phone_number)
-    # return purchased.phone_number
-    raise NotImplementedError(
-        "Real Twilio provisioning not yet wired — "
-        "set PROVISIONING_PHONE_MODE=stub or finish _buy_real_number()."
+    client = _twilio_client()
+    msg_svc_sid = os.getenv("TWILIO_MESSAGING_SERVICE_SID", "")
+    area_code = os.getenv("TWILIO_PROVISION_AREA_CODE", "").strip() or None
+    webhook_url = _webhook_url(slug, account_type)
+
+    phone_number, number_sid = twilio_numbers.provision_number(
+        client,
+        webhook_url=webhook_url,
+        messaging_service_sid=msg_svc_sid or None,
+        area_code=area_code,
     )
+
+    _save_phone_to_user(slug, phone_number)
+    _save_number_registry(phone_number, slug, number_sid=number_sid, account_type=account_type)
+    _log.info(
+        "phone[%s]: REAL number %s provisioned (sid=%s, account_type=%s, webhook=%s)",
+        slug, phone_number, number_sid, account_type, webhook_url,
+    )
+    return phone_number
+
+
+def _get_number_for_slug(slug: str):
+    """Return (phone_number, number_sid) from the registry for this slug, or (None, None)."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT phone_number, number_sid FROM creator_numbers "
+                "WHERE creator_slug = %s AND status = 'active' "
+                "ORDER BY created_at LIMIT 1",
+                (slug,),
+            )
+            row = cur.fetchone()
+            return (row[0], row[1]) if row else (None, None)
+    finally:
+        conn.close()
+
+
+def _mark_number_released(phone_number: str) -> None:
+    conn = get_conn()
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE creator_numbers SET status = 'released' WHERE phone_number = %s",
+                (phone_number,),
+            )
+    finally:
+        conn.close()
+
+
+def release_for_slug(slug: str) -> bool:
+    """
+    Release the dedicated number for `slug` back to Twilio and mark the
+    registry row 'released'. Call on cancellation/downgrade so we stop paying
+    for an idle number. Returns True if a number was found and released.
+
+    Idempotent: a slug with no active number is a no-op (returns False).
+    """
+    phone_number, number_sid = _get_number_for_slug(slug)
+    if not phone_number:
+        _log.info("phone[%s]: no active number to release", slug)
+        return False
+
+    if _mode() == "real" and number_sid:
+        try:
+            twilio_numbers.release_number(_twilio_client(), number_sid)
+        except Exception:
+            # Mark released anyway so routing stops; an orphaned Twilio number
+            # is a billing cleanup task, not a reason to keep routing to it.
+            _log.exception("phone[%s]: Twilio release failed for sid=%s", slug, number_sid)
+
+    _mark_number_released(phone_number)
+    _log.info("phone[%s]: released number %s (sid=%s)", slug, phone_number, number_sid or "stub")
+    return True
