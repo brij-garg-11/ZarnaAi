@@ -480,6 +480,54 @@ def create_customer_async(user_id: int, email: str, account_type: str, slug: str
     t.start()
 
 
+# ── Leads (B2B "Apply for access") ───────────────────────────────────────────
+
+LEADS_DB_ID = os.getenv("NOTION_LEADS_DB_ID", "")
+
+
+def create_lead_in_notion(lead: dict) -> Optional[str]:
+    """
+    Create a Notion row for a new access-request lead. A lead is a prospect
+    who applied on the site — NOT yet a customer. Best-effort: if no leads DB
+    is configured or Notion isn't set up, log and return None without raising.
+
+    `lead` keys: name, email, account_type, link, goal, phone.
+    """
+    if not LEADS_DB_ID:
+        logger.info("notion_crm: NOTION_LEADS_DB_ID not set — skipping lead row for %s", lead.get("email"))
+        return None
+    if not os.getenv("NOTION_TOKEN", "").strip():
+        logger.info("notion_crm: NOTION_TOKEN not set — skipping lead row for %s", lead.get("email"))
+        return None
+
+    name = lead.get("name") or lead.get("email") or "Unknown"
+    properties: dict = {
+        "Name":   {"title": _rich_text(name)},
+        "Email":  {"email": lead.get("email") or None},
+        "Status": {"select": {"name": "new"}},
+        "Type":   {"select": {"name": lead.get("account_type") or "performer"}},
+    }
+    if lead.get("link"):
+        properties["Link"] = {"url": lead["link"]}
+    if lead.get("phone"):
+        properties["Phone"] = {"phone_number": lead["phone"]}
+
+    children = []
+    if lead.get("goal"):
+        children = [{
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {"rich_text": _rich_text(lead["goal"])},
+        }]
+    return _create_page(LEADS_DB_ID, properties, children)
+
+
+def create_lead_async(lead: dict) -> None:
+    """Fire-and-forget: push a lead row to Notion in a background thread."""
+    t = threading.Thread(target=create_lead_in_notion, args=(lead,), daemon=True)
+    t.start()
+
+
 def update_customer_plan(
     slug: str,
     account_type: str,
@@ -739,3 +787,89 @@ def sync_customer_costs(slug: str, account_type: str, conn) -> bool:
     except Exception:
         logger.exception("notion_crm: sync_customer_costs failed for %s", slug)
         return False
+
+
+# ── Phase 5: health signals + auto-task creation ─────────────────────────────
+
+# NOTION_TASKS_DB_ID: optional database for operator tasks auto-created from
+# error alerts. Set this env var to the Notion database ID of your tasks board.
+TASKS_DB_ID = os.getenv("NOTION_TASKS_DB_ID", "")
+
+
+def update_client_health(slug: str, account_type: str, open_alerts: int, quality_headline: Optional[str] = None) -> bool:
+    """
+    Write health signal fields onto the client's existing Notion page.
+
+    Fields written:
+      Open Alerts  — number property (count of unresolved client_alerts)
+      Health       — select property: 'Green' / 'Yellow' / 'Red'
+      Quality Note — rich_text property: latest quality digest one-liner
+
+    Called by the daily CRM sync after alert and quality data is available.
+    Operator-internal only — these fields never surface to clients.
+    """
+    database_id = PERFORMERS_DB_ID if account_type == "performer" else BUSINESSES_DB_ID
+    page_id = _find_page_by_slug(database_id, slug)
+    if not page_id:
+        logger.warning("update_client_health: no Notion page for slug=%s", slug)
+        return False
+
+    if open_alerts == 0:
+        health = "Green"
+    elif open_alerts <= 2:
+        health = "Yellow"
+    else:
+        health = "Red"
+
+    properties: dict = {
+        "Open Alerts": {"number": open_alerts},
+        "Health":      {"select": {"name": health}},
+    }
+    if quality_headline:
+        properties["Quality Note"] = {"rich_text": _rich_text(quality_headline[:2000])}
+
+    ok = _update_page(page_id, properties)
+    if ok:
+        logger.info("update_client_health: slug=%s health=%s open_alerts=%d", slug, health, open_alerts)
+    return ok
+
+
+def create_notion_task(slug: str, title: str, description: str) -> Optional[str]:
+    """
+    Create a task in the operator's Notion tasks database.
+
+    Called automatically when write_alert() fires a severity='error' alert
+    so serious errors become actionable Notion tasks without manual copy-paste.
+    Requires NOTION_TASKS_DB_ID to be set; silently skips if not configured.
+
+    Returns the Notion page ID of the created task, or None on failure/skip.
+    """
+    if not TASKS_DB_ID:
+        logger.debug("create_notion_task: NOTION_TASKS_DB_ID not set — skipping task for slug=%s", slug)
+        return None
+
+    properties = {
+        "Name":   {"title": _rich_text(f"[{slug}] {title}")},
+        "Slug":   {"rich_text": _rich_text(slug)},
+        "Status": {"select": {"name": "To Do"}},
+    }
+    children = [
+        {
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {"rich_text": _rich_text(description[:2000])},
+        }
+    ]
+    page_id = _create_page(TASKS_DB_ID, properties, children)
+    if page_id:
+        logger.info("create_notion_task: created task '%s' for slug=%s (page=%s)", title, slug, page_id)
+    return page_id
+
+
+def create_notion_task_async(slug: str, title: str, description: str) -> None:
+    """Non-blocking wrapper — safe to call from write_alert() without blocking the SMS pipeline."""
+    threading.Thread(
+        target=create_notion_task,
+        args=(slug, title, description),
+        daemon=True,
+    ).start()

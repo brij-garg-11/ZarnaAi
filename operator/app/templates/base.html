@@ -274,6 +274,9 @@
         ('blast.blast_index',       '/operator/blast',     '📢', 'Blast Tool'),
         ('team.team_index',         '/operator/team',      '👥', 'Team'),
       ] %}
+      {% if user and user.is_super_admin %}
+        {% set nav_items = nav_items + [('leads.leads_index', '/operator/leads', '📥', 'Leads')] %}
+      {% endif %}
       {% for endpoint, path, icon, label in nav_items %}
       <a href="{{ url_for(endpoint) }}"
          class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all

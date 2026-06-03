@@ -4844,37 +4844,36 @@ def api_onboarding_status():
     )
 
 
-@api_bp.route("/api/onboarding/submit", methods=["POST"])
-@login_required
-def api_onboarding_submit():
+class BotCreationError(Exception):
+    """Raised by create_bot_for_user with an HTTP status + user-facing message."""
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+def create_bot_for_user(user_id: int, email: str, data: dict) -> dict:
     """
-    Save the bot creation wizard data. Called on Step 4 of onboarding.
+    Build a creator/business bot for an existing operator_users row and kick
+    off provisioning. This is the single source of truth for bot creation —
+    called by the admin approve action (B2B flow) and, for super-admins, by
+    the locked-down /api/onboarding/submit endpoint.
 
-    Accepts:
-    {
-      "account_type":  "performer" | "business",
-      "display_name":  "Zarna Garg",
-      "slug":          "zarna",          // suggested from name, user-editable
-      "bio":           "...",
-      "tone":          "casual" | "professional" | "hype" | "warm",
-      "website_url":   "https://...",
-      "podcast_url":   "https://...",
-      "media_urls":    ["https://...", ...],
-      "extra_context": "Anything else the AI should know..."
-    }
+    `data` keys: account_type, display_name, slug, bio, tone, website_url,
+    podcast_url, media_urls, extra_context.
 
-    Actions:
-    1. Validate slug uniqueness.
-    2. Insert into bot_configs (status=submitted).
-    3. Set operator_users.creator_slug + account_type.
+    Returns {"creator_slug": slug, "account_type": account_type}.
+    Raises BotCreationError(status, message) on validation / conflict.
 
-    Returns: { success, creator_slug, account_type }
+    The flow is identical for both account types (performer + business);
+    `account_type` only changes where the code already branches (webhook path,
+    config storage). Provisioning runs for both.
     """
     import re
-    user = current_user()
-    data = request.get_json(silent=True) or {}
+    import psycopg2.extras
 
-    account_type  = data.get("account_type", "performer")
+    account_type = data.get("account_type", "performer")
     if account_type not in ("performer", "business"):
         account_type = "performer"
 
@@ -4888,12 +4887,11 @@ def api_onboarding_submit():
     extra_context = (data.get("extra_context") or "").strip()[:5000]
 
     if not display_name:
-        return jsonify(success=False, error="Display name is required."), 400
+        raise BotCreationError(400, "Display name is required.")
     if not slug:
-        # Auto-generate from display_name
         slug = re.sub(r"[^a-z0-9]", "_", display_name.lower()).strip("_")[:40]
     if not slug:
-        return jsonify(success=False, error="Could not generate a valid slug from the name provided."), 400
+        raise BotCreationError(400, "Could not generate a valid slug from the name provided.")
 
     config_json = {
         "display_name": display_name,
@@ -4907,46 +4905,41 @@ def api_onboarding_submit():
 
     conn = get_conn()
     try:
-        import psycopg2.extras
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            # Check slug uniqueness across both operator_users and bot_configs
+            # Slug uniqueness across both operator_users and bot_configs
             cur.execute(
                 "SELECT id FROM operator_users WHERE creator_slug=%s AND id != %s",
-                (slug, user["id"]),
+                (slug, user_id),
             )
             if cur.fetchone():
-                conn.close()
-                return jsonify(success=False, error=f"The name '{slug}' is already taken. Try a different one."), 409
+                raise BotCreationError(409, f"The name '{slug}' is already taken. Try a different one.")
+            # Exclude this user's own row so re-running (idempotent re-approve)
+            # updates in place instead of falsely conflicting.
             cur.execute(
-                "SELECT id FROM bot_configs WHERE creator_slug=%s",
-                (slug,),
+                "SELECT id FROM bot_configs WHERE creator_slug=%s AND operator_user_id != %s",
+                (slug, user_id),
             )
             if cur.fetchone():
-                conn.close()
-                return jsonify(success=False, error=f"The name '{slug}' is already taken. Try a different one."), 409
+                raise BotCreationError(409, f"The name '{slug}' is already taken. Try a different one.")
 
         with conn:
             with conn.cursor() as cur:
-                # Upsert bot_configs
                 cur.execute(
                     """INSERT INTO bot_configs
                            (operator_user_id, creator_slug, account_type, config_json, status)
                        VALUES (%s, %s, %s, %s, 'submitted')
                        ON CONFLICT (creator_slug) DO UPDATE
                        SET config_json=%s, account_type=%s, status='submitted', updated_at=NOW()""",
-                    (user["id"], slug, account_type,
+                    (user_id, slug, account_type,
                      psycopg2.extras.Json(config_json),
                      psycopg2.extras.Json(config_json), account_type),
                 )
-                # Stamp operator_users with slug + account_type
                 cur.execute(
                     """UPDATE operator_users
                        SET creator_slug=%s, account_type=%s
                        WHERE id=%s""",
-                    (slug, account_type, user["id"]),
+                    (slug, account_type, user_id),
                 )
-                # Seed smb_bot_config for business accounts so GET /api/bot-data
-                # always finds a row without requiring a manual file deploy.
                 if account_type == "business":
                     import json as _json
                     seed = _json.dumps({
@@ -4963,87 +4956,418 @@ def api_onboarding_submit():
                            ON CONFLICT (tenant_slug) DO NOTHING""",
                         (slug, seed),
                     )
-
+    finally:
         conn.close()
-        logger.info("onboarding_submit: user=%s slug=%s type=%s", user["email"], slug, account_type)
 
-        # Seed 1,000 free trial credits for this newly-onboarded user so they
-        # can immediately start sending. Stripe checkout later replaces the
-        # trial with a paid plan via the billing webhook.
-        try:
-            from ..billing.credits import seed_trial_credits
-            seed_trial_credits(user_id=user["id"], slug=slug)
-        except Exception:
-            logger.exception("onboarding_submit: seed_trial_credits failed (non-fatal)")
+    logger.info("create_bot_for_user: user=%s slug=%s type=%s", email, slug, account_type)
 
-        # Ensure this user is the 'owner' in team_members (backfill covers
-        # existing users; new users miss the db.py backfill block).
-        try:
-            tm_conn = get_conn()
-            with tm_conn:
-                with tm_conn.cursor() as tm_cur:
-                    tm_cur.execute(
-                        """
-                        INSERT INTO team_members (tenant_slug, user_id, role, invited_at, accepted_at)
-                        VALUES (%s, %s, 'owner', NOW(), NOW())
-                        ON CONFLICT (tenant_slug, user_id) DO UPDATE SET role='owner'
-                        """,
-                        (slug, user["id"]),
-                    )
-            tm_conn.close()
-        except Exception:
-            logger.exception("onboarding_submit: team_members seed failed (non-fatal)")
+    # Trial credits (kept so existing billing/usage reporting stays intact even
+    # though pricing is hidden in the UI).
+    try:
+        from ..billing.credits import seed_trial_credits
+        seed_trial_credits(user_id=user_id, slug=slug)
+    except Exception:
+        logger.exception("create_bot_for_user: seed_trial_credits failed (non-fatal)")
 
-        # Fire async Notion CRM record creation
-        try:
-            from ..notion_crm import create_customer_async
-            create_customer_async(user["id"], user["email"], account_type, slug, config_json)
-        except Exception:
-            logger.warning("onboarding_submit: notion_crm import failed — skipping", exc_info=True)
-
-        # Fire async universal-bot provisioning pipeline.
-        #   Only for performer accounts today — business (SMB) accounts use a
-        #   separate tenant-scoped code path (smb_bot_config) that doesn't
-        #   need a creator_configs / creator_embeddings row.
-        # Runs in a background thread so the API response isn't blocked by
-        # Gemini calls + embedding batches (can take 30-60s).
-        if account_type == "performer":
-            try:
-                import threading
-                from ..provisioning import provision_new_creator
-
-                provisioning_form = {
-                    "display_name":   display_name,
-                    "bio":            bio,
-                    "tone":           tone,
-                    "sms_keyword":    slug.upper()[:14],
-                    "account_type":   account_type,
-                    "website_url":    website_url,
-                    "podcast_url":    podcast_url,
-                    "media_urls":     media_urls,
-                    "extra_context":  extra_context,
-                    "uploaded_files": [],
-                }
-                thread = threading.Thread(
-                    target=provision_new_creator,
-                    args=(user["id"], slug, provisioning_form),
-                    name=f"provision-{slug}",
-                    daemon=True,
+    # Owner row in team_members
+    try:
+        tm_conn = get_conn()
+        with tm_conn:
+            with tm_conn.cursor() as tm_cur:
+                tm_cur.execute(
+                    """
+                    INSERT INTO team_members (tenant_slug, user_id, role, invited_at, accepted_at)
+                    VALUES (%s, %s, 'owner', NOW(), NOW())
+                    ON CONFLICT (tenant_slug, user_id) DO UPDATE SET role='owner'
+                    """,
+                    (slug, user_id),
                 )
-                thread.start()
-                logger.info("onboarding_submit: provisioning thread started for slug=%s", slug)
-            except Exception:
-                logger.exception("onboarding_submit: could not start provisioning thread")
+        tm_conn.close()
+    except Exception:
+        logger.exception("create_bot_for_user: team_members seed failed (non-fatal)")
 
-        return jsonify(success=True, creator_slug=slug, account_type=account_type)
+    # Notion customer record
+    try:
+        from ..notion_crm import create_customer_async
+        create_customer_async(user_id, email, account_type, slug, config_json)
+    except Exception:
+        logger.warning("create_bot_for_user: notion_crm import failed — skipping", exc_info=True)
 
+    # Provisioning — runs for BOTH account types (unified pathway). The pipeline
+    # branches internally on account_type (e.g. business skips performer-only
+    # personality/RAG steps; the phone step picks the right inbound webhook).
+    try:
+        import threading
+        from ..provisioning import provision_new_creator
+
+        provisioning_form = {
+            "display_name":   display_name,
+            "bio":            bio,
+            "tone":           tone,
+            "sms_keyword":    slug.upper()[:14],
+            "account_type":   account_type,
+            "website_url":    website_url,
+            "podcast_url":    podcast_url,
+            "media_urls":     media_urls,
+            "extra_context":  extra_context,
+            "uploaded_files": [],
+        }
+        thread = threading.Thread(
+            target=provision_new_creator,
+            args=(user_id, slug, provisioning_form),
+            name=f"provision-{slug}",
+            daemon=True,
+        )
+        thread.start()
+        logger.info("create_bot_for_user: provisioning thread started for slug=%s", slug)
+    except Exception:
+        logger.exception("create_bot_for_user: could not start provisioning thread")
+
+    return {"creator_slug": slug, "account_type": account_type}
+
+
+@api_bp.route("/api/onboarding/submit", methods=["POST"])
+@login_required
+def api_onboarding_submit():
+    """
+    Locked down (B2B model): self-serve bot creation is no longer public.
+    Bots are built by an operator via the HQ approval flow. This endpoint
+    remains only for super-admins who need to create a bot manually.
+    """
+    user = current_user()
+    if not user.get("is_super_admin"):
+        return jsonify(
+            success=False,
+            error="Bot creation is by approval only. Apply for access and we'll build it for you.",
+        ), 403
+
+    data = request.get_json(silent=True) or {}
+    try:
+        result = create_bot_for_user(user["id"], user["email"], data)
+    except BotCreationError as exc:
+        return jsonify(success=False, error=exc.message), exc.status
     except Exception:
         logger.exception("api_onboarding_submit error")
-        try:
-            conn.close()
-        except Exception:
-            pass
         return jsonify(success=False, error="Failed to save — please try again."), 500
+    return jsonify(success=True, **result)
+
+
+# ── Access requests (B2B "Apply for access") ─────────────────────────────────
+
+def _require_super_admin():
+    """Abort 403 unless the current user is a super-admin."""
+    from flask import abort
+    user = current_user() or {}
+    if not user.get("is_super_admin"):
+        abort(403)
+    return user
+
+
+def _send_application_alert_email(lead: dict) -> None:
+    """Email the operator that a new access request came in. Best-effort."""
+    import os
+    import uuid
+    import resend
+    from ..branding import PLATFORM_BRAND, PLATFORM_BRAND_SLUG
+
+    api_key = os.getenv("RESEND_API_KEY", "")
+    if not api_key:
+        logger.info("access_request: RESEND_API_KEY not set — skipping alert email")
+        return
+    resend.api_key = api_key
+    from_addr = os.getenv("RESEND_FROM", f"hello@{PLATFORM_BRAND_SLUG}.bot")
+    to_addr = os.getenv("APPLICATION_ALERT_EMAIL", os.getenv("OPERATOR_BOOTSTRAP_EMAIL", from_addr))
+
+    resend.Emails.send({
+        "from": f"{PLATFORM_BRAND} <{from_addr}>",
+        "to": [to_addr],
+        "subject": f"New access request: {lead.get('name') or lead.get('email')}",
+        "headers": {"Message-ID": f"<lead-{uuid.uuid4().hex}@{PLATFORM_BRAND_SLUG}.bot>"},
+        "html": (
+            "<div style='font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px'>"
+            "<h2>New access request</h2>"
+            f"<p><b>Name:</b> {lead.get('name','')}</p>"
+            f"<p><b>Email:</b> {lead.get('email','')}</p>"
+            f"<p><b>Type:</b> {lead.get('account_type','')}</p>"
+            f"<p><b>Link:</b> {lead.get('link','')}</p>"
+            f"<p><b>Phone:</b> {lead.get('phone','')}</p>"
+            f"<p><b>Goal:</b><br>{lead.get('goal','')}</p>"
+            "</div>"
+        ),
+    })
+
+
+def _send_invite_email(to_email: str, invite_url: str) -> None:
+    """Email an approved client a set-password / sign-in link. Best-effort."""
+    import os
+    import uuid
+    import resend
+    from ..branding import PLATFORM_BRAND, PLATFORM_BRAND_SLUG
+
+    api_key = os.getenv("RESEND_API_KEY", "")
+    if not api_key:
+        logger.info("invite: RESEND_API_KEY not set — skipping invite email to %s", to_email)
+        return
+    resend.api_key = api_key
+    from_addr = os.getenv("RESEND_FROM", f"hello@{PLATFORM_BRAND_SLUG}.bot")
+
+    resend.Emails.send({
+        "from": f"{PLATFORM_BRAND} <{from_addr}>",
+        "to": [to_email],
+        "subject": f"You're in — set up your {PLATFORM_BRAND} login",
+        "headers": {"Message-ID": f"<invite-{uuid.uuid4().hex}@{PLATFORM_BRAND_SLUG}.bot>"},
+        "html": (
+            "<div style='font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px 24px'>"
+            f"<h2>Welcome to {PLATFORM_BRAND}</h2>"
+            "<p style='color:#555'>Your bot is being set up. Click below to set your "
+            "password and access your dashboard.</p>"
+            f"<a href='{invite_url}' style='display:inline-block;background:#f97316;color:#fff;"
+            "font-weight:600;padding:12px 28px;border-radius:8px;text-decoration:none'>"
+            "Set up my login</a>"
+            "</div>"
+        ),
+    })
+
+
+@api_bp.route("/api/access-request", methods=["POST"])
+def api_access_request():
+    """
+    PUBLIC (no auth) — the "Apply for access" form on the marketing site.
+
+    Creates a lead row ONLY. Never creates an operator_users account, a bot,
+    a slug, credits, or provisioning. An operator reviews + approves in HQ.
+
+    Accepts: { name, email, account_type, link, goal, phone, source }
+    Returns: { success: true }
+    """
+    data = request.get_json(silent=True) or {}
+    name  = (data.get("name") or "").strip()[:200]
+    email = (data.get("email") or "").strip().lower()[:320]
+    account_type = data.get("account_type", "performer")
+    if account_type not in ("performer", "business"):
+        account_type = "performer"
+    link   = (data.get("link") or "").strip()[:500]
+    goal   = (data.get("goal") or "").strip()[:5000]
+    phone  = (data.get("phone") or "").strip()[:40]
+    source = (data.get("source") or "").strip()[:200]
+
+    if not name:
+        return jsonify(success=False, error="Name is required."), 400
+    if not email or "@" not in email:
+        return jsonify(success=False, error="A valid email is required."), 400
+
+    lead = {
+        "name": name, "email": email, "account_type": account_type,
+        "link": link, "goal": goal, "phone": phone, "source": source,
+    }
+
+    try:
+        conn = get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO access_requests
+                           (name, email, account_type, link, goal, phone, source, status)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, 'new')""",
+                    (name, email, account_type, link, goal, phone, source),
+                )
+        conn.close()
+    except Exception:
+        logger.exception("api_access_request: failed to store lead for %s", email)
+        return jsonify(success=False, error="Something went wrong — please try again."), 500
+
+    # Best-effort alerts: Notion lead row + email to operator. Never block the
+    # user's success response on these.
+    try:
+        from ..notion_crm import create_lead_async
+        create_lead_async(lead)
+    except Exception:
+        logger.warning("api_access_request: notion lead push failed", exc_info=True)
+    try:
+        import threading
+        threading.Thread(target=_send_application_alert_email, args=(lead,), daemon=True).start()
+    except Exception:
+        logger.warning("api_access_request: alert email failed", exc_info=True)
+
+    logger.info("api_access_request: new lead email=%s type=%s", email, account_type)
+    return jsonify(success=True)
+
+
+@api_bp.route("/api/admin/access-requests", methods=["GET"])
+@login_required
+def api_admin_list_access_requests():
+    """Operator HQ: list access-request leads (super-admin only)."""
+    _require_super_admin()
+    status = (request.args.get("status") or "").strip()
+    import psycopg2.extras
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            if status:
+                cur.execute(
+                    """SELECT * FROM access_requests WHERE status=%s
+                       ORDER BY created_at DESC LIMIT 500""",
+                    (status,),
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM access_requests ORDER BY created_at DESC LIMIT 500"
+                )
+            rows = [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+    for r in rows:
+        for k in ("created_at", "reviewed_at"):
+            if r.get(k) is not None:
+                r[k] = r[k].isoformat()
+    return jsonify(requests=rows)
+
+
+def approve_access_request(req_id: int, admin_id: int, data: dict) -> dict:
+    """
+    Core approve logic shared by the JSON API and the Operator HQ page.
+
+    Creates the client's account, builds the bot + provisions, issues a
+    set-password invite token, emails it, and marks the lead approved.
+    Idempotent. Returns {"creator_slug", "account_type"}.
+    Raises LookupError if the lead is missing, BotCreationError on validation.
+    """
+    import os
+    import secrets
+    import threading
+    import psycopg2.extras
+    from datetime import datetime, timedelta, timezone
+
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("SELECT * FROM access_requests WHERE id=%s", (req_id,))
+            lead = cur.fetchone()
+        if not lead:
+            raise LookupError("Access request not found.")
+        lead = dict(lead)
+        email = lead["email"]
+        account_type = lead.get("account_type") or "performer"
+
+        # Create or find the client's account (idempotent on email).
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO operator_users
+                           (email, name, password_hash, is_owner, is_active)
+                       VALUES (%s, %s, '', FALSE, TRUE)
+                       ON CONFLICT (email) DO UPDATE SET is_active=TRUE
+                       RETURNING id""",
+                    (email, lead.get("name") or email.split("@")[0].title()),
+                )
+                user_id = cur.fetchone()[0]
+    finally:
+        conn.close()
+
+    form = {
+        "account_type":  account_type,
+        "display_name":  data.get("display_name") or lead.get("name") or "",
+        "slug":          data.get("slug") or "",
+        "bio":           data.get("bio") or "",
+        "tone":          data.get("tone") or "casual",
+        "website_url":   data.get("website_url") or lead.get("link") or "",
+        "podcast_url":   data.get("podcast_url") or "",
+        "media_urls":    data.get("media_urls") or [],
+        "extra_context": data.get("extra_context") or lead.get("goal") or "",
+    }
+    result = create_bot_for_user(user_id, email, form)
+
+    # Issue a set-password invite token and email it (best-effort).
+    frontend_url = os.getenv("FRONTEND_URL", "https://zar-fan-connect.lovable.app").rstrip("/")
+    try:
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+        conn = get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO password_reset_tokens (user_id, token, expires_at)
+                       VALUES (%s, %s, %s)""",
+                    (user_id, token, expires_at),
+                )
+        conn.close()
+        invite_url = f"{frontend_url}/reset-password?token={token}"
+        threading.Thread(target=_send_invite_email, args=(email, invite_url), daemon=True).start()
+    except Exception:
+        logger.exception("approve: failed to issue invite token for %s", email)
+
+    # Mark the lead approved.
+    try:
+        conn = get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE access_requests
+                       SET status='approved', operator_user_id=%s,
+                           reviewed_by=%s, reviewed_at=NOW()
+                       WHERE id=%s""",
+                    (user_id, admin_id, req_id),
+                )
+        conn.close()
+    except Exception:
+        logger.exception("approve: failed to mark lead %s approved", req_id)
+
+    logger.info("approve: lead=%s email=%s slug=%s", req_id, email, result["creator_slug"])
+    return result
+
+
+def reject_access_request(req_id: int, admin_id: int) -> bool:
+    """Core reject logic. Returns False if the lead doesn't exist."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM access_requests WHERE id=%s", (req_id,))
+            if not cur.fetchone():
+                return False
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE access_requests
+                       SET status='rejected', reviewed_by=%s, reviewed_at=NOW()
+                       WHERE id=%s""",
+                    (admin_id, req_id),
+                )
+    finally:
+        conn.close()
+    logger.info("reject: lead=%s", req_id)
+    return True
+
+
+@api_bp.route("/api/admin/access-requests/<int:req_id>/approve", methods=["POST"])
+@login_required
+def api_admin_approve_access_request(req_id: int):
+    """
+    Operator HQ (JSON): approve a lead and build the bot (super-admin only).
+    Body: { display_name, slug, bio, tone, website_url, podcast_url,
+            media_urls, extra_context }  (account_type taken from the lead)
+    """
+    admin = _require_super_admin()
+    data = request.get_json(silent=True) or {}
+    try:
+        result = approve_access_request(req_id, admin["id"], data)
+    except LookupError as exc:
+        return jsonify(success=False, error=str(exc)), 404
+    except BotCreationError as exc:
+        return jsonify(success=False, error=exc.message), exc.status
+    except Exception:
+        logger.exception("approve: failed for lead %s", req_id)
+        return jsonify(success=False, error="Failed to build the bot — please try again."), 500
+    return jsonify(success=True, creator_slug=result["creator_slug"], account_type=result["account_type"])
+
+
+@api_bp.route("/api/admin/access-requests/<int:req_id>/reject", methods=["POST"])
+@login_required
+def api_admin_reject_access_request(req_id: int):
+    """Operator HQ (JSON): reject a lead (super-admin only)."""
+    admin = _require_super_admin()
+    if not reject_access_request(req_id, admin["id"]):
+        return jsonify(success=False, error="Access request not found."), 404
+    return jsonify(success=True)
 
 
 @api_bp.route("/api/provisioning/status")
@@ -5236,3 +5560,253 @@ def api_provisioning_retry():
 # main (Zarna) service, not the operator service — the operator Docker image
 # doesn't ship the root `app/` package. Run scripts/e2e_voice_test.py locally
 # to exercise the pipeline for a given slug.
+
+
+# ---------------------------------------------------------------------------
+# Per-client P&L — operator admin only, never exposed to clients
+# ---------------------------------------------------------------------------
+
+@api_bp.route("/api/admin/client-financials/<slug_param>")
+@login_required
+def api_admin_client_financials(slug_param: str):
+    """
+    Operator-internal P&L for a single client for a given month.
+    Super-admin only. Clients never see this route or its data.
+
+    GET /api/admin/client-financials/<slug>?month=YYYY-MM
+    """
+    if not _require_super_admin():
+        return jsonify(error="Super-admin access required"), 403
+
+    from ..billing.plans import ALL_PLANS
+    from datetime import date
+    import psycopg2.extras
+
+    month = request.args.get("month", "").strip()
+    if not month:
+        month = date.today().strftime("%Y-%m")
+
+    try:
+        conn = get_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # Revenue: derive monthly price from the client's current plan tier.
+            cur.execute(
+                """
+                SELECT plan_tier, billing_cycle
+                FROM   operator_users
+                WHERE  creator_slug = %s AND is_active = TRUE
+                ORDER  BY id
+                LIMIT  1
+                """,
+                (slug_param,),
+            )
+            user_row = cur.fetchone()
+
+            revenue_usd = 0.0
+            if user_row:
+                tier = user_row["plan_tier"] or "trial"
+                cycle = user_row["billing_cycle"] or "monthly"
+                plan = ALL_PLANS.get(tier)
+                if plan:
+                    if cycle == "annual":
+                        revenue_usd = float(plan.annual_price_usd or 0) / 12
+                    else:
+                        revenue_usd = float(plan.monthly_price_usd or 0)
+
+            # Twilio SMS costs from nightly sync.
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(inbound_cost_usd + outbound_cost_usd), 0) AS sms_cost
+                FROM   sms_cost_log
+                WHERE  creator_slug = %s
+                  AND  TO_CHAR(log_date, 'YYYY-MM') = %s
+                """,
+                (slug_param, month),
+            )
+            sms_row = cur.fetchone()
+            sms_cost = float(sms_row["sms_cost"] or 0)
+
+            # AI costs from our cost log (Phase 2).
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(cost_usd), 0) AS ai_cost
+                FROM   ai_cost_log
+                WHERE  creator_slug = %s
+                  AND  TO_CHAR(log_date, 'YYYY-MM') = %s
+                """,
+                (slug_param, month),
+            )
+            ai_row = cur.fetchone()
+            ai_cost = float(ai_row["ai_cost"] or 0)
+
+        conn.close()
+    except Exception:
+        logger.exception("api_admin_client_financials: DB error for slug=%s", slug_param)
+        return jsonify(error="Failed to load financials"), 500
+
+    # Railway hosting: static estimate stored as env var per slug, fallback $20.
+    import os as _os
+    env_key = f"RAILWAY_COST_{slug_param.upper().replace('-', '_')}"
+    try:
+        railway_cost = float(_os.environ.get(env_key, "20.0"))
+    except ValueError:
+        railway_cost = 20.0
+
+    phone_rental = 1.15  # standard Twilio number rental per month
+    total_cost = round(sms_cost + ai_cost + railway_cost + phone_rental, 2)
+    margin_usd = round(revenue_usd - total_cost, 2)
+    margin_pct = round((margin_usd / revenue_usd * 100) if revenue_usd > 0 else 0.0, 1)
+
+    return jsonify(
+        slug=slug_param,
+        month=month,
+        revenue_usd=round(revenue_usd, 2),
+        twilio_sms_cost_usd=round(sms_cost, 2),
+        ai_cost_usd=round(ai_cost, 6),
+        railway_estimate_usd=round(railway_cost, 2),
+        phone_rental_usd=phone_rental,
+        total_cost_usd=total_cost,
+        margin_usd=margin_usd,
+        margin_pct=margin_pct,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Client alerts — Tech Messages tab
+# ---------------------------------------------------------------------------
+
+@api_bp.route("/api/alerts")
+@login_required
+def api_list_alerts():
+    """
+    List unresolved alerts for the current creator_slug.
+    Client-facing: the `detail` field is stripped from the response.
+    Super-admins viewing as a project see that project's alerts.
+    """
+    from flask import abort
+    slug = _slug_or_abort()
+
+    try:
+        conn = get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, alert_type, severity, title, summary, occurred_at
+                    FROM   client_alerts
+                    WHERE  creator_slug = %s
+                      AND  is_resolved  = FALSE
+                    ORDER  BY occurred_at DESC
+                    LIMIT  50
+                    """,
+                    (slug,),
+                )
+                rows = cur.fetchall()
+        conn.close()
+    except Exception:
+        logger.exception("api_list_alerts: DB error for slug=%s", slug)
+        return jsonify(error="Failed to load alerts"), 500
+
+    alerts = [
+        {
+            "id":          r[0],
+            "alert_type":  r[1],
+            "severity":    r[2],
+            "title":       r[3],
+            "summary":     r[4],
+            "occurred_at": r[5].isoformat() if r[5] else None,
+        }
+        for r in rows
+    ]
+    return jsonify(alerts=alerts)
+
+
+@api_bp.route("/api/alerts/<int:alert_id>/resolve", methods=["POST"])
+@login_required
+def api_resolve_alert(alert_id: int):
+    """
+    Mark an alert resolved. Operator/super-admin only — not exposed to clients.
+    """
+    user = current_user()
+    if not user:
+        return jsonify(error="Unauthorized"), 401
+
+    # Only super-admins or account owners may resolve alerts.
+    if not user.get("is_super_admin") and not user.get("is_owner"):
+        return jsonify(error="Forbidden"), 403
+
+    slug = _slug_or_abort()
+
+    try:
+        conn = get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE client_alerts
+                    SET    is_resolved = TRUE,
+                           resolved_at = NOW()
+                    WHERE  id           = %s
+                      AND  creator_slug = %s
+                    """,
+                    (alert_id, slug),
+                )
+                updated = cur.rowcount
+        conn.close()
+    except Exception:
+        logger.exception("api_resolve_alert: DB error for alert_id=%s slug=%s", alert_id, slug)
+        return jsonify(error="Failed to resolve alert"), 500
+
+    if updated == 0:
+        return jsonify(error="Alert not found"), 404
+
+    return jsonify(success=True)
+
+
+@api_bp.route("/api/admin/alerts/<slug_param>")
+@login_required
+def api_admin_list_alerts(slug_param: str):
+    """
+    Operator-only view of alerts for any slug — includes the internal `detail` field.
+    Only super-admins may call this route.
+    """
+    user = current_user()
+    if not user or not user.get("is_super_admin"):
+        return jsonify(error="Forbidden"), 403
+
+    try:
+        conn = get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, alert_type, severity, title, summary, detail,
+                           occurred_at, resolved_at, is_resolved
+                    FROM   client_alerts
+                    WHERE  creator_slug = %s
+                    ORDER  BY occurred_at DESC
+                    LIMIT  200
+                    """,
+                    (slug_param,),
+                )
+                rows = cur.fetchall()
+        conn.close()
+    except Exception:
+        logger.exception("api_admin_list_alerts: DB error for slug=%s", slug_param)
+        return jsonify(error="Failed to load alerts"), 500
+
+    alerts = [
+        {
+            "id":          r[0],
+            "alert_type":  r[1],
+            "severity":    r[2],
+            "title":       r[3],
+            "summary":     r[4],
+            "detail":      r[5],
+            "occurred_at": r[6].isoformat() if r[6] else None,
+            "resolved_at": r[7].isoformat() if r[7] else None,
+            "is_resolved": r[8],
+        }
+        for r in rows
+    ]
+    return jsonify(alerts=alerts)

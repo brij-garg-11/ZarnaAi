@@ -333,11 +333,19 @@ def api_login():
 @auth_bp.route("/api/auth/signup", methods=["POST"])
 def api_signup():
     """
-    Self-serve account creation.
-    Accepts: {"email": "...", "password": "...", "name": "..."}
-    Returns: {"success": true, "user": {...}, "onboarding_required": true}
-          or {"success": false, "error": "..."}
+    Public self-serve signup is CLOSED (B2B model). Account creation now
+    happens only via invite — either the approval invite (after applying for
+    access) or a team invite. New prospects must apply for access instead.
     """
+    return jsonify(
+        success=False,
+        error="Sign-ups are by invite only. Apply for access and we'll set you up.",
+        apply_required=True,
+    ), 403
+
+
+def _api_signup_disabled_legacy():
+    """Former self-serve signup body — retained for reference, not routed."""
     data = request.get_json(silent=True) or {}
     email    = (data.get("email") or "").strip().lower()
     password = (data.get("password") or "").strip()
@@ -731,32 +739,13 @@ def google_callback():
             conn.close()
             return redirect(f"{frontend_url}/dashboard")
 
+        # Public self-serve signup is closed (B2B model). A brand-new Google
+        # user with signup intent but no invite is sent to the apply page —
+        # we no longer create an account here. (Existing accounts + invited
+        # users are handled in the scenarios above.)
         if is_signup:
-            # Scenario 3: brand-new self-serve signup via Google.
-            # Only creates a genuinely new row — never re-activates a deactivated
-            # account (that case is caught above).
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """INSERT INTO operator_users
-                               (email, name, password_hash, is_owner, is_active, last_login_at)
-                           VALUES (%s, %s, '', FALSE, TRUE, NOW())
-                           ON CONFLICT (email) DO NOTHING
-                           RETURNING id""",
-                        (email, name),
-                    )
-                    row = cur.fetchone()
-                    if not row:
-                        # Conflict means account exists — we shouldn't reach here
-                        # because existing active accounts are handled in Scenario 1
-                        # and deactivated ones are blocked above. Be safe and deny.
-                        conn.close()
-                        return redirect(f"{frontend_url}/login?error=not_authorized")
-                    new_id = row[0]
-            session["operator_user_id"] = new_id
-            session.permanent = True
             conn.close()
-            return redirect(f"{frontend_url}/")
+            return redirect(f"{frontend_url}/apply")
 
         # Unknown user, no invite, not a signup intent
         conn.close()

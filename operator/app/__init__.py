@@ -93,6 +93,7 @@ def create_app() -> Flask:
     from .routes.smb_portal import smb_portal_bp
     from .routes.api import api_bp
     from .routes.billing import billing_bp
+    from .routes.leads import leads_bp
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(shows_bp)
@@ -101,6 +102,18 @@ def create_app() -> Flask:
     app.register_blueprint(smb_portal_bp)
     app.register_blueprint(api_bp)
     app.register_blueprint(billing_bp)
+    app.register_blueprint(leads_bp)
+
+    # Optional staging-only routes. The module may not exist in every checkout
+    # (it's an in-progress add); don't let a missing import crash app boot.
+    try:
+        from .routes.staging import staging_bp
+        app.register_blueprint(staging_bp)
+    except ImportError:
+        import logging as _logging
+        _logging.getLogger(__name__).info(
+            "operator: routes.staging not present — skipping staging blueprint"
+        )
 
     # ── CSRF protection for state-changing API requests ────────────────────
     # All /api/* POST/PUT/PATCH/DELETE requests must originate from an allowed

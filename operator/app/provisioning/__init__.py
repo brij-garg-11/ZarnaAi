@@ -102,13 +102,22 @@ def provision_new_creator(
         _set_status(slug, "in_progress")
 
         _log.info("provisioning[%s]: step 1/4 phone", slug)
-        phone_number = phone.buy_and_configure(slug)
+        account_type = (config.get("account_type") or "performer").strip().lower()
+        phone_number = phone.buy_and_configure(slug, account_type=account_type)
 
-        _log.info("provisioning[%s]: step 2/4 config_writer", slug)
-        config_writer.generate_and_write(slug, config)
+        # Personality generation + RAG ingestion are performer-only: business
+        # (SMB) bots answer from smb_bot_config, not creator_configs /
+        # creator_embeddings. Both account types still get a provisioned number
+        # (above) and a welcome email (below) — the unified pathway.
+        chunks_inserted = 0
+        if account_type == "performer":
+            _log.info("provisioning[%s]: step 2/4 config_writer", slug)
+            config_writer.generate_and_write(slug, config)
 
-        _log.info("provisioning[%s]: step 3/4 ingestion", slug)
-        chunks_inserted = ingestion.run(slug, config)
+            _log.info("provisioning[%s]: step 3/4 ingestion", slug)
+            chunks_inserted = ingestion.run(slug, config)
+        else:
+            _log.info("provisioning[%s]: business account — skipping config/ingestion", slug)
 
         _log.info("provisioning[%s]: step 4/4 notifications", slug)
         notifications.send_welcome(user_id, phone_number)
