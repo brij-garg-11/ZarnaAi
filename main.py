@@ -37,6 +37,7 @@ from app.live_shows.signup import LiveShowSignupResult, try_live_show_signup
 from app.live_shows.quiz import get_active_quiz_for_fan, record_quiz_response, build_quiz_context
 from app.live_shows.blast_context import get_active_blast_context, build_blast_context_prompt
 from app.ops_metrics import ai_reply_enter, ai_reply_leave, bump as ops_bump
+from app.alert_writer import write_alert as _write_alert
 
 class _ServiceFormatter(logging.Formatter):
     """Prepend a [SERVICE] tag based on logger name so Railway logs are filterable."""
@@ -329,12 +330,25 @@ def _process_slicktext_message(phone_number: str, message_text: str, quiz_contex
                 "AI reply blocked: credits exhausted for slug=%s (...%s)",
                 slug, phone_number[-4:] if phone_number else "?",
             )
+            _write_alert(
+                slug, "credits_exhausted", "warning",
+                "AI replies temporarily paused",
+                "Your message credit limit has been reached for this billing period. "
+                "Replies will resume automatically when credits reset or your plan is upgraded.",
+                detail=f"credits_exhausted slug={slug}",
+            )
             return
         try:
             reply = brain.handle_incoming_message(phone_number, message_text, quiz_context=quiz_context, blast_context=blast_context)
         except Exception as e:
             ops_bump("ai_reply_error")
             logging.error("Error processing SlickText message from ...%s: %s", phone_number[-4:] if phone_number else "?", e)
+            _write_alert(
+                slug, "ai_error", "error",
+                "A message could not be processed",
+                "An error occurred while generating a reply. Our team has been notified and is looking into it.",
+                detail=f"SlickText ai_error phone=...{phone_number[-4:] if phone_number else '?'}: {e}",
+            )
             return
         if not (reply or "").strip():
             logging.info("No reply for ...%s (conversation ender or empty)", phone_number[-4:])
@@ -474,31 +488,62 @@ def slicktext_webhook():
 # ---------------------------------------------------------------------------
 
 
-def _process_twilio_message(phone_number: str, message_text: str, quiz_context: str = None, blast_context: str = None) -> None:
+def _process_twilio_message(phone_number: str, message_text: str, quiz_context: str = None, blast_context: str = None, brain_obj=None, from_number: str = None) -> None:
+    # In the multi-tenant ("apartment building") deployment, brain_obj is the
+    # creator-specific brain resolved from the destination number, and
+    # from_number is that creator's own number (so the reply comes FROM them).
+    # When neither is provided we fall back to the process-global brain — the
+    # unchanged behaviour for dedicated single-creator deployments (e.g. Zarna).
+    active_brain = brain_obj if brain_obj is not None else brain
     if not ai_reply_enter():
         ops_bump("ai_reply_capacity_reject")
         logging.warning("AI at capacity — Twilio message dropped (...%s)", phone_number[-4:])
         return
     try:
-        slug = getattr(brain, "slug", None) or ""
+        slug = getattr(active_brain, "slug", None) or ""
         if not _has_credits_remaining(slug):
             ops_bump("ai_reply_credit_exhausted")
             logging.warning(
                 "AI reply blocked: credits exhausted for slug=%s (...%s)",
                 slug, phone_number[-4:] if phone_number else "?",
             )
+            _write_alert(
+                slug, "credits_exhausted", "warning",
+                "AI replies temporarily paused",
+                "Your message credit limit has been reached for this billing period. "
+                "Replies will resume automatically when credits reset or your plan is upgraded.",
+                detail=f"credits_exhausted slug={slug}",
+            )
             return
         try:
-            reply = brain.handle_incoming_message(phone_number, message_text, quiz_context=quiz_context, blast_context=blast_context)
+            reply = active_brain.handle_incoming_message(phone_number, message_text, quiz_context=quiz_context, blast_context=blast_context)
         except Exception as e:
             ops_bump("ai_reply_error")
             logging.error("Error processing Twilio message from ...%s: %s", phone_number[-4:] if phone_number else "?", e)
+            _write_alert(
+                slug, "ai_error", "error",
+                "A message could not be processed",
+                "An error occurred while generating a reply. Our team has been notified and is looking into it.",
+                detail=f"Twilio ai_error phone=...{phone_number[-4:] if phone_number else '?'}: {e}",
+            )
             return
         if not (reply or "").strip():
             logging.info("No Twilio reply for ...%s (conversation ender or empty)", phone_number[-4:])
             return
-        twilio.send_reply(phone_number, reply)
-        _consume_message_credits(reply, message_text, source=f"twilio:{phone_number[-4:]}")
+        try:
+            twilio.send_reply(phone_number, reply, from_number=from_number)
+        except Exception as e:
+            ops_bump("message_send_failed")
+            logging.error("Twilio send_reply failed for ...%s: %s", phone_number[-4:] if phone_number else "?", e)
+            _write_alert(
+                slug, "message_send_failed", "error",
+                "A reply failed to send",
+                "One or more outbound messages could not be delivered. "
+                "This is usually a temporary carrier issue and often resolves on its own.",
+                detail=f"twilio send_reply failed phone=...{phone_number[-4:] if phone_number else '?'}: {e}",
+            )
+            return
+        _consume_message_credits(reply, message_text, source=f"twilio:{phone_number[-4:]}", slug=slug)
     finally:
         ai_reply_leave()
 
@@ -578,8 +623,13 @@ def _has_credits_remaining(slug: str) -> bool:
         return True
 
 
-def _consume_message_credits(outbound_text: str, inbound_text: str, *, source: str) -> None:
-    """Charge the brain's creator_slug for 1 inbound + N outbound segments.
+def _consume_message_credits(outbound_text: str, inbound_text: str, *, source: str, slug: str = None) -> None:
+    """Charge a creator_slug for 1 inbound + N outbound segments.
+
+    `slug` is the resolved creator for this message (multi-tenant routing); when
+    omitted we fall back to the process-global brain's slug (dedicated
+    deployments like Zarna). Without this, every self-serve creator's usage
+    would be billed to the global default account.
 
     Writes directly to operator_credit_usage + credit_events so the main app
     doesn't need to import the operator package (they share a top-level
@@ -587,7 +637,7 @@ def _consume_message_credits(outbound_text: str, inbound_text: str, *, source: s
 
     Fail-open: never blocks message processing — billing is secondary to replies.
     """
-    slug = getattr(brain, "slug", None) or ""
+    slug = (slug or "").strip() or (getattr(brain, "slug", None) or "")
     if not slug:
         return
 
@@ -686,6 +736,56 @@ def _consume_message_credits(outbound_text: str, inbound_text: str, *, source: s
         logging.warning("consume_message_credits: DB write failed for slug=%s", slug)
 
 
+def _multi_tenant_mode() -> bool:
+    """
+    True on the shared multi-tenant ("apartment building") deployment. When on,
+    an inbound message to a number we can't map to a creator is DROPPED rather
+    than answered by the process-global brain (so we never reply in the wrong
+    creator's voice). Off by default → dedicated single-creator deployments
+    (e.g. Zarna) keep using the global brain exactly as before.
+    """
+    return os.getenv("MULTI_TENANT_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _resolve_twilio_tenant(to_number: str, slug_param: str):
+    """
+    Resolve the creator for an inbound Twilio message.
+
+    Returns (brain_obj, slug, reply_from_number).
+      - brain_obj is None  → caller should DROP the message (strict building,
+        unknown number).
+      - reply_from_number is the creator's own number (so the reply comes from
+        them); None means "let the adapter use its default sender".
+
+    Resolution order: the routing registry (source of truth, keyed by the
+    destination number) → the signed `?slug=` query param Twilio was configured
+    with at purchase time → fall back to the process-global brain.
+    """
+    from app.brain.handler import get_brain
+
+    resolved = None
+    if to_number:
+        try:
+            from app.performer.registry import get_registry
+            resolved = get_registry().get_slug_by_to_number(to_number)
+        except Exception:
+            logging.exception(
+                "performer registry lookup failed for ...%s",
+                to_number[-4:] if to_number else "?",
+            )
+    if not resolved and slug_param:
+        resolved = (slug_param or "").strip().lower() or None
+
+    if resolved:
+        return get_brain(resolved), resolved, to_number
+
+    if _multi_tenant_mode():
+        return None, None, None
+
+    # Dedicated deployment: process-global brain, default sender — unchanged.
+    return brain, getattr(brain, "slug", None), None
+
+
 @app.route("/twilio/webhook", methods=["POST"])
 def twilio_webhook():
     form_data = request.form.to_dict()
@@ -754,7 +854,12 @@ def twilio_webhook():
     if raw_from and raw_body and raw_body.strip().lower() in _TW_OPT_OUT_KEYWORDS:
         threading.Thread(target=_record_blast_optout, args=(raw_from,), daemon=True).start()
 
-    phone_number, message_text = twilio.filter_inbound_for_ai(raw_from, raw_body)
+    # Photos/MMS arrive with an empty Body — substitute a placeholder so a
+    # caption-less photo still gets an in-character reply instead of being
+    # dropped as "unparseable". (Signup + opt-out checks above use raw_body so
+    # a photo never accidentally counts as a keyword.)
+    ai_body = twilio.normalize_inbound_body(form_data, raw_body)
+    phone_number, message_text = twilio.filter_inbound_for_ai(raw_from, ai_body)
 
     if signup_res.suppress_ai:
         logging.info(
@@ -769,6 +874,18 @@ def twilio_webhook():
 
     if _is_rate_limited(phone_number):
         logging.warning("Rate limit hit for Twilio ...%s — dropping message", phone_number[-4:] if phone_number else "?")
+        return ("", 204)
+
+    # Resolve which creator owns the number this fan texted, and pick that
+    # creator's brain (multi-tenant routing). Falls back to the global brain
+    # for dedicated deployments.
+    slug_param = request.args.get("slug", "")
+    target_brain, target_slug, reply_from = _resolve_twilio_tenant(_to_number, slug_param)
+    if target_brain is None:
+        logging.warning(
+            "Twilio webhook: number ...%s maps to no creator — dropping (multi-tenant strict mode)",
+            _to_number[-4:] if _to_number else "?",
+        )
         return ("", 204)
 
     # Check for an active pop quiz for this fan — inject context so AI can react in character.
@@ -791,13 +908,13 @@ def twilio_webhook():
     blast_ctx = None
     if not quiz_ctx:
         try:
-            zarna_slug = os.getenv("ZARNA_CREATOR_SLUG", "zarna")
-            context_note = get_active_blast_context(creator_slug=zarna_slug)
+            blast_slug = target_slug or os.getenv("ZARNA_CREATOR_SLUG", "zarna")
+            context_note = get_active_blast_context(creator_slug=blast_slug)
             if context_note:
                 blast_ctx = build_blast_context_prompt(context_note)
                 logging.info(
                     "Blast context injected for ...%s (slug=%s)",
-                    phone_number[-4:] if phone_number else "?", zarna_slug,
+                    phone_number[-4:] if phone_number else "?", blast_slug,
                 )
         except Exception:
             logging.exception("Blast context lookup failed — continuing with normal AI reply")
@@ -805,7 +922,11 @@ def twilio_webhook():
     threading.Thread(
         target=_process_twilio_message,
         args=(phone_number, message_text, quiz_ctx),
-        kwargs={"blast_context": blast_ctx},
+        kwargs={
+            "blast_context": blast_ctx,
+            "brain_obj": target_brain,
+            "from_number": reply_from,
+        },
         daemon=True,
     ).start()
 

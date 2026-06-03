@@ -258,6 +258,35 @@ Response:
 
 ---
 
+## Tech Messages (client alert tab)
+
+> **Visibility:** Clients see `title` + `summary` only. The `detail` field is never returned here — it is operator-only via the admin route.
+
+### List unresolved alerts
+```
+GET /api/alerts
+```
+Response:
+```json
+{
+  "alerts": [
+    {
+      "id": 1,
+      "alert_type": "ai_error",
+      "severity": "error",
+      "title": "A message could not be processed",
+      "summary": "An error occurred while generating a reply. Our team has been notified and is looking into it.",
+      "occurred_at": "2026-05-08T14:30:00+00:00"
+    }
+  ]
+}
+```
+`severity` values: `"info"` | `"warning"` | `"error"`
+
+Returns last 50 unresolved alerts for the authenticated `creator_slug`, newest first.
+
+---
+
 ## Team management
 
 ### List members + pending invites
@@ -289,4 +318,4 @@ Success: `{ "success": true }`
 
 ---
 
-*Last updated: April 2026*
+*Last updated: May 2026 — added Tech Messages / client alerts tab*

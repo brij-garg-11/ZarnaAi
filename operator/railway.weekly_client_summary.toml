@@ -1,0 +1,42 @@
+# Weekly Client Summary — internal operator report per client.
+# NOT client-facing. Clients never see this. Internal P&L + bot health snapshot.
+#
+# ⚠️  This cron does NOT activate until you manually add it to the Railway dashboard.
+#     Do not add it until you are ready for it to run against production.
+#
+# Setup steps:
+#
+# 1) Railway project → + New Service → GitHub Repo → same repo.
+#
+# 2) Service → Settings → Config-as-code → set path:
+#      operator/railway.weekly_client_summary.toml
+#
+# 3) Variables:
+#      OPERATOR_DATABASE_URL   → Variable Reference → operator Postgres
+#      DATABASE_URL            → Variable Reference → per-client Postgres (for fan/message counts)
+#      CREATOR_SLUG            → the client slug to summarise (e.g. "zarna")
+#
+#    Optional (Notion):
+#      NOTION_TOKEN                  → internal integration secret
+#      NOTION_SUMMARY_PARENT_ID      → UUID of the "Weekly Client Summaries" parent page
+#                                      (share with your integration first in Notion → Connections)
+#      NOTION_API_VERSION            → leave blank to use default 2022-06-28
+#
+# 4) Cron schedule — Railway service Settings → "Run on Schedule":
+#      0 11 * * 1   = every Monday 11:00 UTC (7:00 AM Eastern during DST)
+#    Run after quality_digest (10:00 UTC) so the quality score is already saved.
+#
+# 5) One-off / local run:
+#      python scripts/generate_client_summary.py --slug zarna
+#      python scripts/generate_client_summary.py --slug zarna --dry-run
+#      python scripts/generate_client_summary.py --slug zarna --week 2026-05-05
+#
+# 6) To add another client: create a second Railway service pointing at this same
+#    toml file, but set CREATOR_SLUG to the new client's slug.
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python -u scripts/generate_client_summary.py --slug $CREATOR_SLUG"
+watchPatterns = ["scripts/generate_client_summary.py", "requirements.txt"]

@@ -72,6 +72,13 @@ def _is_emoji_only(message: str) -> bool:
     return True
 
 
+# Placeholder body used when a fan sends a photo/MMS with no caption. Without
+# this the message has an empty Body and gets filtered as "unparseable", so the
+# fan would get no reply at all. The placeholder lets the brain answer in
+# character (we don't run vision on the image — we just acknowledge it).
+INBOUND_PHOTO_PLACEHOLDER = "(sent a photo)"
+
+
 def _is_whatsapp_number(value: str) -> bool:
     return str(value).startswith("whatsapp:")
 
@@ -136,6 +143,30 @@ class TwilioAdapter:
         message = form_data.get("Body", "").strip() or None
         return phone, message
 
+    def count_inbound_media(self, form_data: dict) -> int:
+        """Number of media attachments (photos/MMS) on an inbound webhook.
+
+        Twilio sends NumMedia="0" for plain SMS and "1"+ for MMS. WhatsApp
+        image messages also populate it. Returns 0 on any missing/garbled value.
+        """
+        try:
+            return int((form_data.get("NumMedia") or "0").strip())
+        except (TypeError, ValueError, AttributeError):
+            return 0
+
+    def normalize_inbound_body(self, form_data: dict, body: Optional[str]) -> Optional[str]:
+        """Resolve the text the AI should respond to.
+
+        A photo/MMS with no caption arrives with an empty Body. Rather than
+        silently drop it, substitute a placeholder so the fan still gets an
+        in-character reply. A photo WITH a caption keeps the caption unchanged.
+        """
+        if (body or "").strip():
+            return body
+        if self.count_inbound_media(form_data) > 0:
+            return INBOUND_PHOTO_PLACEHOLDER
+        return body
+
     def filter_inbound_for_ai(
         self, phone: Optional[str], message: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
@@ -197,7 +228,20 @@ class TwilioAdapter:
 
         is_whatsapp = _is_whatsapp_number(to_number)
         if is_whatsapp:
-            whatsapp_from = os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
+            whatsapp_from = os.getenv("TWILIO_WHATSAPP_NUMBER")
+            if not whatsapp_from:
+                # No registered WhatsApp sender configured. The old default was
+                # the Twilio sandbox number, which is OFFLINE for real fans — the
+                # send would silently fail. Warn loudly so this is diagnosable.
+                whatsapp_from = "whatsapp:+14155238886"
+                logger.error(
+                    "TWILIO_WHATSAPP_NUMBER not set — falling back to the Twilio "
+                    "sandbox sender (%s), which is OFFLINE for production fans. "
+                    "WhatsApp reply to %s will likely fail. Set TWILIO_WHATSAPP_NUMBER "
+                    "to a registered WhatsApp sender (e.g. whatsapp:+1XXXXXXXXXX).",
+                    whatsapp_from,
+                    to_number,
+                )
             final_to = _ensure_whatsapp_prefix(to_number)
             final_from = _ensure_whatsapp_prefix(whatsapp_from)
         else:
@@ -207,7 +251,16 @@ class TwilioAdapter:
         # Route through the verified A2P messaging service when available.
         # WhatsApp still requires an explicit from_ number, so only use the
         # messaging service SID for standard SMS.
-        use_service_sid = self._messaging_service_sid and not is_whatsapp
+        #
+        # Exception: when the caller passes an explicit `from_number` (SMB
+        # tenants and multi-tenant performers, each of whom must reply from
+        # their OWN dedicated number), we honor that number instead of letting
+        # the messaging service pick an arbitrary sender from its pool. The
+        # number is still A2P-registered via its membership in the messaging
+        # service, so campaign treatment is preserved.
+        use_service_sid = (
+            self._messaging_service_sid and not is_whatsapp and not from_number
+        )
 
         if use_service_sid:
             logger.info(

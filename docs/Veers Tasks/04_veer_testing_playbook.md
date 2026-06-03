@@ -11,7 +11,7 @@ This is your turn-by-turn guide for testing the entire Zarna AI product end-to-e
 
 ---
 
-## TL;DR — your loop for every phase
+## TL;DR — your loop for every phas
 
 For every single phase, the loop is the same:
 
