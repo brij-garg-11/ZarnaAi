@@ -11,7 +11,9 @@ from flask import Blueprint, jsonify, request, session
 from ..routes.auth import login_required, current_user, resolve_slug, get_authorized_slugs
 
 _BUSINESS_CONFIGS_DIR = Path(__file__).parent.parent / "business_configs"
-from ..queries import get_overview_stats, list_shows, list_blast_drafts, get_all_tags
+from ..queries import (
+    get_overview_stats, get_media_kit_stats, list_shows, list_blast_drafts, get_all_tags,
+)
 from ..db import get_conn
 import logging
 
@@ -158,6 +160,62 @@ def dashboard_stats():
         top_area_codes=[
             {"area_code": a, "count": c}
             for a, c in stats.get("top_area_codes", [])
+        ],
+    )
+
+
+@api_bp.route("/api/analytics/report")
+@login_required
+def analytics_report():
+    """
+    Creator-facing media-kit report (Item 4).
+
+    Combines headline counts, the 30-day message trend, the fan-tier breakdown
+    (pie chart), and top fan intents into one payload the Analytics page renders
+    and the creator can print/download as a one-pager.
+    """
+    _require_performer_account()
+    slug = _slug_or_abort()
+    try:
+        overview = get_overview_stats(creator_slug=slug)
+    except Exception:
+        logger.exception("api: analytics_report overview failed for slug=%s", slug)
+        overview = {}
+    try:
+        kit = get_media_kit_stats(creator_slug=slug)
+    except Exception:
+        logger.exception("api: analytics_report media-kit failed for slug=%s", slug)
+        kit = {}
+
+    # Most active hour of day (0-23) from the 30-day hour histogram.
+    by_hour = overview.get("messages_by_hour", []) or []
+    most_active_hour = max(range(len(by_hour)), key=lambda h: by_hour[h]) if by_hour else None
+
+    return jsonify(
+        # Hero numbers
+        total_subscribers=kit.get("total_subscribers", overview.get("total_subscribers", 0)),
+        total_conversations=kit.get("total_conversations", 0),
+        superfans=kit.get("superfans", 0),
+        # Secondary stats
+        total_fan_messages=kit.get("total_fan_messages", overview.get("total_messages", 0)),
+        messages_week=overview.get("messages_week", 0),
+        new_subs_week=overview.get("new_subs_week", 0),
+        avg_messages_per_fan=kit.get("avg_messages_per_fan", 0),
+        longest_conversation=kit.get("longest_conversation", 0),
+        engagement_rate=kit.get("engagement_rate"),
+        most_active_hour=most_active_hour,
+        # Charts
+        messages_by_day=[
+            {"date": d, "count": c} for d, c in overview.get("messages_by_day", [])
+        ],
+        tier_breakdown=[
+            {"tier": t, "count": c} for t, c in kit.get("tier_breakdown", [])
+        ],
+        top_intents=[
+            {"intent": i, "count": c} for i, c in kit.get("top_intents", [])
+        ],
+        top_area_codes=[
+            {"area_code": a, "count": c} for a, c in overview.get("top_area_codes", [])
         ],
     )
 
@@ -1388,8 +1446,11 @@ def api_upload_image():
     try:
         import secrets as _secrets
         data = f.read()
-        if not data:
-            return jsonify(success=False, error="Uploaded file is empty."), 400
+        from ..image_validation import validate_image_bytes
+        # Square is NOT enforced (see blast.py) — size + valid-image checks only.
+        err = validate_image_bytes(data, require_square=False)
+        if err:
+            return jsonify(success=False, error=err), 400
 
         data_b64 = base64.b64encode(data).decode("ascii")
         access_token = _secrets.token_hex(16)
@@ -2271,6 +2332,38 @@ def _load_performer_config_from_db(slug: str) -> dict | None:
         return None
 
 
+_CUSTOM_LINKS_MAX = 10
+_CUSTOM_LINK_LABEL_MAX = 60
+_CUSTOM_LINK_WHEN_MAX = 160
+
+
+def _sanitize_custom_links(raw) -> list:
+    """
+    Normalise the custom_links payload from the frontend.
+
+    Keeps only objects with a non-empty label and an http(s) URL. Trims overly
+    long fields and caps the total count so the AI prompt can't be flooded.
+    Returns a clean list[dict] safe to persist and inject into prompts.
+    """
+    if not isinstance(raw, list):
+        return []
+    cleaned = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label", "")).strip()[:_CUSTOM_LINK_LABEL_MAX]
+        url = str(item.get("url", "")).strip()
+        when = str(item.get("when_to_send", "")).strip()[:_CUSTOM_LINK_WHEN_MAX]
+        if not label or not url:
+            continue
+        if not (url.startswith("http://") or url.startswith("https://")):
+            continue
+        cleaned.append({"label": label, "url": url, "when_to_send": when})
+        if len(cleaned) >= _CUSTOM_LINKS_MAX:
+            break
+    return cleaned
+
+
 @api_bp.route("/api/bot-data")
 @login_required
 def bot_data():
@@ -2365,6 +2458,7 @@ def bot_data():
             },
             banned_words=db_cfg.get("banned_words", []),
             name_variants=db_cfg.get("name_variants", []),
+            custom_links=db_cfg.get("custom_links", []),
             # SMS profile + first-message (opt-in) — new My Bot sections
             sms_display_name=db_cfg.get("sms_display_name", db_cfg.get("name", "")),
             profile_photo_url=db_cfg.get("profile_photo_url", ""),
@@ -2403,6 +2497,7 @@ def bot_data():
         },
         banned_words=cfg.get("banned_words", []),
         name_variants=cfg.get("name_variants", []),
+        custom_links=cfg.get("custom_links", []),
         # SMS profile + first-message (opt-in) — new My Bot sections
         sms_display_name=cfg.get("sms_display_name", cfg.get("name", cfg.get("display_name", ""))),
         profile_photo_url=cfg.get("profile_photo_url", ""),
@@ -2471,12 +2566,18 @@ def save_bot_data():
     allowed_performer = {
         "name", "bio", "description", "tone", "voice_style",
         "website_url", "podcast_url", "media_urls", "banned_words", "links",
+        "custom_links",
         # SMS profile + first-message (opt-in) — new My Bot sections
         "sms_display_name", "profile_photo_url", "send_contact_card", "first_message",
     }
     updates = {k: v for k, v in data.items() if k in allowed_performer}
     if not updates:
         return jsonify(error="No valid fields provided"), 400
+
+    # Sanitize custom_links (Item 3): keep only well-formed {label, url, when_to_send}
+    # rows with a usable http(s) URL, capped so the prompt can't be flooded.
+    if "custom_links" in updates:
+        updates["custom_links"] = _sanitize_custom_links(updates["custom_links"])
 
     # When a super-admin / team member is viewing-as a different tenant,
     # attribute a brand-new bot_configs INSERT to that tenant's actual owner

@@ -47,6 +47,7 @@ def _load_guard():
         },
         "operator_app_pkg.queries": {
             "get_overview_stats": lambda **kw: {},
+            "get_media_kit_stats": lambda **kw: {},
             "list_shows": lambda **kw: [],
             "list_blast_drafts": lambda **kw: [],
             "get_all_tags": lambda **kw: [],

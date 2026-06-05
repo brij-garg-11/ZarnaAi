@@ -235,6 +235,17 @@ class ZarnaBrain:
                     phone_number[-4:] if phone_number else "?", self.slug,
                 )
 
+        # Show directive (Item 1): for SHOW intent, match the fan's city against the
+        # tour calendar so the reply names the specific upcoming show + date and link.
+        # Never fatal — a failure here just falls back to the generic ticket reply.
+        show_directive = None
+        if intent == Intent.SHOW:
+            try:
+                from app.brain.show_calendar import build_show_directive
+                show_directive = build_show_directive(message_text, self.creator_config)
+            except Exception:
+                _logger.exception("show_directive build failed for slug=%s", self.slug)
+
         reply = generate_zarna_reply(
             intent=intent,
             user_message=message_text,
@@ -250,6 +261,7 @@ class ZarnaBrain:
             sell_context=sell_context,
             sell_variant=sell_variant,
             creator_config=self.creator_config,
+            show_directive=show_directive,
         )
         gen_ms = (time.perf_counter() - t_gen) * 1000
         ai_provider, ai_prompt_tokens, ai_completion_tokens = _generator_mod.get_last_usage()

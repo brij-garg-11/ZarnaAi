@@ -108,6 +108,101 @@ def get_overview_stats(creator_slug: str = "") -> dict:
         conn.close()
 
 
+def get_media_kit_stats(creator_slug: str = "") -> dict:
+    """
+    Aggregate stats for the creator-facing "Analytics" / media-kit report (Item 4).
+
+    Everything here is PII-free counts and breakdowns a creator could print and
+    hand to a talent agency. Tenant-scoped by ``creator_slug`` — an empty slug
+    returns {} (never silently exposes another creator's data).
+
+    Schema notes (see app/storage/postgres.py): ``intent``, ``conversation_turn``
+    and ``did_user_reply`` are written onto the bot reply row (role='assistant').
+    ``conversation_turn = 1`` marks the first bot reply of each conversation, so
+    counting those rows yields the number of distinct conversations.
+    """
+    slug = creator_slug
+    if not slug:
+        return {}
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                "SELECT COUNT(DISTINCT phone_number) FROM contacts WHERE creator_slug=%s",
+                (slug,),
+            )
+            total_subscribers = cur.fetchone()[0]
+
+            cur.execute(
+                "SELECT COUNT(*) FROM messages WHERE role='user' AND creator_slug=%s",
+                (slug,),
+            )
+            total_fan_messages = cur.fetchone()[0]
+
+            # Each conversation has exactly one turn=1 bot reply.
+            cur.execute(
+                "SELECT COUNT(*) FROM messages "
+                "WHERE creator_slug=%s AND role='assistant' AND conversation_turn = 1",
+                (slug,),
+            )
+            total_conversations = cur.fetchone()[0]
+
+            cur.execute(
+                "SELECT COALESCE(MAX(conversation_turn), 0) FROM messages "
+                "WHERE creator_slug=%s AND role='assistant'",
+                (slug,),
+            )
+            longest_conversation = cur.fetchone()[0]
+
+            # Fan tier breakdown — superfan / engaged / lurker / dormant (pie chart).
+            cur.execute(
+                "SELECT COALESCE(NULLIF(fan_tier, ''), 'engaged') AS tier, "
+                "COUNT(DISTINCT phone_number) AS cnt "
+                "FROM contacts WHERE creator_slug=%s GROUP BY tier ORDER BY cnt DESC",
+                (slug,),
+            )
+            tier_breakdown = [(r["tier"], r["cnt"]) for r in cur.fetchall()]
+            superfans = next((c for t, c in tier_breakdown if t == "superfan"), 0)
+
+            # What fans text about most (top intents).
+            cur.execute(
+                "SELECT intent, COUNT(*) AS cnt FROM messages "
+                "WHERE creator_slug=%s AND role='assistant' AND intent IS NOT NULL AND intent <> '' "
+                "GROUP BY intent ORDER BY cnt DESC LIMIT 6",
+                (slug,),
+            )
+            top_intents = [(r["intent"], r["cnt"]) for r in cur.fetchall()]
+
+            # Engagement rate: of bot replies we scored, how many got a fan reply.
+            cur.execute(
+                "SELECT COUNT(*) FILTER (WHERE did_user_reply) AS replied, "
+                "COUNT(*) FILTER (WHERE did_user_reply IS NOT NULL) AS scored "
+                "FROM messages WHERE creator_slug=%s AND role='assistant'",
+                (slug,),
+            )
+            row = cur.fetchone()
+            replied, scored = row["replied"] or 0, row["scored"] or 0
+            engagement_rate = round(replied / scored * 100) if scored else None
+
+        avg_messages_per_fan = (
+            round(total_fan_messages / total_subscribers, 1) if total_subscribers else 0
+        )
+
+        return {
+            "total_subscribers": total_subscribers,
+            "total_fan_messages": total_fan_messages,
+            "total_conversations": total_conversations,
+            "longest_conversation": longest_conversation,
+            "superfans": superfans,
+            "tier_breakdown": tier_breakdown,
+            "top_intents": top_intents,
+            "engagement_rate": engagement_rate,
+            "avg_messages_per_fan": avg_messages_per_fan,
+        }
+    finally:
+        conn.close()
+
+
 # ── Audience count (no PII) ────────────────────────────────────────────────
 
 def _slug_clause(slug: str | None, table_alias: str = "") -> tuple[str, list]:

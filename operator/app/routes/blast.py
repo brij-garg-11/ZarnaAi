@@ -437,10 +437,21 @@ def upload_image():
     filename = f"{uuid.uuid4().hex}.{ext}"
     mime_type = f.content_type or f"image/{ext}"
 
+    # Read bytes once so we can validate (size + square) before storing anywhere.
+    # PDFs skip the image dimension check but still get the size cap.
+    data = f.read()
+    from ..image_validation import validate_image_bytes
+    # Square is NOT enforced — non-square images are allowed (they may simply crop
+    # to a circle on the contact card). We still cap size + reject non-images.
+    err = validate_image_bytes(data, require_square=False)
+    if err:
+        return jsonify({"error": err}), 400
+
     # ── S3 / R2 (optional) ──────────────────────────────────────────────────
     if _s3_configured():
         try:
             import boto3
+            import io as _io
             bucket      = os.getenv("IMAGE_BUCKET")
             endpoint    = os.getenv("IMAGE_ENDPOINT_URL")
             key_id      = os.getenv("IMAGE_AWS_KEY_ID")
@@ -449,22 +460,17 @@ def upload_image():
             key = f"blast-images/{filename}"
             s3 = boto3.client("s3", endpoint_url=endpoint,
                               aws_access_key_id=key_id, aws_secret_access_key=key_secret)
-            s3.upload_fileobj(f.stream, bucket, key,
+            s3.upload_fileobj(_io.BytesIO(data), bucket, key,
                               ExtraArgs={"ContentType": mime_type, "ACL": "public-read"})
             url = f"{public_base}/{key}"
             logger.info("Uploaded blast image to S3/R2: %s", url)
             return jsonify({"url": url})
         except Exception as e:
             logger.exception("S3 upload failed, falling back to DB: %s", e)
-            f.stream.seek(0)
 
     # ── Postgres via base64 TEXT (zero-config, survives redeploys) ──────────
     try:
-        data = f.read()
         logger.info("upload_image: read %d bytes (mime=%s)", len(data), mime_type)
-        if not data:
-            return jsonify({"error": "Uploaded file is empty — please try again."}), 400
-
         data_b64 = base64.b64encode(data).decode("ascii")
 
         from ..db import get_conn

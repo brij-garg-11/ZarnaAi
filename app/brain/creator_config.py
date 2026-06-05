@@ -51,6 +51,25 @@ class CreatorConfig:
 
     links: CreatorLinks = field(default_factory=CreatorLinks)
 
+    # Tour calendar (Item 1). bandsintown_artist enables the live Bandsintown API
+    # lookup; upcoming_shows is the manual fallback list. Both optional — when
+    # absent, SHOW replies use the generic links.tickets URL exactly as before.
+    bandsintown_artist: str = ""
+    upcoming_shows: Tuple[dict, ...] = field(default_factory=tuple)
+
+    # Custom links (Item 3) — creator-defined links the AI may surface when
+    # relevant. Each item: {"label": str, "url": str, "when_to_send": str}.
+    custom_links: Tuple[dict, ...] = field(default_factory=tuple)
+
+    # SMS profile + first message (Item 2). All optional and OFF by default, so a
+    # creator with none of these set behaves exactly as before (no vCard, no
+    # opt-in message). send_contact_card gates the vCard; first_message gates the
+    # welcome text. profile_photo_url / sms_display_name feed the contact card.
+    sms_display_name: str = ""
+    profile_photo_url: str = ""
+    send_contact_card: bool = False
+    first_message: str = ""
+
     # Prompt text blocks — when non-empty, replace the Python constants in generator.py.
     # Empty string means "use the hardcoded Python fallback for this field."
     hard_fact_guardrails_text: str = ""
@@ -84,6 +103,13 @@ def _build_from_dict(slug: str, data: dict) -> CreatorConfig:
         mil_answers=tuple(data.get("mil_answers", [])),
         family_roast_names=tuple(data.get("family_roast_names", [])),
         links=links,
+        bandsintown_artist=data.get("bandsintown_artist", ""),
+        upcoming_shows=tuple(s for s in data.get("upcoming_shows", []) if isinstance(s, dict)),
+        custom_links=tuple(l for l in data.get("custom_links", []) if isinstance(l, dict)),
+        sms_display_name=data.get("sms_display_name", ""),
+        profile_photo_url=data.get("profile_photo_url", ""),
+        send_contact_card=bool(data.get("send_contact_card", False)),
+        first_message=data.get("first_message", ""),
         hard_fact_guardrails_text=data.get("hard_fact_guardrails_text", ""),
         voice_lock_rules_text=data.get("voice_lock_rules_text", ""),
         style_rules_text=data.get("style_rules_text", ""),

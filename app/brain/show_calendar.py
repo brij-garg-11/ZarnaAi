@@ -1,0 +1,348 @@
+"""
+Show calendar — per-creator tour dates for SHOW-intent replies.
+
+When a fan asks "when are you coming to <city>?" the bot should answer with the
+*specific* upcoming show (venue + date) and that show's ticket link, opening with
+a warm "I'd love to see you there!" — not a bare generic URL. If Zarna was just in
+the fan's city, the bot should say "we were just there!" instead of recommending a
+show whose date has already passed.
+
+Data source priority (first that yields shows wins):
+  1. Bandsintown public REST API — when the creator config sets ``bandsintown_artist``.
+     No API key required; only an app_id string (BANDSINTOWN_APP_ID env, with a default).
+  2. ``upcoming_shows`` array in the creator config — manual fallback that the
+     operator curates by hand.
+  3. Nothing — callers fall back to the generic ``links.tickets`` URL and the
+     existing generic SHOW prompt, so behaviour is unchanged.
+
+Results are cached in-process per creator slug for 4 hours, mirroring the SMB
+calendar cache in ``app/smb/knowledge.py``. Network failures degrade gracefully:
+a failed Bandsintown fetch falls through to the config ``upcoming_shows`` list.
+
+This module never raises to its callers — every public function is wrapped so a
+bug here can never break a fan's reply. The worst case is "no directive", which
+means the bot falls back to the existing generic ticket reply.
+"""
+from __future__ import annotations
+
+import logging
+import os
+import threading
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import List, Optional
+
+import requests
+
+_LOGGER = logging.getLogger(__name__)
+
+# How long a fetched calendar stays warm before we re-fetch. 4h keeps the bot
+# within a few hours of the artist's Bandsintown listings without hammering the API.
+_CACHE_TTL_SECONDS = 4 * 60 * 60
+
+# A past show is only worth mentioning ("we were just there!") for a short window.
+_RECENT_PAST_DAYS = 60
+
+# Bandsintown caps how far back the past feed goes; we only need a handful.
+_PAST_PAGE_SIZE = 15
+
+_BANDSINTOWN_BASE = "https://rest.bandsintown.com/artists"
+
+_cache_lock = threading.Lock()
+_cache: dict[str, tuple[float, "ShowCalendar"]] = {}  # slug -> (fetched_at, calendar)
+
+
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Show:
+    city: str = ""
+    region: str = ""  # state / province
+    venue: str = ""
+    date_iso: str = ""  # "2026-07-12" (date part only)
+    date_label: str = ""  # "Jul 12, 2026"
+    ticket_url: str = ""
+
+
+@dataclass
+class ShowCalendar:
+    upcoming: List[Show] = field(default_factory=list)
+    recent_past: List[Show] = field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        return not self.upcoming and not self.recent_past
+
+
+@dataclass
+class ShowDirective:
+    """Instruction + link injected into the SHOW prompt for a specific fan message."""
+    instruction: str
+    ticket_url: str
+
+
+# ---------------------------------------------------------------------------
+# Config helpers
+# ---------------------------------------------------------------------------
+
+def _app_id() -> str:
+    return os.getenv("BANDSINTOWN_APP_ID", "zarna-sms-bot").strip() or "zarna-sms-bot"
+
+
+def _generic_tickets(creator_config) -> str:
+    """The creator's general tickets page — used when a show has no specific link."""
+    links = getattr(creator_config, "links", None)
+    return getattr(links, "tickets", "") if links else ""
+
+
+# ---------------------------------------------------------------------------
+# Bandsintown fetch + parse  (fetch = network, parse = pure/testable)
+# ---------------------------------------------------------------------------
+
+def _fetch_bandsintown(artist: str, past: bool = False) -> list:
+    """Call the Bandsintown events API. Returns the raw JSON list, or [] on any failure."""
+    if not artist:
+        return []
+    # Bandsintown expects the artist name URL-encoded in the path.
+    artist_path = requests.utils.quote(artist, safe="")
+    url = f"{_BANDSINTOWN_BASE}/{artist_path}/events"
+    params = {"app_id": _app_id()}
+    if past:
+        params["date"] = "past"
+    try:
+        resp = requests.get(url, params=params, timeout=8)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        _LOGGER.warning("show_calendar: Bandsintown fetch failed for %r (past=%s): %s",
+                        artist, past, exc)
+        return []
+    if not isinstance(data, list):
+        # The API returns {"errorMessage": ...} when the artist is unknown.
+        _LOGGER.info("show_calendar: Bandsintown returned non-list for %r: %r", artist, data)
+        return []
+    if past:
+        # Past feed is newest-first; keep only the most recent handful.
+        return data[:_PAST_PAGE_SIZE]
+    return data
+
+
+def _parse_bandsintown(events: list) -> List[Show]:
+    """Normalise raw Bandsintown event objects into Show records. Pure function."""
+    shows: List[Show] = []
+    for ev in events or []:
+        if not isinstance(ev, dict):
+            continue
+        venue = ev.get("venue") or {}
+        dt_raw = (ev.get("datetime") or "").strip()
+        date_iso, date_label = _format_dt(dt_raw)
+        ticket_url = ""
+        for offer in ev.get("offers") or []:
+            if isinstance(offer, dict) and (offer.get("url") or "").strip():
+                # Prefer an explicit "Tickets" offer, else take the first link.
+                if (offer.get("type") or "").lower() == "tickets":
+                    ticket_url = offer["url"].strip()
+                    break
+                if not ticket_url:
+                    ticket_url = offer["url"].strip()
+        shows.append(Show(
+            city=(venue.get("city") or "").strip(),
+            region=(venue.get("region") or "").strip(),
+            venue=(venue.get("name") or "").strip(),
+            date_iso=date_iso,
+            date_label=date_label,
+            ticket_url=ticket_url,
+        ))
+    return shows
+
+
+def _format_dt(dt_raw: str) -> tuple[str, str]:
+    """('2026-07-12T20:00:00') -> ('2026-07-12', 'Jul 12, 2026'). Degrades gracefully."""
+    if not dt_raw:
+        return "", ""
+    try:
+        dt = datetime.fromisoformat(dt_raw.replace("Z", "+00:00"))
+    except ValueError:
+        # Some feeds send a bare date.
+        try:
+            dt = datetime.strptime(dt_raw[:10], "%Y-%m-%d")
+        except ValueError:
+            return "", dt_raw
+    # Avoid %-d (not portable); strip a leading zero from the day manually.
+    label = dt.strftime("%b %d, %Y").replace(" 0", " ")
+    return dt.date().isoformat(), label
+
+
+# ---------------------------------------------------------------------------
+# Config fallback parser
+# ---------------------------------------------------------------------------
+
+def _shows_from_config(creator_config) -> List[Show]:
+    """Build Show records from the creator config ``upcoming_shows`` array."""
+    raw = getattr(creator_config, "upcoming_shows", ()) or ()
+    shows: List[Show] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        shows.append(Show(
+            city=str(item.get("city", "")).strip(),
+            region=str(item.get("state", item.get("region", ""))).strip(),
+            venue=str(item.get("venue", "")).strip(),
+            date_iso=str(item.get("date_iso", "")).strip(),
+            date_label=str(item.get("date", item.get("date_label", ""))).strip(),
+            ticket_url=str(item.get("ticket_url", "")).strip(),
+        ))
+    return shows
+
+
+# ---------------------------------------------------------------------------
+# Calendar assembly (cached)
+# ---------------------------------------------------------------------------
+
+def _build_calendar(creator_config) -> ShowCalendar:
+    """Assemble a ShowCalendar from Bandsintown (preferred) or the config fallback."""
+    artist = (getattr(creator_config, "bandsintown_artist", "") or "").strip()
+    if artist:
+        upcoming = _parse_bandsintown(_fetch_bandsintown(artist, past=False))
+        recent_past = _parse_bandsintown(_fetch_bandsintown(artist, past=True))
+        if upcoming or recent_past:
+            return ShowCalendar(upcoming=upcoming, recent_past=_filter_recent_past(recent_past))
+        _LOGGER.info("show_calendar: Bandsintown empty for %r — using config fallback", artist)
+    # Manual fallback: config shows are treated as upcoming only.
+    return ShowCalendar(upcoming=_shows_from_config(creator_config), recent_past=[])
+
+
+def _filter_recent_past(shows: List[Show]) -> List[Show]:
+    """Keep only past shows within the recent window, so we don't surface stale tours."""
+    today = datetime.now(timezone.utc).date()
+    keep: List[Show] = []
+    for s in shows:
+        if not s.date_iso:
+            continue
+        try:
+            d = datetime.strptime(s.date_iso, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        age = (today - d).days
+        if 0 <= age <= _RECENT_PAST_DAYS:
+            keep.append(s)
+    return keep
+
+
+def get_calendar(creator_config) -> ShowCalendar:
+    """Return the (cached) ShowCalendar for a creator. Never raises."""
+    if creator_config is None:
+        return ShowCalendar()
+    slug = getattr(creator_config, "slug", "") or "default"
+    now = time.time()
+    with _cache_lock:
+        entry = _cache.get(slug)
+        if entry and (now - entry[0]) < _CACHE_TTL_SECONDS:
+            return entry[1]
+    try:
+        cal = _build_calendar(creator_config)
+    except Exception:
+        _LOGGER.exception("show_calendar: build failed for slug=%s", slug)
+        cal = ShowCalendar()
+    with _cache_lock:
+        _cache[slug] = (now, cal)
+    return cal
+
+
+def clear_cache() -> None:
+    """Test/admin helper — drop all cached calendars."""
+    with _cache_lock:
+        _cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# City matching + directive building
+# ---------------------------------------------------------------------------
+
+def _match_city(message: str, shows: List[Show]) -> Optional[Show]:
+    """Return the first show whose city/region appears in the fan's message."""
+    text = (message or "").lower()
+    if not text:
+        return None
+    for show in shows:
+        city = show.city.lower()
+        if city and city in text:
+            return show
+    # Region (state) match is a weaker signal — only use it as a fallback.
+    for show in shows:
+        region = show.region.lower()
+        if region and len(region) > 2 and region in text:
+            return show
+    return None
+
+
+def _upcoming_summary(shows: List[Show], limit: int = 3) -> str:
+    """A compact 'City (date)' list of the next few shows for prompt context."""
+    parts = []
+    for s in shows[:limit]:
+        if s.city and s.date_label:
+            parts.append(f"{s.city} on {s.date_label}")
+        elif s.city:
+            parts.append(s.city)
+    return "; ".join(parts)
+
+
+def build_show_directive(message: str, creator_config) -> Optional[ShowDirective]:
+    """
+    Build a per-message SHOW directive, or None to use the generic ticket reply.
+
+    Match priority:
+      1. Upcoming show in the fan's city  -> "we'd love to see you at <venue> on <date>".
+      2. Recent past show in the fan's city -> "we were just in <city>!" (no stale date).
+      3. No city match but shows exist -> list the next few upcoming dates.
+    """
+    if creator_config is None:
+        return None
+    try:
+        cal = get_calendar(creator_config)
+    except Exception:
+        _LOGGER.exception("show_calendar: get_calendar failed")
+        return None
+    if cal.is_empty():
+        return None
+
+    generic = _generic_tickets(creator_config)
+
+    upcoming_match = _match_city(message, cal.upcoming)
+    if upcoming_match:
+        when = upcoming_match.date_label or "the upcoming date"
+        venue = upcoming_match.venue or "the venue"
+        instruction = (
+            f"The fan asked about {upcoming_match.city}. Zarna HAS an upcoming show there: "
+            f"{venue} in {upcoming_match.city} on {when}. Clearly and warmly tell them you'd "
+            f"love to see them at this show on this date — name the date explicitly."
+        )
+        return ShowDirective(instruction=instruction,
+                             ticket_url=upcoming_match.ticket_url or generic)
+
+    past_match = _match_city(message, cal.recent_past)
+    if past_match:
+        venue = past_match.venue or "town"
+        when = past_match.date_label or "recently"
+        instruction = (
+            f"The fan asked about {past_match.city}. Zarna was JUST there ({venue} on {when}) "
+            f"and has no upcoming show in that city yet. Warmly say you were just in "
+            f"{past_match.city} — do NOT invent or promise a future date — and invite them to "
+            f"watch the tickets page for when she's back."
+        )
+        return ShowDirective(instruction=instruction, ticket_url=generic)
+
+    if cal.upcoming:
+        summary = _upcoming_summary(cal.upcoming)
+        if not summary:
+            return None
+        instruction = (
+            "No specific city matched the fan's message. Zarna is on tour — you may mention a "
+            f"couple of upcoming dates if it helps ({summary}), then point them to the full "
+            "schedule. Keep it light; do not claim a show in a city that isn't listed."
+        )
+        return ShowDirective(instruction=instruction, ticket_url=generic)
+
+    return None

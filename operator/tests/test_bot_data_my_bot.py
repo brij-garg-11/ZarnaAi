@@ -49,3 +49,30 @@ def test_compliance_footer_present_without_config(client, performer):
     g = client.get("/api/bot-data")
     assert g.status_code == 200
     assert "STOP" in g.get_json().get("compliance_footer", "")
+
+
+def test_custom_links_round_trip_and_sanitization(client, performer):
+    """Custom links (Item 3): well-formed rows persist; junk is dropped on save."""
+    payload = {
+        "name": "Zarna Garg",
+        "custom_links": [
+            {"label": "Cooking Course", "url": "https://learn.example/cooking",
+             "when_to_send": "fan asks about cooking classes"},
+            {"label": "Patreon", "url": "https://patreon.com/zarna", "when_to_send": ""},
+            # These should be stripped by _sanitize_custom_links:
+            {"label": "Bad scheme", "url": "javascript:alert(1)"},
+            {"label": "", "url": "https://missing-label.example"},
+            {"label": "No url", "url": ""},
+        ],
+    }
+    r = client.post("/api/bot-data", json=payload)
+    assert r.status_code == 200, r.get_json()
+
+    body = client.get("/api/bot-data").get_json()
+    links = body["custom_links"]
+    assert len(links) == 2
+    assert links[0]["label"] == "Cooking Course"
+    assert links[0]["url"] == "https://learn.example/cooking"
+    assert links[0]["when_to_send"] == "fan asks about cooking classes"
+    assert links[1]["label"] == "Patreon"
+    assert links[1]["when_to_send"] == ""
