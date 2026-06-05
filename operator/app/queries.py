@@ -116,10 +116,12 @@ def get_media_kit_stats(creator_slug: str = "") -> dict:
     hand to a talent agency. Tenant-scoped by ``creator_slug`` — an empty slug
     returns {} (never silently exposes another creator's data).
 
-    Schema notes (see app/storage/postgres.py): ``intent``, ``conversation_turn``
-    and ``did_user_reply`` are written onto the bot reply row (role='assistant').
-    ``conversation_turn = 1`` marks the first bot reply of each conversation, so
-    counting those rows yields the number of distinct conversations.
+    Conversation metrics are derived straight from the ``messages`` table grouped
+    by ``phone_number`` rather than from ``conversation_turn``. ``conversation_turn``
+    is only written on the AI-reply path (and is NULL for older / SlickText-era
+    history) AND it resets after 24h of silence, so it badly under-counts a
+    creator like Zarna whose inbound is SlickText. Grouping by phone is
+    channel-agnostic and covers all history.
     """
     slug = creator_slug
     if not slug:
@@ -139,17 +141,22 @@ def get_media_kit_stats(creator_slug: str = "") -> dict:
             )
             total_fan_messages = cur.fetchone()[0]
 
-            # Each conversation has exactly one turn=1 bot reply.
+            # Conversations = distinct fans who have actually texted in (any
+            # channel, all history). Channel-agnostic, unlike conversation_turn.
             cur.execute(
-                "SELECT COUNT(*) FROM messages "
-                "WHERE creator_slug=%s AND role='assistant' AND conversation_turn = 1",
+                "SELECT COUNT(DISTINCT phone_number) FROM messages "
+                "WHERE creator_slug=%s AND role='user'",
                 (slug,),
             )
             total_conversations = cur.fetchone()[0]
 
+            # Longest conversation = most messages (both sides) exchanged with a
+            # single fan — the true thread length, not per-session turns.
             cur.execute(
-                "SELECT COALESCE(MAX(conversation_turn), 0) FROM messages "
-                "WHERE creator_slug=%s AND role='assistant'",
+                "SELECT COALESCE(MAX(cnt), 0) FROM ("
+                "  SELECT phone_number, COUNT(*) AS cnt FROM messages "
+                "  WHERE creator_slug=%s GROUP BY phone_number"
+                ") t",
                 (slug,),
             )
             longest_conversation = cur.fetchone()[0]
