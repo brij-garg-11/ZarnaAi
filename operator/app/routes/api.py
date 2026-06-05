@@ -204,6 +204,10 @@ def analytics_report():
         avg_messages_per_fan=kit.get("avg_messages_per_fan", 0),
         longest_conversation=kit.get("longest_conversation", 0),
         engagement_rate=kit.get("engagement_rate"),
+        blast_reply_rate=kit.get("blast_reply_rate"),
+        blast_replies=kit.get("blast_replies", 0),
+        blast_recipients=kit.get("blast_recipients", 0),
+        blasts_counted=kit.get("blasts_counted", 0),
         most_active_hour=most_active_hour,
         # Charts
         messages_by_day=[

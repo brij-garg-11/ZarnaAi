@@ -109,6 +109,15 @@ def test_bulk_map_is_tenant_scoped(blast_data):
     assert m[blast_data["zarna_blast"]]["replies"] == 2
 
 
+def test_overview_aggregates_tenant_blasts(blast_data):
+    from app.queries import get_blast_reply_overview
+    ov = get_blast_reply_overview("zarna")
+    assert ov["recipients"] == 3       # other-tenant recipient excluded
+    assert ov["replies"] == 2
+    assert ov["reply_rate_pct"] == 67
+    assert ov["blasts_counted"] == 1
+
+
 @pytest.fixture()
 def performer(client, make_user):
     uid = make_user("perf@zarna.test", creator_slug="zarna", account_type="performer")

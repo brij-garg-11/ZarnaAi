@@ -29,6 +29,7 @@ def report_data():
                 fan_memory TEXT, created_at TIMESTAMPTZ DEFAULT NOW())
         """)
         cur.execute("TRUNCATE messages, contacts")
+        cur.execute("TRUNCATE blast_recipients, blast_drafts RESTART IDENTITY CASCADE")
 
         # 3 Zarna fans across tiers + 1 fan on another tenant (must be excluded).
         cur.execute("INSERT INTO contacts (phone_number, creator_slug, fan_tier) VALUES "
@@ -55,6 +56,16 @@ def report_data():
         # Other tenant — must never be counted.
         msg("+9001", "user", slug="other", i=6)
         msg("+9001", "assistant", slug="other", intent="SHOW", turn=1, replied=True, i=7)
+
+        # A sent Zarna blast to 2 fans; fan 1001 already has a user msg (i=0,2)
+        # right after the blast time below, so it counts as a reply; 1003 has none.
+        cur.execute("INSERT INTO blast_drafts (name, status, creator_slug) "
+                    "VALUES ('Promo','sent','zarna') RETURNING id")
+        bid = cur.fetchone()[0]
+        blast_at = base - datetime.timedelta(minutes=1)  # just before fan 1001's msgs
+        for ph in ("+1001", "+1003"):
+            cur.execute("INSERT INTO blast_recipients (blast_id, phone_number, sent_at) "
+                        "VALUES (%s,%s,%s)", (bid, ph, blast_at))
     conn.close()
 
 
@@ -89,6 +100,15 @@ def test_report_top_intents(client, performer, report_data):
 def test_report_engagement_rate(client, performer, report_data):
     # 3 scored assistant rows, 2 with did_user_reply=TRUE -> 67%.
     assert client.get("/api/analytics/report").get_json()["engagement_rate"] == 67
+
+
+def test_report_blast_reply_rate(client, performer, report_data):
+    # Blast went to 2 fans (1001, 1003); only 1001 texted back in-window -> 50%.
+    body = client.get("/api/analytics/report").get_json()
+    assert body["blast_recipients"] == 2
+    assert body["blast_replies"] == 1
+    assert body["blast_reply_rate"] == 50
+    assert body["blasts_counted"] == 1
 
 
 def test_report_requires_login(client):
