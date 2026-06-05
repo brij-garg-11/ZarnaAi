@@ -191,8 +191,10 @@ def get_media_kit_stats(creator_slug: str = "") -> dict:
             replied, scored = row["replied"] or 0, row["scored"] or 0
             engagement_rate = round(replied / scored * 100) if scored else None
 
+        # Average over fans who actually engaged (sent a message), not all
+        # subscribers — dormant subscribers who never texted would dilute it.
         avg_messages_per_fan = (
-            round(total_fan_messages / total_subscribers, 1) if total_subscribers else 0
+            round(total_fan_messages / total_conversations, 1) if total_conversations else 0
         )
 
         return {
