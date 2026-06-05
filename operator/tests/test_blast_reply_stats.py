@@ -111,11 +111,23 @@ def test_bulk_map_is_tenant_scoped(blast_data):
 
 def test_overview_aggregates_tenant_blasts(blast_data):
     from app.queries import get_blast_reply_overview
-    ov = get_blast_reply_overview("zarna")
+    # min_recipients=1 so the 3-recipient seed blast still counts; we're
+    # exercising the aggregation + tenant scoping here, not the test filter.
+    ov = get_blast_reply_overview("zarna", min_recipients=1)
     assert ov["recipients"] == 3       # other-tenant recipient excluded
     assert ov["replies"] == 2
     assert ov["reply_rate_pct"] == 67
     assert ov["blasts_counted"] == 1
+
+
+def test_overview_excludes_small_test_blasts(blast_data):
+    from app.queries import get_blast_reply_overview
+    # The seed blast only reached 3 fans (< 15) so the default threshold treats
+    # it as a test send and excludes it entirely.
+    ov = get_blast_reply_overview("zarna")
+    assert ov["blasts_counted"] == 0
+    assert ov["recipients"] == 0
+    assert ov["reply_rate_pct"] is None
 
 
 @pytest.fixture()

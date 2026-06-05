@@ -197,8 +197,8 @@ def get_media_kit_stats(creator_slug: str = "") -> dict:
             round(total_fan_messages / total_conversations, 1) if total_conversations else 0
         )
 
-        # Blast reply rate — aggregate across all of this creator's blasts that
-        # have recipient records (uses its own connection).
+        # Blast reply rate — aggregate across this creator's real blasts (small
+        # test sends are excluded; uses its own connection).
         blast = get_blast_reply_overview(slug)
 
         return {
@@ -583,6 +583,11 @@ def get_blast_draft(draft_id: int, creator_slug: str | None = None) -> dict | No
 # folding in unrelated conversations that start days later.
 BLAST_REPLY_WINDOW_HOURS = 72
 
+# Blasts sent to fewer than this many recipients are treated as tests/internal
+# sends and excluded from the aggregate analytics reply rate, so they don't
+# distort the headline media-kit number.
+MIN_REAL_BLAST_RECIPIENTS = 15
+
 
 def get_blast_reply_stats(draft_id: int, *, window_hours: int = BLAST_REPLY_WINDOW_HOURS) -> dict:
     """Reply rate for a single blast.
@@ -643,17 +648,19 @@ def get_blast_reply_overview(
     creator_slug: str,
     *,
     window_hours: int = BLAST_REPLY_WINDOW_HOURS,
+    min_recipients: int = MIN_REAL_BLAST_RECIPIENTS,
 ) -> dict:
-    """Aggregate blast reply rate across all of a creator's sent blasts.
+    """Aggregate blast reply rate across all of a creator's real sent blasts.
 
     A presentable headline stat for the media-kit report: across every blast we
     have recipient records for, what share of recipients texted back within
-    ``window_hours``. ``blasts_counted`` is how many blasts contributed (i.e.
-    have recorded recipients — blasts sent before recipient tracking are
-    excluded), so the frontend can caveat the number honestly.
+    ``window_hours``. Blasts that reached fewer than ``min_recipients`` people
+    are excluded as tests/internal sends so they don't distort the number.
+    ``blasts_counted`` is how many blasts contributed (so the frontend can
+    caveat the number honestly).
 
     Returns ``{reply_rate_pct, replies, recipients, blasts_counted}``.
-    ``reply_rate_pct`` is ``None`` when no blasts have recipient records.
+    ``reply_rate_pct`` is ``None`` when no qualifying blasts exist.
     """
     if not creator_slug:
         return {"reply_rate_pct": None, "replies": 0, "recipients": 0, "blasts_counted": 0}
@@ -662,6 +669,14 @@ def get_blast_reply_overview(
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute(
                 """
+                WITH real_blasts AS (
+                  SELECT br.blast_id
+                  FROM blast_recipients br
+                  JOIN blast_drafts d ON d.id = br.blast_id
+                  WHERE d.creator_slug = %s
+                  GROUP BY br.blast_id
+                  HAVING COUNT(*) >= %s
+                )
                 SELECT
                   COUNT(*)                                AS recipients,
                   COUNT(*) FILTER (WHERE replied)         AS replies,
@@ -676,11 +691,10 @@ def get_blast_reply_overview(
                              AND m.created_at <= br.sent_at + make_interval(hours => %s)
                          ) AS replied
                   FROM blast_recipients br
-                  JOIN blast_drafts d ON d.id = br.blast_id
-                  WHERE d.creator_slug = %s
+                  WHERE br.blast_id IN (SELECT blast_id FROM real_blasts)
                 ) s
                 """,
-                (window_hours, creator_slug),
+                (creator_slug, min_recipients, window_hours),
             )
             row = cur.fetchone()
             recipients = (row["recipients"] if row else 0) or 0

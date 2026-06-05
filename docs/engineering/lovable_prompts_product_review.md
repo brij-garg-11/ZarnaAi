@@ -81,8 +81,9 @@ Returns (all tenant-scoped, PII-free):
 > ("Longest conversation, messages"), `engagement_rate` ("Reply rate", render as
 > `{n}%`, or "—" when `null`), `blast_reply_rate` ("Blast reply rate", render as
 > `{n}%`, or "—" when `null`; add a tiny subline "across {blasts_counted}
-> campaigns" when `blasts_counted > 0`), `most_active_hour` (format as a 12-hour
-> time like "8 PM", or "—" when `null`).
+> campaigns" when `blasts_counted > 0`. Note: small test sends under 15
+> recipients are excluded from this number), `most_active_hour` (format as a
+> 12-hour time like "8 PM", or "—" when `null`).
 >
 > **Section C — charts** (use the charting lib already in the project, e.g.
 > recharts):

@@ -56,16 +56,46 @@ def report_data():
         # Other tenant — must never be counted.
         msg("+9001", "user", slug="other", i=6)
         msg("+9001", "assistant", slug="other", intent="SHOW", turn=1, replied=True, i=7)
+    conn.close()
 
-        # A sent Zarna blast to 2 fans; fan 1001 already has a user msg (i=0,2)
-        # right after the blast time below, so it counts as a reply; 1003 has none.
+
+@pytest.fixture()
+def blast_report_data():
+    """Seeds a real-sized blast (>= 15 recipients) for the aggregate reply-rate
+    stat, kept separate from `report_data` so the headline-count tests aren't
+    affected by the extra recipient messages."""
+    from app.db import get_conn
+    conn = get_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id BIGSERIAL PRIMARY KEY, phone_number TEXT, role TEXT, text TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW(), creator_slug TEXT,
+                intent TEXT, conversation_turn INT, did_user_reply BOOLEAN)
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS contacts (
+                id BIGSERIAL PRIMARY KEY, phone_number TEXT, creator_slug TEXT,
+                fan_tier TEXT, fan_tags TEXT[], fan_location TEXT, fan_name TEXT,
+                fan_memory TEXT, created_at TIMESTAMPTZ DEFAULT NOW())
+        """)
+        cur.execute("TRUNCATE messages, contacts")
+        cur.execute("TRUNCATE blast_recipients, blast_drafts RESTART IDENTITY CASCADE")
+
+        base = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        blast_at = base - datetime.timedelta(minutes=1)
+
+        # One real blast to 16 fans; 8 of them text back within the window.
         cur.execute("INSERT INTO blast_drafts (name, status, creator_slug) "
                     "VALUES ('Promo','sent','zarna') RETURNING id")
         bid = cur.fetchone()[0]
-        blast_at = base - datetime.timedelta(minutes=1)  # just before fan 1001's msgs
-        for ph in ("+1001", "+1003"):
+        for n in range(16):
+            ph = f"+1700{n:04d}"
             cur.execute("INSERT INTO blast_recipients (blast_id, phone_number, sent_at) "
                         "VALUES (%s,%s,%s)", (bid, ph, blast_at))
+            if n < 8:
+                cur.execute("INSERT INTO messages (phone_number, role, text, created_at, "
+                            "creator_slug) VALUES (%s,'user','x',%s,'zarna')", (ph, base))
     conn.close()
 
 
@@ -102,11 +132,11 @@ def test_report_engagement_rate(client, performer, report_data):
     assert client.get("/api/analytics/report").get_json()["engagement_rate"] == 67
 
 
-def test_report_blast_reply_rate(client, performer, report_data):
-    # Blast went to 2 fans (1001, 1003); only 1001 texted back in-window -> 50%.
+def test_report_blast_reply_rate(client, performer, blast_report_data):
+    # One real blast to 16 fans; 8 replied in-window -> 50%.
     body = client.get("/api/analytics/report").get_json()
-    assert body["blast_recipients"] == 2
-    assert body["blast_replies"] == 1
+    assert body["blast_recipients"] == 16
+    assert body["blast_replies"] == 8
     assert body["blast_reply_rate"] == 50
     assert body["blasts_counted"] == 1
 
