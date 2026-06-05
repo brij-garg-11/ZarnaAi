@@ -29,9 +29,9 @@ cleaned version is the source of truth.
 Returns (all tenant-scoped, PII-free):
 - Hero: `total_subscribers`, `total_conversations`, `superfans` (ints).
 - Secondary: `total_fan_messages`, `messages_week`, `new_subs_week`,
-  `avg_messages_per_fan` (float), `longest_conversation` (int = max turns in one
-  conversation), `engagement_rate` (int 0–100 or `null`), `most_active_hour`
-  (int 0–23 or `null`).
+  `avg_messages_per_fan` (float), `longest_conversation` (int = most messages
+  exchanged with a single fan), `engagement_rate` (int 0–100 or `null`),
+  `most_active_hour` (int 0–23 or `null`).
 - `messages_by_day`: `[{ "date": "YYYY-MM-DD", "count": int }]` (last 30 days).
 - `tier_breakdown`: `[{ "tier": "superfan|engaged|lurker|dormant", "count": int }]`.
 - `top_intents`: `[{ "intent": string, "count": int }]` (already sorted desc).
@@ -39,27 +39,25 @@ Returns (all tenant-scoped, PII-free):
 
 ---
 
-## Prompt 1 — Add the "Custom Links" card to the My Bot page
+## Prompt 1 — Add custom links inside the existing "Links" card
 
-> On the **My Bot** page, add a new card titled **"Custom Links"** with subtext
-> "Extra links your bot can share with fans when it's relevant."
+> On the **My Bot** page, add custom links **inside the existing Links card** (do
+> NOT create a separate card). Keep the predefined fields (Tickets, Merch, Book,
+> YouTube, Website). Below them, add an **"+ Add link"** button.
 >
-> Bind it to the `custom_links` array from `GET /api/bot-data` (each item is
-> `{ label, url, when_to_send }`). Render an editable list where each row has:
-> - **Label** (text) — helper: "What this link is, e.g. 'Cooking Course'."
-> - **URL** (text) — helper: "Must start with http:// or https://."
-> - **When to send** (text) — helper: "Describe when the bot should share it,
->   e.g. 'when a fan asks about cooking classes'. The AI uses this to decide."
+> Each click adds one custom-link row bound to the `custom_links` array from
+> `GET /api/bot-data` (each item is `{ label, url, when_to_send }`). Render each
+> row as three compact inputs on one line plus a remove (trash) icon:
+> - **Label** — e.g. "Cooking Course".
+> - **URL** — must start with http:// or https:// (validate inline).
+> - **When to send** — helper: "When the bot should share it, e.g. 'when a fan
+>   asks about cooking classes'. The AI uses this to decide."
 >
-> Add an **"+ Add link"** button (disabled once there are 10 rows — show a small
-> "Max 10 links" note) and a remove (trash) button per row. Validate inline that
-> URL starts with `http`. On **Save**, `POST /api/bot-data` with the full
-> `custom_links` array, then refetch and re-render from the response (the server
-> strips invalid rows and trims long fields — show the cleaned result, don't
-> assume the local state was kept verbatim).
->
-> Place this card after **Links** and before **Banned Words**. Match the existing
-> card styling.
+> Disable "+ Add link" once there are 10 custom rows (show a small "Max 10 links"
+> note). On **Save**, `POST /api/bot-data` with the full `custom_links` array,
+> then refetch and re-render from the response (the server strips invalid rows and
+> trims long fields — show the cleaned result, don't assume local state was kept
+> verbatim). Match the existing card styling.
 
 ## Prompt 2 — Build the "Analytics" report page
 
@@ -80,7 +78,7 @@ Returns (all tenant-scoped, PII-free):
 > **Section B — secondary stats** as a compact grid of smaller stat tiles:
 > `messages_week` ("Messages this week"), `new_subs_week` ("New subs this week"),
 > `avg_messages_per_fan` ("Avg messages / fan"), `longest_conversation`
-> ("Longest conversation, turns"), `engagement_rate` ("Reply rate", render as
+> ("Longest conversation, messages"), `engagement_rate` ("Reply rate", render as
 > `{n}%`, or "—" when `null`), `most_active_hour` (format as a 12-hour time like
 > "8 PM", or "—" when `null`).
 >
@@ -115,9 +113,9 @@ Returns (all tenant-scoped, PII-free):
 
 ## Verify after submitting
 
-1. **Custom Links:** add a row (label + https URL + when-to-send), save, reload —
-   it persists. Add a row with a non-`http` URL or blank label, save — it's
-   dropped on refetch. Adding an 11th link is blocked.
+1. **Custom Links:** inside the Links card, "+ Add link" adds a row (label +
+   https URL + when-to-send); save, reload — it persists. A row with a non-`http`
+   URL or blank label is dropped on refetch. Adding an 11th link is blocked.
 2. **Analytics:** the three hero numbers, the secondary tiles, and all charts
    render from real data; empty states show "—" rather than crashing.
 3. **PDF:** "Download PDF" opens the print dialog and the preview shows only the

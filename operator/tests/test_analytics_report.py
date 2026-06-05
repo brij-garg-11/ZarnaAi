@@ -69,8 +69,8 @@ def performer(client, make_user):
 def test_report_headline_counts(client, performer, report_data):
     body = client.get("/api/analytics/report").get_json()
     assert body["total_subscribers"] == 3          # other-tenant fan excluded
-    assert body["total_conversations"] == 2         # two turn=1 assistant rows
-    assert body["longest_conversation"] == 2
+    assert body["total_conversations"] == 2         # fans 1001 + 1002 texted in
+    assert body["longest_conversation"] == 4        # fan 1001: 2 user + 2 assistant
     assert body["superfans"] == 1
     assert body["total_fan_messages"] == 3          # 3 user rows for zarna
     assert body["avg_messages_per_fan"] == 1.0

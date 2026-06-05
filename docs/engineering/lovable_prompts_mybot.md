@@ -36,9 +36,11 @@ Save that URL into `profile_photo_url` via `POST /api/bot-data`.
 ## Prompt 1 — Slim down the My Bot page
 
 > On the "My Bot" page, keep only these existing cards: **About** (Name +
-> Description), **Links**, and **Banned Words**. Remove the **Voice Style**
-> card and any **Tone**, **Podcast URL**, **Media URLs**, and **Name variants**
-> fields/cards — they aren't wired to anything.
+> Description) and **Links**. Remove the **Voice Style**, **Banned Words**, and
+> any **Tone**, **Podcast URL**, **Media URLs**, and **Name variants**
+> fields/cards — they aren't surfaced to creators. (Removing Banned Words is
+> UI-only; the backend still honors `banned_words` if set, and the save payload
+> must NOT include it.)
 >
 > In the **Links** card, add a **Website** field bound to `links.website`
 > (alongside tickets, merch, book, youtube). Keep saving via
@@ -104,8 +106,7 @@ Save that URL into `profile_photo_url` via `POST /api/bot-data`.
 >    appear to fans
 > 3. **First Message** (welcome text + greyed compliance footer) — the first
 >    thing a fan receives
-> 4. **Links** (tickets, merch, book, youtube, website)
-> 5. **Banned Words** — guardrails, last
+> 4. **Links** (tickets, merch, book, youtube, website + custom links)
 >
 > **Visual system (apply consistently to every card):**
 > - Uniform card style: same padding, border-radius, subtle border/shadow, and a
@@ -134,16 +135,14 @@ Save that URL into `profile_photo_url` via `POST /api/bot-data`.
 >   line, then the `compliance_footer` in muted/greyed text. Update live as they
 >   type. Make clear the greyed part is auto-added and not editable.
 >
-> **Banned Words:** render as removable chips/tags with an "add word" input,
-> rather than a raw comma list, if it isn't already.
->
 > Use the existing design tokens / shadcn components and the site's accent color.
 > Don't introduce a new color palette — match the rest of the dashboard.
 
 ## Verify after submitting
 
-1. My Bot shows only About, Links (with Website), Banned Words, SMS Profile,
-   First Message — no Voice Style / tone / podcast / media / name-variants.
+1. My Bot shows only About, SMS Profile, First Message, and Links (with Website
+   + custom links) — no Voice Style / Banned Words / tone / podcast / media /
+   name-variants.
 2. Uploading a square photo previews in the avatar frame and persists after
    reload (`profile_photo_url` saved).
 3. The contact-card toggle and SMS name save and reload correctly.
