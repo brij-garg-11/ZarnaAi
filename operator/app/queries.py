@@ -197,6 +197,10 @@ def get_media_kit_stats(creator_slug: str = "") -> dict:
             round(total_fan_messages / total_conversations, 1) if total_conversations else 0
         )
 
+        # Blast reply rate — aggregate across all of this creator's blasts that
+        # have recipient records (uses its own connection).
+        blast = get_blast_reply_overview(slug)
+
         return {
             "total_subscribers": total_subscribers,
             "total_fan_messages": total_fan_messages,
@@ -207,6 +211,10 @@ def get_media_kit_stats(creator_slug: str = "") -> dict:
             "top_intents": top_intents,
             "engagement_rate": engagement_rate,
             "avg_messages_per_fan": avg_messages_per_fan,
+            "blast_reply_rate": blast["reply_rate_pct"],
+            "blast_replies": blast["replies"],
+            "blast_recipients": blast["recipients"],
+            "blasts_counted": blast["blasts_counted"],
         }
     finally:
         conn.close()
@@ -628,6 +636,67 @@ def get_blast_reply_stats(draft_id: int, *, window_hours: int = BLAST_REPLY_WIND
         "replies": replies,
         "reply_rate_pct": reply_rate_pct,
         "window_hours": window_hours,
+    }
+
+
+def get_blast_reply_overview(
+    creator_slug: str,
+    *,
+    window_hours: int = BLAST_REPLY_WINDOW_HOURS,
+) -> dict:
+    """Aggregate blast reply rate across all of a creator's sent blasts.
+
+    A presentable headline stat for the media-kit report: across every blast we
+    have recipient records for, what share of recipients texted back within
+    ``window_hours``. ``blasts_counted`` is how many blasts contributed (i.e.
+    have recorded recipients — blasts sent before recipient tracking are
+    excluded), so the frontend can caveat the number honestly.
+
+    Returns ``{reply_rate_pct, replies, recipients, blasts_counted}``.
+    ``reply_rate_pct`` is ``None`` when no blasts have recipient records.
+    """
+    if not creator_slug:
+        return {"reply_rate_pct": None, "replies": 0, "recipients": 0, "blasts_counted": 0}
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                  COUNT(*)                                AS recipients,
+                  COUNT(*) FILTER (WHERE replied)         AS replies,
+                  COUNT(DISTINCT blast_id)                AS blasts_counted
+                FROM (
+                  SELECT br.blast_id,
+                         EXISTS (
+                           SELECT 1 FROM messages m
+                           WHERE m.phone_number = br.phone_number
+                             AND m.role = 'user'
+                             AND m.created_at >  br.sent_at
+                             AND m.created_at <= br.sent_at + make_interval(hours => %s)
+                         ) AS replied
+                  FROM blast_recipients br
+                  JOIN blast_drafts d ON d.id = br.blast_id
+                  WHERE d.creator_slug = %s
+                ) s
+                """,
+                (window_hours, creator_slug),
+            )
+            row = cur.fetchone()
+            recipients = (row["recipients"] if row else 0) or 0
+            replies = (row["replies"] if row else 0) or 0
+            blasts_counted = (row["blasts_counted"] if row else 0) or 0
+    except Exception:
+        conn.rollback()
+        recipients, replies, blasts_counted = 0, 0, 0
+    finally:
+        conn.close()
+
+    return {
+        "reply_rate_pct": round(replies / recipients * 100) if recipients else None,
+        "replies": replies,
+        "recipients": recipients,
+        "blasts_counted": blasts_counted,
     }
 
 

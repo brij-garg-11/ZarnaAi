@@ -79,8 +79,10 @@ Returns (all tenant-scoped, PII-free):
 > `messages_week` ("Messages this week"), `new_subs_week` ("New subs this week"),
 > `avg_messages_per_fan` ("Avg messages / fan"), `longest_conversation`
 > ("Longest conversation, messages"), `engagement_rate` ("Reply rate", render as
-> `{n}%`, or "—" when `null`), `most_active_hour` (format as a 12-hour time like
-> "8 PM", or "—" when `null`).
+> `{n}%`, or "—" when `null`), `blast_reply_rate` ("Blast reply rate", render as
+> `{n}%`, or "—" when `null`; add a tiny subline "across {blasts_counted}
+> campaigns" when `blasts_counted > 0`), `most_active_hour` (format as a 12-hour
+> time like "8 PM", or "—" when `null`).
 >
 > **Section C — charts** (use the charting lib already in the project, e.g.
 > recharts):
@@ -140,3 +142,5 @@ The blast APIs now return how many recipients texted back within 72h of a send
    report (no sidebar/buttons), on a light background, without cut-off charts.
 4. **Blast reply rate:** sent blasts show a "Reply rate" stat (e.g. `67%` ·
    "2 of 3 replied"); blasts without recipient tracking show "—".
+5. **Analytics blast stat:** the Analytics report shows a "Blast reply rate" tile
+   (`blast_reply_rate`) with a "across N campaigns" subline, or "—" when null.
