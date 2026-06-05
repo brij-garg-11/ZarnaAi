@@ -73,7 +73,7 @@ def test_report_headline_counts(client, performer, report_data):
     assert body["longest_conversation"] == 4        # fan 1001: 2 user + 2 assistant
     assert body["superfans"] == 1
     assert body["total_fan_messages"] == 3          # 3 user rows for zarna
-    assert body["avg_messages_per_fan"] == 1.0
+    assert body["avg_messages_per_fan"] == 1.5       # 3 fan msgs / 2 engaged fans
 
 
 def test_report_tier_breakdown(client, performer, report_data):
