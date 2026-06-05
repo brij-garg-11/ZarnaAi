@@ -109,6 +109,24 @@ Returns (all tenant-scoped, PII-free):
 > - Use `break-inside: avoid` on each card/chart so sections don't split across
 >   pages; target a single A4/Letter page if it fits, otherwise two.
 
+## Prompt 4 — Blast reply rate
+
+The blast APIs now return how many recipients texted back within 72h of a send
+(channel-agnostic — works for both Twilio and SlickText, unlike link CTR):
+
+- `GET /api/blasts` — each draft now includes `reply_rate_pct` (integer 0–100 or
+  `null`), `replies` (count), and `reply_recipients` (recipients we can attribute).
+- `GET /api/blasts/{id}/status` — same three fields: `reply_rate_pct`, `replies`,
+  `reply_recipients`.
+
+> On the Blasts list and the blast detail/results view, show a **"Reply rate"**
+> stat next to the existing sent/CTR numbers for any **sent** blast. Render it as
+> `{reply_rate_pct}%` with a small subline `{replies} of {reply_recipients}
+> replied`. When `reply_rate_pct` is `null` (e.g. an older blast sent before reply
+> tracking), show "—" with a tooltip "Not tracked for this blast". Use the
+> existing stat-card styling — no new palette. Add a one-line helper near the
+> number: "Fans who texted back within 72h of this blast."
+
 ---
 
 ## Verify after submitting
@@ -120,3 +138,5 @@ Returns (all tenant-scoped, PII-free):
    render from real data; empty states show "—" rather than crashing.
 3. **PDF:** "Download PDF" opens the print dialog and the preview shows only the
    report (no sidebar/buttons), on a light background, without cut-off charts.
+4. **Blast reply rate:** sent blasts show a "Reply rate" stat (e.g. `67%` ·
+   "2 of 3 replied"); blasts without recipient tracking show "—".
