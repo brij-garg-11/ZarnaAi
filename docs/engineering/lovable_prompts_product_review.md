@@ -79,11 +79,13 @@ Returns (all tenant-scoped, PII-free):
 > `messages_week` ("Messages this week"), `new_subs_week` ("New subs this week"),
 > `avg_messages_per_fan` ("Avg messages / fan"), `longest_conversation`
 > ("Longest conversation, messages"), `engagement_rate` ("Reply rate", render as
-> `{n}%`, or "—" when `null`), `blast_reply_rate` ("Blast reply rate", render as
-> `{n}%`, or "—" when `null`; add a tiny subline "across {blasts_counted}
-> campaigns" when `blasts_counted > 0`. Note: small test sends under 15
-> recipients are excluded from this number), `most_active_hour` (format as a
-> 12-hour time like "8 PM", or "—" when `null`).
+> `{n}%`, or "—" when `null`), `blast_reply_rate` ("Avg blast reply rate", render
+> as `{n}%`, or "—" when `null`; add a tiny subline "avg across {blasts_counted}
+> campaigns" when `blasts_counted > 0`. This is the **average of each campaign's
+> reply rate** — every campaign weighted equally — and small test sends under 15
+> recipients are excluded. Do NOT show a pooled "X of Y replied" ratio next to it,
+> since this is a per-campaign average, not a single pooled fraction),
+> `most_active_hour` (format as a 12-hour time like "8 PM", or "—" when `null`).
 >
 > **Section C — charts** (use the charting lib already in the project, e.g.
 > recharts):
