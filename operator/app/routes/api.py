@@ -13,6 +13,7 @@ from ..routes.auth import login_required, current_user, resolve_slug, get_author
 _BUSINESS_CONFIGS_DIR = Path(__file__).parent.parent / "business_configs"
 from ..queries import (
     get_overview_stats, get_media_kit_stats, list_shows, list_blast_drafts, get_all_tags,
+    get_blast_reply_stats, get_blast_reply_stats_map,
 )
 from ..db import get_conn
 import logging
@@ -279,7 +280,16 @@ def blasts_list():
         logger.exception("api: failed to list blasts")
         drafts, tags = [], []
 
+    # One bulk query for reply rates across every blast, so the list doesn't
+    # fan out into a per-row query.
+    try:
+        reply_stats = get_blast_reply_stats_map(creator_slug=slug)
+    except Exception:
+        logger.exception("api: failed to compute blast reply stats")
+        reply_stats = {}
+
     def fmt(d):
+        rs = reply_stats.get(d["id"]) or {}
         return {
             "id": d["id"],
             "name": d.get("name") or "Untitled",
@@ -294,6 +304,9 @@ def blasts_list():
             "scheduled_at": d["scheduled_at"].isoformat() if d.get("scheduled_at") else None,
             "sent_at": d["sent_at"].isoformat() if d.get("sent_at") else None,
             "created_at": d["created_at"].isoformat() if d.get("created_at") else None,
+            "reply_recipients": rs.get("recipients", 0),
+            "replies": rs.get("replies", 0),
+            "reply_rate_pct": rs.get("reply_rate_pct"),
         }
 
     return jsonify(
@@ -1696,12 +1709,16 @@ def api_blast_status(draft_id):
     draft = get_blast_draft(draft_id)
     if not draft:
         return jsonify(success=False, error="not found"), 404
+    rs = get_blast_reply_stats(draft_id)
     return jsonify(
         success=True,
         status=draft["status"],
         sent_count=draft["sent_count"] or 0,
         failed_count=draft["failed_count"] or 0,
         total_recipients=draft["total_recipients"] or 0,
+        reply_recipients=rs["recipients"],
+        replies=rs["replies"],
+        reply_rate_pct=rs["reply_rate_pct"],
     )
 
 

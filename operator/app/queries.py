@@ -570,6 +570,119 @@ def get_blast_draft(draft_id: int, creator_slug: str | None = None) -> dict | No
         conn.close()
 
 
+# How long after a blast we still credit a fan's inbound text as a reply to it.
+# 72h covers the typical "saw it that evening / replied next day" pattern without
+# folding in unrelated conversations that start days later.
+BLAST_REPLY_WINDOW_HOURS = 72
+
+
+def get_blast_reply_stats(draft_id: int, *, window_hours: int = BLAST_REPLY_WINDOW_HOURS) -> dict:
+    """Reply rate for a single blast.
+
+    Counts how many recipients texted back (any inbound ``user`` message)
+    within ``window_hours`` of the blast being sent to them. Attribution is
+    via ``blast_recipients`` (recorded for every successful send, link or not),
+    so it works for SlickText and Twilio blasts alike — unlike link-click CTR,
+    which only exists when the blast carried a tracked link.
+
+    Returns ``{recipients, replies, reply_rate_pct, window_hours}``.
+    ``reply_rate_pct`` is ``None`` when there are no recorded recipients
+    (e.g. blasts sent before recipient tracking existed).
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                  COUNT(*)                        AS recipients,
+                  COUNT(*) FILTER (WHERE replied) AS replies
+                FROM (
+                  SELECT EXISTS (
+                    SELECT 1 FROM messages m
+                    WHERE m.phone_number = br.phone_number
+                      AND m.role = 'user'
+                      AND m.created_at >  br.sent_at
+                      AND m.created_at <= br.sent_at + make_interval(hours => %s)
+                  ) AS replied
+                  FROM blast_recipients br
+                  WHERE br.blast_id = %s
+                ) s
+                """,
+                (window_hours, draft_id),
+            )
+            row = cur.fetchone()
+            recipients = (row["recipients"] if row else 0) or 0
+            replies = (row["replies"] if row else 0) or 0
+    except Exception:
+        # Missing table on a fresh tenant or transient error — fail soft so the
+        # blast list/status never 500s over an optional stat.
+        conn.rollback()
+        recipients, replies = 0, 0
+    finally:
+        conn.close()
+
+    reply_rate_pct = round(replies / recipients * 100) if recipients else None
+    return {
+        "recipients": recipients,
+        "replies": replies,
+        "reply_rate_pct": reply_rate_pct,
+        "window_hours": window_hours,
+    }
+
+
+def get_blast_reply_stats_map(
+    creator_slug: str | None = None,
+    *,
+    window_hours: int = BLAST_REPLY_WINDOW_HOURS,
+) -> dict[int, dict]:
+    """Bulk version of :func:`get_blast_reply_stats` for list views.
+
+    Returns ``{blast_id: {recipients, replies, reply_rate_pct, window_hours}}``
+    in a single query so rendering a list of blasts doesn't fan out into one
+    query per row. ``creator_slug=None`` spans all tenants (super-admin view).
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            sql = """
+                SELECT br.blast_id AS blast_id,
+                       COUNT(*)    AS recipients,
+                       COUNT(*) FILTER (WHERE EXISTS (
+                         SELECT 1 FROM messages m
+                         WHERE m.phone_number = br.phone_number
+                           AND m.role = 'user'
+                           AND m.created_at >  br.sent_at
+                           AND m.created_at <= br.sent_at + make_interval(hours => %s)
+                       )) AS replies
+                FROM blast_recipients br
+            """
+            params: list = [window_hours]
+            if creator_slug:
+                sql += " JOIN blast_drafts d ON d.id = br.blast_id WHERE d.creator_slug = %s"
+                params.append(creator_slug)
+            sql += " GROUP BY br.blast_id"
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+    except Exception:
+        conn.rollback()
+        rows = []
+    finally:
+        conn.close()
+
+    out: dict[int, dict] = {}
+    for r in rows:
+        recipients = r["recipients"] or 0
+        replies = r["replies"] or 0
+        out[r["blast_id"]] = {
+            "recipients": recipients,
+            "replies": replies,
+            "reply_rate_pct": round(replies / recipients * 100) if recipients else None,
+            "window_hours": window_hours,
+        }
+    return out
+
+
 def save_blast_draft(*, name: str, body: str, channel: str, audience_type: str,
                      audience_filter: str, sample_pct: int, created_by: str,
                      media_url: str = "", link_url: str = "",
