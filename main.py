@@ -264,6 +264,27 @@ def health():
     return jsonify({"status": "ok", "service": "zarna-ai"})
 
 
+@app.route("/vcard/performer/<slug>.vcf", methods=["GET"])
+def performer_vcard(slug):
+    """Serve a performer's contact card (Item 2). Linked as the media URL in the
+    vCard MMS sent to brand-new fans. Returns 404 when the creator has no config."""
+    from flask import Response
+    from app.brain.creator_config import load_creator
+    from app.messaging.contact_card import build_performer_vcard
+
+    cfg = load_creator(slug)
+    if cfg is None:
+        return ("Not found", 404)
+    # Sanitize the optional tel query param — digits and a leading + only.
+    tel = "".join(ch for ch in (request.args.get("tel") or "") if ch.isdigit() or ch == "+")[:20]
+    vcf = build_performer_vcard(cfg, tel=tel)
+    return Response(
+        vcf,
+        mimetype="text/vcard",
+        headers={"Content-Disposition": f'attachment; filename="{slug}.vcf"'},
+    )
+
+
 _API_SECRET = (os.getenv("API_SECRET_KEY") or "").strip()
 
 
@@ -515,6 +536,13 @@ def _process_twilio_message(phone_number: str, message_text: str, quiz_context: 
                 detail=f"credits_exhausted slug={slug}",
             )
             return
+        # Capture first-contact status BEFORE the brain saves this message, so we
+        # can send the opt-in vCard + welcome to brand-new fans (Item 2).
+        is_first_contact = False
+        try:
+            is_first_contact = active_brain.storage.is_first_message(phone_number)
+        except Exception:
+            is_first_contact = False
         try:
             reply = active_brain.handle_incoming_message(phone_number, message_text, quiz_context=quiz_context, blast_context=blast_context)
         except Exception as e:
@@ -527,6 +555,23 @@ def _process_twilio_message(phone_number: str, message_text: str, quiz_context: 
                 detail=f"Twilio ai_error phone=...{phone_number[-4:] if phone_number else '?'}: {e}",
             )
             return
+        # First-contact sequence: vCard MMS + first_message welcome, sent before the
+        # AI reply. Opt-in via send_contact_card / first_message — no-op otherwise,
+        # so creators without these configured (e.g. Zarna today) are unaffected.
+        if is_first_contact:
+            try:
+                from app.messaging.contact_card import maybe_send_first_contact
+                maybe_send_first_contact(
+                    twilio,
+                    phone_number,
+                    getattr(active_brain, "creator_config", None),
+                    from_number=from_number or "",
+                )
+            except Exception:
+                logging.warning(
+                    "first-contact sequence failed for ...%s",
+                    phone_number[-4:] if phone_number else "?", exc_info=True,
+                )
         if not (reply or "").strip():
             logging.info("No Twilio reply for ...%s (conversation ender or empty)", phone_number[-4:])
             return

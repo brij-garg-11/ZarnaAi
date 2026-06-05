@@ -336,6 +336,40 @@ def _format_winning_examples(examples: list) -> str:
     )
 
 
+def _format_custom_links(creator_config) -> str:
+    """
+    Format the creator's custom links (Item 3) into an optional prompt block.
+
+    Each link is {"label", "url", "when_to_send"}. The ``when_to_send`` hint tells
+    the AI when the link is relevant. Returns "" when the creator has no usable
+    custom links so conversational prompts are byte-identical for everyone else.
+    """
+    if not creator_config:
+        return ""
+    links = getattr(creator_config, "custom_links", ()) or ()
+    rows = []
+    for item in links:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url", "")).strip()
+        label = str(item.get("label", "")).strip()
+        if not url or not label:
+            continue
+        when = str(item.get("when_to_send", "")).strip()
+        if when:
+            rows.append(f"- {label}: {url} — share this when {when}")
+        else:
+            rows.append(f"- {label}: {url}")
+    if not rows:
+        return ""
+    body = "\n".join(rows)
+    return (
+        "\nAdditional links you may share ONLY when the fan's message clearly calls for it "
+        "(never force a link; if you use one, paste the URL exactly as written on its own line):\n"
+        f"{body}\n"
+    )
+
+
 def _format_memory(fan_memory: str) -> str:
     if not fan_memory or not fan_memory.strip():
         return ""
@@ -360,6 +394,7 @@ def _build_prompt(
     sell_context: Optional[str] = None,
     sell_variant: Optional[str] = None,
     creator_config: "Optional[CreatorConfig]" = None,
+    show_directive: "Optional[object]" = None,
 ) -> str:
     # Resolve creator-specific values.
     #
@@ -444,6 +479,11 @@ def _build_prompt(
     # Blast context block — defined early so all intent paths can include it.
     blast_ctx_block = f"\n{blast_context}\n" if blast_context else ""
 
+    # Custom links block (Item 3) — creator-defined links the AI may surface in
+    # conversational replies when the fan's message clearly calls for it. Empty
+    # string when the creator has no custom links, so prompts are unchanged.
+    custom_links_block = _format_custom_links(creator_config)
+
     # Quiz mode overrides all intent routing — the fan is answering a quiz, not requesting
     # show tickets, clips, etc. Force the GENERAL path so the context is never ignored.
     if quiz_context:
@@ -491,16 +531,40 @@ Do not make up video titles. Never use the word "honey" or "darling". No profani
         variant_note = ""
         if sell_variant == "B":
             variant_note = "\nVariant B: open with a warm, personal reference to their city or show history if available, then land the ticket link naturally.\n"
+        # Show directive (Item 1): when the tour calendar matched the fan's city,
+        # inject the specific show + date and use that show's ticket link.
+        _show_link = _tickets
+        directive_block = ""
+        length_rule = "Respond in {name}'s voice — sharp, funny, 1 sentence max.".format(name=_creator_name)
+        weave_rule = (
+            'If fan context above mentions a city or a past show they attended, naturally weave '
+            'it in (e.g. "You\'re a true Chicago fan — here\'s where to grab tickets"). If there '
+            "is no context, keep it general."
+        )
+        if show_directive is not None:
+            _instruction = getattr(show_directive, "instruction", "") or ""
+            _directive_url = getattr(show_directive, "ticket_url", "") or ""
+            if _directive_url:
+                _show_link = _directive_url
+            if _instruction:
+                directive_block = f"\nShow guidance (follow this precisely): {_instruction}\n"
+                length_rule = (
+                    f"Respond in {_creator_name}'s voice — sharp, warm, 1-2 sentences max."
+                )
+                weave_rule = (
+                    "Follow the show guidance above exactly. Name the specific show, city, and "
+                    'date, and open with genuine "I\'d love to see you there!" warmth before the link.'
+                )
         return f"""You are {_creator_name}'s AI assistant.
 
 The user is asking about shows or tour dates: {user_message}
-{sell_ctx_block}{variant_note}
+{sell_ctx_block}{variant_note}{directive_block}
 {_guardrails}
 {_voice_lock}
 {tone_guidance}
-Respond in {_creator_name}'s voice — sharp, funny, 1 sentence max.
-If fan context above mentions a city or a past show they attended, naturally weave it in (e.g. "You're a true Chicago fan — here's where to grab tickets"). If there is no context, keep it general.
-Then on a new line, include EXACTLY this link with no changes: {_tickets}
+{length_rule}
+{weave_rule}
+Then on a new line, include EXACTLY this link with no changes: {_show_link}
 Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
     if intent == Intent.MERCH and not blast_context:
@@ -598,7 +662,7 @@ Background knowledge about {_creator_name} (use to make responses richer and mor
 {_voice_lock}
 {tone_guidance}
 {_examples}
-{examples_text}{memory_text}{history_text}{blast_ctx_block}Question from fan: {user_message}
+{examples_text}{memory_text}{history_text}{blast_ctx_block}{custom_links_block}Question from fan: {user_message}
 {_style}
 Critical for this message: answer the question directly in plain language first — no echo-mock, no keyword+? dodge. A follow-up question back is optional — only add one if it genuinely flows and you haven't asked one recently. Often the best reply to a question is just a great answer that ends on a period."""
 
@@ -613,7 +677,7 @@ Background knowledge about {_creator_name} (use to make responses richer and mor
 {_voice_lock}
 {tone_guidance}
 {_examples}
-{examples_text}{memory_text}{history_text}{blast_ctx_block}Fan shares: {user_message}
+{examples_text}{memory_text}{history_text}{blast_ctx_block}{custom_links_block}Fan shares: {user_message}
 {_style}
 Critical for this message: riff on what they shared — find the funny or warm angle in their specific detail. A follow-up question is optional — only if it genuinely earns its place and you haven't asked one recently. Often just landing the joke or observation is the better move. Default to ending on a period. Do not pivot to {_creator_name}'s life unless they asked."""
 
@@ -628,7 +692,7 @@ Background knowledge about {_creator_name} (use to make responses richer and mor
 {_voice_lock}
 {tone_guidance}
 {_examples}
-{examples_text}{memory_text}{history_text}{blast_ctx_block}{quiz_block}Message: {user_message}
+{examples_text}{memory_text}{history_text}{blast_ctx_block}{custom_links_block}{quiz_block}Message: {user_message}
 {_style}"""
 
 
@@ -939,6 +1003,7 @@ def generate_zarna_reply(
     sell_context: Optional[str] = None,
     sell_variant: Optional[str] = None,
     creator_config: "Optional[CreatorConfig]" = None,
+    show_directive: "Optional[object]" = None,
 ) -> str:
     """
     Generate reply. For GENERAL/JOKE with multi-model enabled, pass routing_tier
@@ -973,6 +1038,7 @@ def generate_zarna_reply(
         sell_context=sell_context,
         sell_variant=sell_variant,
         creator_config=creator_config,
+        show_directive=show_directive,
     )
 
     raw = _produce_raw_text(intent, prompt, routing_tier)

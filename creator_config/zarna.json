@@ -28,6 +28,29 @@
       "amazon.com/dp"
     ]
   },
+  "bandsintown_artist": "zarna garg",
+  "upcoming_shows": [
+    { "city": "Lexington", "state": "KY", "venue": "Comedy Off Broadway", "date": "Jun 5-6, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Ridgefield", "state": "CT", "venue": "The Ridgefield Playhouse", "date": "Jun 9, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Great Barrington", "state": "MA", "venue": "Mahaiwe Performing Arts Center", "date": "Jun 19, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Newark", "state": "NJ", "venue": "New Jersey Performing Arts Center", "date": "Jun 20, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Austin", "state": "TX", "venue": "Cap City Comedy Club", "date": "Jun 25-27, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Portland", "state": "OR", "venue": "Helium Comedy Club", "date": "Jul 2-4, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Timonium", "state": "MD", "venue": "Magooby's Joke House", "date": "Jul 9-11, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Berlin", "state": "", "venue": "PUNCH L!NE Club Berlin", "date": "Aug 21, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Atlantic City", "state": "NJ", "venue": "Hard Rock Hotel & Casino", "date": "Sep 4, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Virginia Beach", "state": "VA", "venue": "Funny Bone Comedy Club", "date": "Sep 25-26, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Milwaukee", "state": "WI", "venue": "Turner Hall Ballroom", "date": "Oct 4, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "San Francisco", "state": "CA", "venue": "Palace of Fine Arts", "date": "Oct 10, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Cincinnati", "state": "OH", "venue": "Hard Rock Casino Cincinnati", "date": "Oct 23, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Cleveland", "state": "OH", "venue": "Mimi Ohio Theatre", "date": "Oct 24, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Port Chester", "state": "NY", "venue": "The Capitol Theatre", "date": "Nov 6, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Huntington", "state": "NY", "venue": "The Paramount", "date": "Nov 7, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Portland", "state": "ME", "venue": "State Theatre", "date": "Dec 4, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Atlanta", "state": "GA", "venue": "Buckhead Theatre", "date": "Dec 18, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "Washington", "state": "DC", "venue": "Lincoln Theatre", "date": "Dec 19, 2026", "ticket_url": "https://zarnagarg.com/tickets/" },
+    { "city": "New York", "state": "NY", "venue": "Beacon Theatre", "date": "Dec 31, 2026", "ticket_url": "https://zarnagarg.com/tickets/" }
+  ],
   "name_variants": [
     "zara",
     "zaria",
