@@ -130,6 +130,51 @@ def test_overview_excludes_small_test_blasts(blast_data):
     assert ov["reply_rate_pct"] is None
 
 
+def test_overview_averages_per_campaign_not_pooled():
+    """Each campaign is weighted equally, so one big low-rate blast can't drown
+    out a smaller high-rate one (the whole point of the fix)."""
+    from app.db import get_conn
+    from app.queries import get_blast_reply_overview
+    conn = get_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id BIGSERIAL PRIMARY KEY, phone_number TEXT, role TEXT, text TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW(), creator_slug TEXT,
+                intent TEXT, conversation_turn INT, did_user_reply BOOLEAN)
+        """)
+        cur.execute("TRUNCATE messages")
+        cur.execute("TRUNCATE blast_recipients, blast_drafts RESTART IDENTITY CASCADE")
+        import datetime
+        base = datetime.datetime(2026, 2, 1, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        blast_at = base - datetime.timedelta(minutes=1)
+
+        def make_blast(name, n_recipients, n_replies, tag):
+            cur.execute("INSERT INTO blast_drafts (name, status, creator_slug) "
+                        "VALUES (%s,'sent','zarna') RETURNING id", (name,))
+            bid = cur.fetchone()[0]
+            for j in range(n_recipients):
+                ph = f"+1{tag}{j:05d}"
+                cur.execute("INSERT INTO blast_recipients (blast_id, phone_number, sent_at) "
+                            "VALUES (%s,%s,%s)", (bid, ph, blast_at))
+                if j < n_replies:
+                    cur.execute("INSERT INTO messages (phone_number, role, text, created_at, "
+                                "creator_slug) VALUES (%s,'user','x',%s,'zarna')", (ph, base))
+
+        # Big low-rate blast: 20 recipients, 2 replied -> 10%.
+        make_blast("Big list", 20, 2, "800")
+        # Small high-rate blast: 15 recipients, 12 replied -> 80%.
+        make_blast("Targeted", 15, 12, "900")
+    conn.close()
+
+    ov = get_blast_reply_overview("zarna")
+    assert ov["blasts_counted"] == 2
+    assert ov["recipients"] == 35           # pooled totals retained for context
+    assert ov["replies"] == 14
+    # Macro-average = (10 + 80) / 2 = 45, NOT the pooled 14/35 = 40.
+    assert ov["reply_rate_pct"] == 45
+
+
 @pytest.fixture()
 def performer(client, make_user):
     uid = make_user("perf@zarna.test", creator_slug="zarna", account_type="performer")

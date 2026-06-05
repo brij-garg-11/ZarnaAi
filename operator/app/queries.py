@@ -650,14 +650,20 @@ def get_blast_reply_overview(
     window_hours: int = BLAST_REPLY_WINDOW_HOURS,
     min_recipients: int = MIN_REAL_BLAST_RECIPIENTS,
 ) -> dict:
-    """Aggregate blast reply rate across all of a creator's real sent blasts.
+    """Average reply rate across all of a creator's real sent blasts.
 
-    A presentable headline stat for the media-kit report: across every blast we
-    have recipient records for, what share of recipients texted back within
-    ``window_hours``. Blasts that reached fewer than ``min_recipients`` people
-    are excluded as tests/internal sends so they don't distort the number.
-    ``blasts_counted`` is how many blasts contributed (so the frontend can
-    caveat the number honestly).
+    The presentable headline stat for the media-kit report: **the average of
+    each campaign's reply rate** (every blast weighted equally), so a handful of
+    huge full-list blasts can't drown out the many high-engagement targeted
+    sends. This matches the per-blast reply rate shown in the blast list.
+
+    (A recipient-weighted "pooled" rate would instead answer "of all blast
+    sends, what fraction got a reply" — that gets dominated by big low-intent
+    blasts and reads far lower than the typical campaign performs.)
+
+    Blasts that reached fewer than ``min_recipients`` people are excluded as
+    tests/internal sends. ``recipients`` / ``replies`` are pooled totals kept for
+    context; ``blasts_counted`` is how many campaigns contributed.
 
     Returns ``{reply_rate_pct, replies, recipients, blasts_counted}``.
     ``reply_rate_pct`` is ``None`` when no qualifying blasts exist.
@@ -669,8 +675,16 @@ def get_blast_reply_overview(
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute(
                 """
-                WITH real_blasts AS (
-                  SELECT br.blast_id
+                WITH per_blast AS (
+                  SELECT br.blast_id,
+                         COUNT(*) AS recipients,
+                         COUNT(*) FILTER (WHERE EXISTS (
+                           SELECT 1 FROM messages m
+                           WHERE m.phone_number = br.phone_number
+                             AND m.role = 'user'
+                             AND m.created_at >  br.sent_at
+                             AND m.created_at <= br.sent_at + make_interval(hours => %s)
+                         )) AS replies
                   FROM blast_recipients br
                   JOIN blast_drafts d ON d.id = br.blast_id
                   WHERE d.creator_slug = %s
@@ -678,36 +692,27 @@ def get_blast_reply_overview(
                   HAVING COUNT(*) >= %s
                 )
                 SELECT
-                  COUNT(*)                                AS recipients,
-                  COUNT(*) FILTER (WHERE replied)         AS replies,
-                  COUNT(DISTINCT blast_id)                AS blasts_counted
-                FROM (
-                  SELECT br.blast_id,
-                         EXISTS (
-                           SELECT 1 FROM messages m
-                           WHERE m.phone_number = br.phone_number
-                             AND m.role = 'user'
-                             AND m.created_at >  br.sent_at
-                             AND m.created_at <= br.sent_at + make_interval(hours => %s)
-                         ) AS replied
-                  FROM blast_recipients br
-                  WHERE br.blast_id IN (SELECT blast_id FROM real_blasts)
-                ) s
+                  COUNT(*)                                          AS blasts_counted,
+                  COALESCE(SUM(recipients), 0)                      AS recipients,
+                  COALESCE(SUM(replies), 0)                         AS replies,
+                  AVG(replies::numeric / NULLIF(recipients, 0) * 100) AS avg_rate
+                FROM per_blast
                 """,
-                (creator_slug, min_recipients, window_hours),
+                (window_hours, creator_slug, min_recipients),
             )
             row = cur.fetchone()
             recipients = (row["recipients"] if row else 0) or 0
             replies = (row["replies"] if row else 0) or 0
             blasts_counted = (row["blasts_counted"] if row else 0) or 0
+            avg_rate = row["avg_rate"] if row else None
     except Exception:
         conn.rollback()
-        recipients, replies, blasts_counted = 0, 0, 0
+        recipients, replies, blasts_counted, avg_rate = 0, 0, 0, None
     finally:
         conn.close()
 
     return {
-        "reply_rate_pct": round(replies / recipients * 100) if recipients else None,
+        "reply_rate_pct": round(float(avg_rate)) if avg_rate is not None else None,
         "replies": replies,
         "recipients": recipients,
         "blasts_counted": blasts_counted,
