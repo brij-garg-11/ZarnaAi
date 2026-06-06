@@ -3,7 +3,37 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.brain.intent import classify_intent, Intent
-from app.brain.generator import generate_zarna_reply
+from app.brain.generator import generate_zarna_reply, _build_prompt, _format_history
+
+
+def test_format_history_includes_anti_anchoring_guidance():
+    # Empty history → no block at all.
+    assert _format_history([]) == ""
+
+    hist = [
+        {"role": "assistant", "text": "I'm watching you!"},
+        {"role": "user", "text": "Do you have any shows in Kentucky?"},
+    ]
+    out = _format_history(hist)
+    # Still contains the actual turns...
+    assert "I'm watching you!" in out
+    assert "Do you have any shows in Kentucky?" in out
+    # ...but now frames them as background context, not the thing to respond to.
+    lowered = out.lower()
+    assert "background context only" in lowered
+    assert "current message" in lowered
+
+
+def test_question_prompt_carries_history_guidance():
+    # The bleed showed up in QUESTION/PERSONAL/GENERAL replies, so the guidance
+    # must reach those prompts (they include the history block).
+    prompt = _build_prompt(
+        Intent.QUESTION,
+        "what's your favorite food?",
+        chunks=[],
+        history=[{"role": "assistant", "text": "I'm watching you!"}],
+    )
+    assert "BACKGROUND CONTEXT ONLY" in prompt
 
 
 def test_intent_classification():

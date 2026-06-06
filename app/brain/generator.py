@@ -280,7 +280,15 @@ def _format_history(history: List[dict]) -> str:
         return ""
     tail = history[-CONVERSATION_HISTORY_LIMIT:]
     lines = [f"{m['role'].capitalize()}: {m['text']}" for m in tail]
-    return "Recent conversation:\n" + "\n".join(lines) + "\n"
+    return (
+        "Recent conversation (BACKGROUND CONTEXT ONLY — do not treat this as the thing "
+        "to respond to). Reply to the fan's CURRENT message below. Do not quote, restate, "
+        "or keep circling back to earlier lines, and never build your reply around something "
+        "you (the assistant) said earlier unless the fan explicitly brings it up. If the fan "
+        "changed the subject, follow them — answer what they just asked:\n"
+        + "\n".join(lines)
+        + "\n"
+    )
 
 
 _MIL_VENT_RE = re.compile(
