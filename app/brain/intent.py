@@ -37,6 +37,8 @@ _SHOW_KEYWORDS = {
     "ticket", "tickets", "tour", "touring",
     "performing", "performance", "come see",
     "where are you", "when are you", "tour dates", "venue",
+    # Tour/location questions — "are you coming to <city/state>?", "next show", etc.
+    "coming to", "next show", "upcoming show", "upcoming shows",
 }
 # Fan statements about already having tickets — must NOT trigger a SHOW sell reply.
 # "I already have my tickets!" should stay PERSONAL/FEEDBACK, not get a ticket link.
@@ -438,11 +440,12 @@ question — fan asking Zarna a direct question expecting a real answer
   examples: "what does Shalabh think of your comedy?", "do your kids watch your shows?",
             "is this actually you or AI?", "are you an AI?", "what AI model do you use?",
             "how do you deal with the MIL?", "when did you start doing comedy?",
-            "are you coming to Toronto?", "how is Zarna doing?"
+            "how is Zarna doing?"
 
-show — explicitly asking for ticket links, show dates, or where to see Zarna perform
+show — explicitly asking for ticket links, show dates, tour stops, or where/when to see Zarna perform
   examples: "how do I get tickets?", "when are you coming to LA?", "where can I buy tickets?",
-            "are you performing in Chicago?"
+            "are you performing in Chicago?", "are you coming to Toronto?",
+            "are you coming to Kentucky?", "what's your next show?", "any shows near me?"
 
 book — asking about Zarna's book "This American Woman"
   examples: "where can I buy your book?", "is your book on Kindle?", "loved This American Woman"

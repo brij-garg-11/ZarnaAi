@@ -328,3 +328,131 @@ class TestGeneratorIntegration:
         prompt = self._prompt(show_directive=d)
         assert "We were just in Cleveland!" in prompt
         assert "https://example.com/tickets/" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Config date-label parsing
+# ---------------------------------------------------------------------------
+
+def _label(d):
+    """Format a date the way the config labels are written ('Jun 5, 2026')."""
+    return d.strftime("%b %d, %Y").replace(" 0", " ")
+
+
+class TestParseLabelDates:
+    def test_single_day(self):
+        assert sc._parse_label_dates("Jun 9, 2026") == (
+            sc.date(2026, 6, 9), sc.date(2026, 6, 9))
+
+    def test_day_range(self):
+        assert sc._parse_label_dates("Jun 5-6, 2026") == (
+            sc.date(2026, 6, 5), sc.date(2026, 6, 6))
+
+    def test_full_month_name(self):
+        assert sc._parse_label_dates("December 31, 2026") == (
+            sc.date(2026, 12, 31), sc.date(2026, 12, 31))
+
+    def test_unparseable(self):
+        assert sc._parse_label_dates("sometime soon") == (None, None)
+        assert sc._parse_label_dates("") == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# State-name region matching (Kentucky -> KY)
+# ---------------------------------------------------------------------------
+
+class TestRegionMatching:
+    def test_full_state_name_matches_abbrev_region(self):
+        shows = [sc.Show(city="Lexington", region="KY", venue="Comedy Off Broadway",
+                         date_label="Jun 5, 2026")]
+        m = sc._match_city("are you coming to kentucky?", shows)
+        assert m and m.city == "Lexington"
+
+    def test_abbrev_in_message_matches(self):
+        shows = [sc.Show(city="Austin", region="TX", venue="Cap City", date_label="x")]
+        assert sc._match_city("any shows in TX?", shows).city == "Austin"
+
+    def test_city_still_takes_priority(self):
+        shows = [sc.Show(city="Lexington", region="KY", venue="V", date_label="x")]
+        assert sc._match_city("coming to lexington?", shows).city == "Lexington"
+
+    def test_two_letter_code_not_substring_matched(self):
+        # "ky" must not match inside an unrelated word.
+        shows = [sc.Show(city="Nowhere", region="KY", venue="V", date_label="x")]
+        assert sc._match_city("is it rocky out there", shows) is None
+
+
+# ---------------------------------------------------------------------------
+# Config calendar: chronological sort + past filtering + recent_past
+# ---------------------------------------------------------------------------
+
+class TestConfigCalendar:
+    def test_sorts_upcoming_and_drops_past(self):
+        today = datetime.now(timezone.utc).date()
+        soon = today + timedelta(days=10)
+        later = today + timedelta(days=40)
+        old = today - timedelta(days=120)
+        cfg = _cfg(slug="cfgcal", shows=[
+            {"city": "Later", "venue": "L", "date": _label(later)},
+            {"city": "Soon", "venue": "S", "date": _label(soon)},
+            {"city": "Old", "venue": "O", "date": _label(old)},
+        ])
+        cal = sc.get_calendar(cfg)
+        cities = [s.city for s in cal.upcoming]
+        assert cities == ["Soon", "Later"]   # sorted, "Old" filtered out
+
+    def test_recent_past_surfaced_for_just_there(self):
+        today = datetime.now(timezone.utc).date()
+        recent = today - timedelta(days=12)
+        cfg = _cfg(slug="cfgpast", shows=[
+            {"city": "Cleveland", "venue": "Mimi Ohio", "date": _label(recent)},
+        ])
+        cal = sc.get_calendar(cfg)
+        assert [s.city for s in cal.upcoming] == []
+        assert [s.city for s in cal.recent_past] == ["Cleveland"]
+
+    def test_just_there_directive_from_config(self):
+        today = datetime.now(timezone.utc).date()
+        recent = today - timedelta(days=12)
+        cfg = _cfg(slug="cfgjust", shows=[
+            {"city": "Cleveland", "venue": "Mimi Ohio", "date": _label(recent)},
+        ], tickets="https://generic/tickets")
+        d = sc.build_show_directive("coming back to cleveland?", cfg)
+        assert d is not None
+        assert "just" in d.instruction.lower()
+        assert d.ticket_url == "https://generic/tickets"
+
+
+class TestNextShowDirective:
+    def test_no_city_names_the_soonest_show(self):
+        today = datetime.now(timezone.utc).date()
+        soon = today + timedelta(days=5)
+        later = today + timedelta(days=30)
+        cfg = _cfg(slug="nextshow", shows=[
+            {"city": "Later City", "venue": "LV", "date": _label(later)},
+            {"city": "Soon City", "venue": "SV", "date": _label(soon)},
+        ])
+        d = sc.build_show_directive("what's your next show?", cfg)
+        assert d is not None
+        # Names the soonest (Soon City), not the array-order first.
+        assert "Soon City" in d.instruction
+        assert _label(soon) in d.instruction
+        assert "NEXT show" in d.instruction
+
+
+# ---------------------------------------------------------------------------
+# Intent routing for tour/location questions (fast path, no LLM)
+# ---------------------------------------------------------------------------
+
+class TestShowIntentRouting:
+    def test_are_you_coming_to_place_is_show(self):
+        from app.brain.intent import _fast_classify
+        assert _fast_classify("Are you coming to Kentucky?") == Intent.SHOW
+
+    def test_next_show_is_show(self):
+        from app.brain.intent import _fast_classify
+        assert _fast_classify("What's your next show?") == Intent.SHOW
+
+    def test_having_tickets_still_not_show(self):
+        from app.brain.intent import _fast_classify
+        assert _fast_classify("I already have my tickets!") == Intent.FEEDBACK

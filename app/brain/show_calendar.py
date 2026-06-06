@@ -27,15 +27,62 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import List, Optional
 
 import requests
 
 _LOGGER = logging.getLogger(__name__)
+
+# US state/territory abbreviation -> full name, so a fan typing "Kentucky" matches
+# a show whose config region is "KY" (and vice-versa). Lowercased at use sites.
+_US_STATES = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
+    "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
+    "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho",
+    "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
+    "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
+    "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
+    "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
+    "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
+    "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
+    "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
+    "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah",
+    "VT": "Vermont", "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
+    "WI": "Wisconsin", "WY": "Wyoming", "DC": "Washington",
+}
+
+_MONTHS = {m: i for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun",
+     "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
+
+# Matches config date labels like "Jun 5-6, 2026", "Jun 9, 2026", "Jul 2-4, 2026".
+_DATE_LABEL_RE = re.compile(
+    r"([A-Za-z]{3,9})\s+(\d{1,2})(?:\s*[-–]\s*(\d{1,2}))?,?\s*(\d{4})"
+)
+
+
+def _parse_label_dates(label: str) -> tuple[Optional[date], Optional[date]]:
+    """('Jun 5-6, 2026') -> (date(2026,6,5), date(2026,6,6)). (None, None) if unparseable."""
+    if not label:
+        return None, None
+    m = _DATE_LABEL_RE.search(label)
+    if not m:
+        return None, None
+    month = _MONTHS.get(m.group(1)[:3].lower())
+    if not month:
+        return None, None
+    try:
+        year = int(m.group(4))
+        start_day = int(m.group(2))
+        end_day = int(m.group(3)) if m.group(3) else start_day
+        return date(year, month, start_day), date(year, month, end_day)
+    except ValueError:
+        return None, None
 
 # How long a fetched calendar stays warm before we re-fetch. 4h keeps the bot
 # within a few hours of the artist's Bandsintown listings without hammering the API.
@@ -186,12 +233,20 @@ def _shows_from_config(creator_config) -> List[Show]:
     for item in raw:
         if not isinstance(item, dict):
             continue
+        date_label = str(item.get("date", item.get("date_label", ""))).strip()
+        date_iso = str(item.get("date_iso", "")).strip()
+        # Configs usually only carry a human label ("Jun 5-6, 2026"); derive the
+        # ISO start date so the calendar can sort + filter chronologically.
+        if not date_iso and date_label:
+            start, _end = _parse_label_dates(date_label)
+            if start:
+                date_iso = start.isoformat()
         shows.append(Show(
             city=str(item.get("city", "")).strip(),
             region=str(item.get("state", item.get("region", ""))).strip(),
             venue=str(item.get("venue", "")).strip(),
-            date_iso=str(item.get("date_iso", "")).strip(),
-            date_label=str(item.get("date", item.get("date_label", ""))).strip(),
+            date_iso=date_iso,
+            date_label=date_label,
             ticket_url=str(item.get("ticket_url", "")).strip(),
         ))
     return shows
@@ -210,8 +265,28 @@ def _build_calendar(creator_config) -> ShowCalendar:
         if upcoming or recent_past:
             return ShowCalendar(upcoming=upcoming, recent_past=_filter_recent_past(recent_past))
         _LOGGER.info("show_calendar: Bandsintown empty for %r — using config fallback", artist)
-    # Manual fallback: config shows are treated as upcoming only.
-    return ShowCalendar(upcoming=_shows_from_config(creator_config), recent_past=[])
+    # Manual fallback: split config shows into upcoming vs recent-past by date,
+    # so we never recommend a show whose date has already passed and we *can*
+    # say "we were just there" for very recent ones.
+    return _calendar_from_config(creator_config)
+
+
+def _calendar_from_config(creator_config) -> ShowCalendar:
+    today = datetime.now(timezone.utc).date()
+    upcoming: List[Show] = []
+    recent_past: List[Show] = []
+    for s in _shows_from_config(creator_config):
+        _start, end = _parse_label_dates(s.date_label)
+        if end is None:
+            # Unparseable date — keep it as upcoming rather than silently dropping.
+            upcoming.append(s)
+        elif end >= today:
+            upcoming.append(s)
+        elif (today - end).days <= _RECENT_PAST_DAYS:
+            recent_past.append(s)
+    upcoming.sort(key=lambda s: s.date_iso or "9999-99-99")
+    recent_past.sort(key=lambda s: s.date_iso or "", reverse=True)
+    return ShowCalendar(upcoming=upcoming, recent_past=recent_past)
 
 
 def _filter_recent_past(shows: List[Show]) -> List[Show]:
@@ -262,7 +337,12 @@ def clear_cache() -> None:
 # ---------------------------------------------------------------------------
 
 def _match_city(message: str, shows: List[Show]) -> Optional[Show]:
-    """Return the first show whose city/region appears in the fan's message."""
+    """Return the first show whose city/region appears in the fan's message.
+
+    City is matched as a substring. Region (state) is a weaker fallback: we match
+    both the full state name and the 2-letter code, so "Kentucky", "KY", and a
+    config region of either form all line up (the fan rarely types the code).
+    """
     text = (message or "").lower()
     if not text:
         return None
@@ -270,12 +350,29 @@ def _match_city(message: str, shows: List[Show]) -> Optional[Show]:
         city = show.city.lower()
         if city and city in text:
             return show
-    # Region (state) match is a weaker signal — only use it as a fallback.
     for show in shows:
-        region = show.region.lower()
-        if region and len(region) > 2 and region in text:
+        if _region_in_text(show.region, text):
             return show
     return None
+
+
+def _region_in_text(region: str, text: str) -> bool:
+    """True if a show's region matches the message, by full state name or code."""
+    region = (region or "").strip()
+    if not region:
+        return False
+    candidates = {region.lower()}
+    full = _US_STATES.get(region.upper())
+    if full:
+        candidates.add(full.lower())
+    for cand in candidates:
+        if len(cand) <= 2:
+            # 2-letter codes are noisy as substrings — require a whole-word match.
+            if re.search(rf"\b{re.escape(cand)}\b", text):
+                return True
+        elif cand in text:
+            return True
+    return False
 
 
 def _upcoming_summary(shows: List[Show], limit: int = 3) -> str:
@@ -338,10 +435,15 @@ def build_show_directive(message: str, creator_config) -> Optional[ShowDirective
         summary = _upcoming_summary(cal.upcoming)
         if not summary:
             return None
+        nxt = cal.upcoming[0]
+        when = nxt.date_label or "soon"
+        where = nxt.city or "the next city"
+        venue_part = f"{nxt.venue} in " if nxt.venue else ""
         instruction = (
-            "No specific city matched the fan's message. Zarna is on tour — you may mention a "
-            f"couple of upcoming dates if it helps ({summary}), then point them to the full "
-            "schedule. Keep it light; do not claim a show in a city that isn't listed."
+            f"No specific city matched the fan's message. Zarna's NEXT show is {venue_part}{where} "
+            f"on {when}. Name that next show and its date explicitly and warmly. There are more "
+            f"upcoming dates ({summary}) — you may mention one or two, then point them to the full "
+            "schedule. Never claim a show in a city that isn't in this list."
         )
         return ShowDirective(instruction=instruction, ticket_url=generic)
 
