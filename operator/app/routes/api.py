@@ -5263,7 +5263,7 @@ def _send_application_alert_email(lead: dict) -> None:
     })
 
 
-def _send_invite_email(to_email: str, invite_url: str) -> None:
+def _send_client_setup_email(to_email: str, invite_url: str) -> None:
     """Email an approved client a set-password / sign-in link. Best-effort."""
     import os
     import uuid
@@ -5458,7 +5458,7 @@ def approve_access_request(req_id: int, admin_id: int, data: dict) -> dict:
                 )
         conn.close()
         invite_url = f"{frontend_url}/reset-password?token={token}"
-        threading.Thread(target=_send_invite_email, args=(email, invite_url), daemon=True).start()
+        threading.Thread(target=_send_client_setup_email, args=(email, invite_url), daemon=True).start()
     except Exception:
         logger.exception("approve: failed to issue invite token for %s", email)
 
