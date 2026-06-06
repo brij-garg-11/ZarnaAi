@@ -37,8 +37,10 @@ _SHOW_KEYWORDS = {
     "ticket", "tickets", "tour", "touring",
     "performing", "performance", "come see",
     "where are you", "when are you", "tour dates", "venue",
-    # Tour/location questions — "are you coming to <city/state>?", "next show", etc.
+    # Tour/location questions — "are you coming to <city/state>?", "next show",
+    # "do you have any shows in <place>?", "are you playing in <place>?", etc.
     "coming to", "next show", "upcoming show", "upcoming shows",
+    "shows in", "show in", "any shows", "playing in",
 }
 # Fan statements about already having tickets — must NOT trigger a SHOW sell reply.
 # "I already have my tickets!" should stay PERSONAL/FEEDBACK, not get a ticket link.

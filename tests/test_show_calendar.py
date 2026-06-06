@@ -453,6 +453,20 @@ class TestShowIntentRouting:
         from app.brain.intent import _fast_classify
         assert _fast_classify("What's your next show?") == Intent.SHOW
 
+    def test_do_you_have_shows_in_place_is_show(self):
+        from app.brain.intent import _fast_classify
+        assert _fast_classify("Do you have any shows in Kentucky?") == Intent.SHOW
+
+    def test_playing_in_city_is_show(self):
+        from app.brain.intent import _fast_classify
+        assert _fast_classify("are you playing in Chicago?") == Intent.SHOW
+
     def test_having_tickets_still_not_show(self):
         from app.brain.intent import _fast_classify
         assert _fast_classify("I already have my tickets!") == Intent.FEEDBACK
+
+    def test_watch_your_shows_not_forced_to_show(self):
+        # "do your kids watch your shows" must not hit the SHOW fast path
+        # ("your shows" is not "shows in") — leave it to the LLM classifier.
+        from app.brain.intent import _fast_classify
+        assert _fast_classify("do your kids watch your shows") is not Intent.SHOW
