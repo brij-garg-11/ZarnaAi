@@ -212,9 +212,15 @@ def execute_blast(draft_id: int):
                         )
                     except Exception:
                         logger.warning("consume_credit failed for blast %s recipient", draft_id, exc_info=True)
-                # Save a messages row so link_clicked_1h can be tracked per fan
-                if tracked_link_slug:
-                    _save_blast_message(phone, fan_body, blast_owner_slug or "")
+                # Save a messages row for every recipient so the outbound blast
+                # shows up in the operator inbox thread (previously only saved
+                # when a tracked link was present, which left plain blasts
+                # invisible in the inbox — fans' replies appeared with no
+                # preceding message). has_link drives link_clicked_1h tracking.
+                _save_blast_message(
+                    phone, fan_body, blast_owner_slug or "",
+                    has_link=bool(tracked_link_slug),
+                )
             else:
                 failed += 1
         except Exception as e:
@@ -370,11 +376,20 @@ def _create_blast_context_session(
         logger.exception("_create_blast_context_session failed: %s", e)
 
 
-def _save_blast_message(phone: str, text: str, creator_slug: str = "") -> None:
+def _save_blast_message(
+    phone: str, text: str, creator_slug: str = "", *, has_link: bool = False
+) -> None:
     """
-    Save a single blast message to the shared messages table so
-    link_clicked_1h can be tracked per fan.  Uses msg_source='blast'
-    to keep these rows out of the bot's conversation history.
+    Save a single blast message to the shared messages table.
+
+    Two purposes:
+      1. The outbound blast appears in the operator inbox thread, so when a
+         fan replies the operator sees the message that prompted it.
+      2. link_clicked_1h can be tracked per fan when the blast carried a link.
+
+    Uses msg_source='blast' so these rows are excluded from the bot's
+    conversation history (the main app filters msg_source='blast' when
+    building LLM context) while still surfacing in the inbox view.
     """
     try:
         from .db import get_conn
@@ -384,9 +399,9 @@ def _save_blast_message(phone: str, text: str, creator_slug: str = "") -> None:
                 cur.execute(
                     """
                     INSERT INTO messages (phone_number, role, text, has_link, msg_source, creator_slug)
-                    VALUES (%s, 'assistant', %s, TRUE, 'blast', %s)
+                    VALUES (%s, 'assistant', %s, %s, 'blast', %s)
                     """,
-                    (phone, text, creator_slug),
+                    (phone, text, has_link, creator_slug),
                 )
         conn.close()
     except Exception as e:
@@ -435,11 +450,19 @@ def _send_twilio(phone: str, body: str, *, media_url: str = "") -> bool:
         account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
         auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
         from_number = os.getenv("TWILIO_PHONE_NUMBER", "")
+        messaging_service_sid = os.getenv("TWILIO_MESSAGING_SERVICE_SID", "")
         if not all([account_sid, auth_token, from_number]):
             logger.error("Twilio credentials not configured")
             return False
         client = Client(account_sid, auth_token)
-        kwargs = dict(body=body, from_=from_number, to=phone)
+        # Route through the A2P messaging service when available — this ensures
+        # blasts benefit from the same campaign compliance as conversational replies.
+        # Fall back to direct from_number for accounts without a service SID.
+        if messaging_service_sid:
+            kwargs = dict(body=body, messaging_service_sid=messaging_service_sid, to=phone)
+            logger.info("  [Twilio] sending blast via A2P messaging service %s", messaging_service_sid)
+        else:
+            kwargs = dict(body=body, from_=from_number, to=phone)
         if media_url:
             kwargs["media_url"] = [media_url]
             logger.info("  [Twilio] sending MMS with media_url=%r", media_url[:60])
