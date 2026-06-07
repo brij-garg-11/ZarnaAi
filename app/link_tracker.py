@@ -27,6 +27,13 @@ _logger = logging.getLogger(__name__)
 
 _WEBSITE_DOMAIN = os.getenv("TRACK_WEBSITE_DOMAIN", "zarnagarg.com").lower().lstrip("www.")
 
+# Website link tracking is OPT-IN. While off (default), the bot sends the real
+# creator URL (e.g. zarnagarg.com/tickets) untouched so the SMS preview shows the
+# trusted, branded domain instead of a redirect host. Flip this on once a branded
+# tracking subdomain (e.g. go.zarnagarg.com → this app, via MAIN_APP_BASE_URL) is
+# live, so clicks are tracked AND the preview still shows the creator's domain.
+_TRACK_WEBSITE = os.getenv("TRACK_BOT_WEBSITE_LINKS", "0").strip().lower() in ("1", "true", "yes", "on")
+
 _PODCAST_DOMAINS: set[str] = {
     d.strip().lower()
     for d in os.getenv(
@@ -163,7 +170,7 @@ def rewrite_bot_reply(reply: str, phone_number: str | None = None) -> str:
 
     # Quick bail-out before any DB/regex work
     lower_reply = reply.lower()
-    has_website = _WEBSITE_DOMAIN and _WEBSITE_DOMAIN in lower_reply
+    has_website = _TRACK_WEBSITE and _WEBSITE_DOMAIN and _WEBSITE_DOMAIN in lower_reply
     has_podcast = any(pd in lower_reply for pd in _PODCAST_DOMAINS)
     if not has_website and not has_podcast:
         return reply
@@ -188,6 +195,9 @@ def rewrite_bot_reply(reply: str, phone_number: str | None = None) -> str:
     def _replace(m: re.Match) -> str:
         url = m.group(0)
         bucket = _classify_url(url)
+        if bucket == "website" and not _TRACK_WEBSITE:
+            # Branded preview wins: send the real creator URL untouched.
+            return url
         if bucket == "website" and website_short:
             short = f"{website_short}{fan_suffix}"
             _logger.info("link_tracker: website %r → %s", url[:80], short)

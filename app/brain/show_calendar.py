@@ -407,14 +407,19 @@ def build_show_directive(message: str, creator_config) -> Optional[ShowDirective
 
     generic = _generic_tickets(creator_config)
 
+    # Message shape is always: a clear verdict FIRST (are we coming / not coming /
+    # were just there), then the warm "I'd love to see you there!" close LAST.
     upcoming_match = _match_city(message, cal.upcoming)
     if upcoming_match:
         when = upcoming_match.date_label or "the upcoming date"
         venue = upcoming_match.venue or "the venue"
         instruction = (
             f"The fan asked about {upcoming_match.city}. Zarna HAS an upcoming show there: "
-            f"{venue} in {upcoming_match.city} on {when}. Clearly and warmly tell them you'd "
-            f"love to see them at this show on this date — name the date explicitly."
+            f"{venue} in {upcoming_match.city} on {when}. "
+            f"OPEN the reply with the clear verdict up front — that you ARE coming to "
+            f"{upcoming_match.city}, naming the venue and the exact date in the first sentence. "
+            f"END with a warm invitation like 'I'd love to see you there!' "
+            f"Keep it to 1-2 short sentences."
         )
         return ShowDirective(instruction=instruction,
                              ticket_url=upcoming_match.ticket_url or generic)
@@ -425,9 +430,11 @@ def build_show_directive(message: str, creator_config) -> Optional[ShowDirective
         when = past_match.date_label or "recently"
         instruction = (
             f"The fan asked about {past_match.city}. Zarna was JUST there ({venue} on {when}) "
-            f"and has no upcoming show in that city yet. Warmly say you were just in "
-            f"{past_match.city} — do NOT invent or promise a future date — and invite them to "
-            f"watch the tickets page for when she's back."
+            f"and has no upcoming show booked there yet. "
+            f"OPEN with the clear verdict up front — that you're NOT coming back to "
+            f"{past_match.city} just yet because you were only just there. Do NOT invent or "
+            f"promise a future date. Then warmly invite them to watch the tickets page for when "
+            f"you're back."
         )
         return ShowDirective(instruction=instruction, ticket_url=generic)
 
@@ -440,10 +447,13 @@ def build_show_directive(message: str, creator_config) -> Optional[ShowDirective
         where = nxt.city or "the next city"
         venue_part = f"{nxt.venue} in " if nxt.venue else ""
         instruction = (
-            f"No specific city matched the fan's message. Zarna's NEXT show is {venue_part}{where} "
-            f"on {when}. Name that next show and its date explicitly and warmly. There are more "
-            f"upcoming dates ({summary}) — you may mention one or two, then point them to the full "
-            "schedule. Never claim a show in a city that isn't in this list."
+            f"OPEN with the clear verdict up front: if the fan named a specific city, say plainly "
+            f"in the first sentence whether you're coming there — and since that city is NOT in the "
+            f"list below, tell them you don't have it booked yet. "
+            f"THEN point them to your NEXT show: {venue_part}{where} on {when}, named explicitly with "
+            f"its date. There are more upcoming dates ({summary}) — you may mention one or two. "
+            f"END with a warm 'I'd love to see you there!' Never claim a show in a city that isn't "
+            f"in this list."
         )
         return ShowDirective(instruction=instruction, ticket_url=generic)
 
