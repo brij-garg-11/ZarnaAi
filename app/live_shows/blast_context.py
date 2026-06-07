@@ -49,12 +49,21 @@ def get_active_blast_context(creator_slug: Optional[str] = None) -> Optional[str
         return None
     try:
         with c.cursor() as cur:
+            # "Active" = explicit expiry still in the future, OR (no expiry set)
+            # created within the documented 24h window. The created_at cap is the
+            # safety net: a row written with a NULL expires_at must NOT stay active
+            # forever — otherwise a single blast note keeps getting injected into
+            # every fan's reply for days (it is creator-wide, not per-fan).
+            _active = (
+                "((expires_at IS NOT NULL AND expires_at > NOW()) "
+                "OR (expires_at IS NULL AND created_at > NOW() - INTERVAL '24 hours'))"
+            )
             if creator_slug:
                 cur.execute(
-                    """
+                    f"""
                     SELECT context_note
                     FROM   blast_context_sessions
-                    WHERE  (expires_at IS NULL OR expires_at > NOW())
+                    WHERE  {_active}
                       AND  creator_slug = %s
                     ORDER BY created_at DESC
                     LIMIT 1
@@ -68,10 +77,10 @@ def get_active_blast_context(creator_slug: Optional[str] = None) -> Optional[str
                     "legacy code paths. Fix the caller to pass a slug."
                 )
                 cur.execute(
-                    """
+                    f"""
                     SELECT context_note
                     FROM   blast_context_sessions
-                    WHERE  (expires_at IS NULL OR expires_at > NOW())
+                    WHERE  {_active}
                     ORDER BY created_at DESC
                     LIMIT 1
                     """
@@ -90,16 +99,20 @@ def build_blast_context_prompt(context_note: str) -> str:
     Build the context block injected into the AI prompt when a fan replies
     after a blast was sent with an operator context note.
 
-    This is high-priority framing — the AI should treat the fan's reply as
-    being about the blast topic and respond accordingly.
+    This is *background* framing, NOT an override. It helps the AI answer a fan
+    who is reacting to the blast (e.g. a voting blast → give voting steps), but it
+    must never hijack a message that is clearly about something else. Otherwise a
+    stale/active blast note (it applies creator-wide, not per-fan) makes the bot
+    drag the blast topic into every unrelated reply.
     """
     return (
-        f"BLAST CONTEXT — HIGH PRIORITY. The fan just received a text about this topic "
-        f"and their reply is almost certainly related to it. Use this context to guide your response:\n"
+        "BLAST CONTEXT — background only. The fan may have recently received a text about "
+        "the topic below. ONLY if their current message is plausibly a reaction to it, use "
+        "these details to answer specifically and helpfully:\n"
         f"{context_note.strip()}\n"
-        f"Treat the fan's message as being about this topic. If they ask about voting, "
-        f"provide the specific voting instructions from the context above — do not give generic "
-        f"or unrelated answers. Do not mention 'blast', 'mass message', or 'text campaign'. "
-        f"Respond as Zarna would, but stay anchored to this context until the conversation "
-        f"clearly moves on to a different topic.\n"
+        "If their message is clearly about something else — a different question, tour/ticket "
+        "dates, a personal share, or small talk — just answer what they actually said and do "
+        "NOT bring up this topic, quote it, or imply you are 'watching' them. Never mention "
+        "'blast', 'mass message', or 'text campaign'. Do not force this topic into the reply or "
+        "keep circling back to it.\n"
     )
