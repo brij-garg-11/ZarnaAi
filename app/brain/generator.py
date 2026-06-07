@@ -534,7 +534,11 @@ Request: {user_message}
 Respond in {_creator_name}'s sharp, high-energy voice. Mention a specific topic or theme from their YouTube channel that matches what they're looking for, in 1 sentence. Then on a new line include EXACTLY this link with no changes: {_youtube}
 Do not make up video titles. Never use the word "honey" or "darling". No profanity. No homophobic language."""
 
-    if intent == Intent.SHOW and not blast_context:
+    if intent == Intent.SHOW:
+        # An explicit tour/ticket question is answered with the specific show +
+        # date + link, even while a blast context session is active. The blast
+        # framing is intentionally NOT injected here: when a fan asks "when are
+        # you coming to <city>?" they want the show answer, not the blast topic.
         sell_ctx_block = f"\nFan context: {sell_context}\n" if sell_context else ""
         variant_note = ""
         if sell_variant == "B":
