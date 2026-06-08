@@ -56,6 +56,18 @@ _US_STATES = {
     "WI": "Wisconsin", "WY": "Wyoming", "DC": "Washington",
 }
 
+# Continent / multi-country regions a fan might ask about ("any shows in Europe?").
+# Maps the region keyword to the set of show `region` (country) tokens that belong
+# to it. Single countries (UK, Ireland, Australia, Canada, …) are already handled by
+# _match_city via the show's region field, so only broader groupings live here.
+_REGION_GROUPS = {
+    "europe": {"uk", "ireland", "germany", "switzerland", "sweden", "france",
+               "spain", "italy", "netherlands", "belgium", "norway", "denmark",
+               "austria", "poland", "portugal"},
+    "asia": {"singapore", "india", "japan", "china", "uae", "indonesia"},
+    "scandinavia": {"sweden", "norway", "denmark", "finland"},
+}
+
 _MONTHS = {m: i for i, m in enumerate(
     ["jan", "feb", "mar", "apr", "may", "jun",
      "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
@@ -375,6 +387,23 @@ def _region_in_text(region: str, text: str) -> bool:
     return False
 
 
+def _match_region(message: str, shows: List[Show]) -> tuple[Optional[str], List[Show]]:
+    """If the fan named a continent/region (e.g. 'Europe'), return (label, matching shows).
+
+    This catches broad geographic questions that _match_city can't, so the bot lists
+    the real shows in that region instead of recommending an unrelated next date.
+    """
+    text = (message or "").lower()
+    if not text:
+        return None, []
+    for key, countries in _REGION_GROUPS.items():
+        if re.search(rf"\b{re.escape(key)}\b", text):
+            matches = [s for s in shows if (s.region or "").strip().lower() in countries]
+            if matches:
+                return key, matches
+    return None, []
+
+
 def _upcoming_summary(shows: List[Show], limit: int = 3) -> str:
     """A compact 'City (date)' list of the next few shows for prompt context."""
     parts = []
@@ -435,6 +464,19 @@ def build_show_directive(message: str, creator_config) -> Optional[ShowDirective
             f"{past_match.city} just yet because you were only just there. Do NOT invent or "
             f"promise a future date. Then warmly invite them to watch the tickets page for when "
             f"you're back."
+        )
+        return ShowDirective(instruction=instruction, ticket_url=generic)
+
+    region_key, region_shows = _match_region(message, cal.upcoming)
+    if region_shows:
+        listed = "; ".join(
+            f"{s.venue or s.city} in {s.city} on {s.date_label}" for s in region_shows[:4]
+        )
+        more = " (and more)" if len(region_shows) > 4 else ""
+        instruction = (
+            f"The fan asked about {region_key.title()}. Zarna HAS upcoming shows in {region_key.title()}: "
+            f"{listed}{more}. OPEN with the clear verdict up front — yes, you ARE coming to {region_key.title()} — "
+            f"then name those shows with their dates. END with a warm 'I'd love to see you there!'"
         )
         return ShowDirective(instruction=instruction, ticket_url=generic)
 
