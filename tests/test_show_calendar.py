@@ -414,6 +414,30 @@ class TestContinentMatching:
         assert key is None and matches == []
 
 
+class TestCityAliases:
+    def _shows(self):
+        return [
+            sc.Show(city="New York", region="NY", venue="Beacon Theatre", date_label="Dec 31, 2026"),
+            sc.Show(city="San Francisco", region="CA", venue="Palace of Fine Arts", date_label="Oct 10, 2026"),
+        ]
+
+    def test_nyc_matches_new_york(self):
+        assert sc._match_city("when are you coming to nyc?", self._shows()).city == "New York"
+
+    def test_sf_matches_san_francisco(self):
+        assert sc._match_city("any shows in SF?", self._shows()).city == "San Francisco"
+
+    def test_short_alias_requires_word_boundary(self):
+        # "sf" must not match inside an unrelated word like "useful".
+        shows = [sc.Show(city="San Francisco", region="CA", venue="V", date_label="x")]
+        assert sc._match_city("is this useful", shows) is None
+
+    def test_alias_only_matches_when_show_exists(self):
+        # No NYC show present -> alias must not fabricate a match.
+        shows = [sc.Show(city="Austin", region="TX", venue="V", date_label="x")]
+        assert sc._match_city("coming to nyc?", shows) is None
+
+
 # ---------------------------------------------------------------------------
 # Config calendar: chronological sort + past filtering + recent_past
 # ---------------------------------------------------------------------------
