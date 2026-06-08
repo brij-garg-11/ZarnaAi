@@ -68,6 +68,18 @@ _REGION_GROUPS = {
     "scandinavia": {"sweden", "norway", "denmark", "finland"},
 }
 
+# Common nicknames fans type instead of the full city name in the schedule.
+# Keyed by the canonical city (lowercased) as it appears in the config.
+_CITY_ALIASES = {
+    "new york": {"nyc", "new york city", "manhattan"},
+    "los angeles": {"la", "l.a."},
+    "san francisco": {"sf", "san fran", "frisco"},
+    "washington": {"dc", "d.c.", "washington dc"},
+    "las vegas": {"vegas"},
+    "philadelphia": {"philly"},
+    "new orleans": {"nola"},
+}
+
 _MONTHS = {m: i for i, m in enumerate(
     ["jan", "feb", "mar", "apr", "may", "jun",
      "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
@@ -362,6 +374,13 @@ def _match_city(message: str, shows: List[Show]) -> Optional[Show]:
         city = show.city.lower()
         if city and city in text:
             return show
+        for alias in _CITY_ALIASES.get(city, ()):
+            # Short nicknames (la, sf, dc) are noisy as substrings — whole-word only.
+            if len(alias) <= 3:
+                if re.search(rf"\b{re.escape(alias)}\b", text):
+                    return show
+            elif alias in text:
+                return show
     for show in shows:
         if _region_in_text(show.region, text):
             return show
