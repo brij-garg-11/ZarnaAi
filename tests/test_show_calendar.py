@@ -383,6 +383,38 @@ class TestRegionMatching:
 
 
 # ---------------------------------------------------------------------------
+# Continent / multi-country region matching ("any shows in Europe?")
+# ---------------------------------------------------------------------------
+
+class TestContinentMatching:
+    def _intl_shows(self):
+        return [
+            sc.Show(city="London", region="UK", venue="Leicester Square Theatre", date_label="Aug 7-8, 2026"),
+            sc.Show(city="Dublin", region="Ireland", venue="The Ambassador Theatre", date_label="Aug 5, 2026"),
+            sc.Show(city="Berlin", region="Germany", venue="PUNCH L!NE", date_label="Aug 21, 2026"),
+            sc.Show(city="Stockholm", region="Sweden", venue="Bio Skandia", date_label="Aug 25, 2026"),
+            sc.Show(city="Singapore", region="Singapore", venue="MES Theatre", date_label="Aug 1, 2026"),
+            sc.Show(city="Austin", region="TX", venue="Cap City", date_label="Jun 25, 2026"),
+        ]
+
+    def test_europe_matches_all_european_shows(self):
+        key, matches = sc._match_region("any shows in europe?", self._intl_shows())
+        assert key == "europe"
+        cities = {s.city for s in matches}
+        assert {"London", "Dublin", "Berlin", "Stockholm"} <= cities
+        assert "Singapore" not in cities and "Austin" not in cities
+
+    def test_asia_matches_singapore(self):
+        key, matches = sc._match_region("are you coming to asia?", self._intl_shows())
+        assert key == "asia"
+        assert [s.city for s in matches] == ["Singapore"]
+
+    def test_no_region_word_returns_empty(self):
+        key, matches = sc._match_region("are you coming to austin?", self._intl_shows())
+        assert key is None and matches == []
+
+
+# ---------------------------------------------------------------------------
 # Config calendar: chronological sort + past filtering + recent_past
 # ---------------------------------------------------------------------------
 
