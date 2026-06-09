@@ -87,12 +87,22 @@ def get_silent_fans(conn, days: int, creator_slug: str | None) -> list[dict]:
 
 
 def get_optouts(conn) -> set:
-    """Return phone numbers that have opted out."""
+    """
+    Return phone numbers that have opted out.
+
+    There is no dedicated optouts table in this schema — STOP/opt-out is
+    enforced by Twilio's Messaging Service at send time, and this cron only
+    creates a draft for human review. If the query fails we MUST roll back,
+    otherwise the connection's transaction stays aborted and every
+    subsequent query raises InFailedSqlTransaction.
+    """
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT phone_number FROM optouts")
             return {r[0] for r in cur.fetchall()}
     except Exception:
+        conn.rollback()
+        logger.info("No optouts table — relying on Twilio STOP enforcement at send time.")
         return set()
 
 
