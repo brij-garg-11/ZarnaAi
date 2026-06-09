@@ -56,9 +56,12 @@ DRIP_MESSAGE = (
 def get_silent_fans(conn, days: int, creator_slug: str | None) -> list[dict]:
     """Return fans who have not sent a message in the last `days` days."""
     slug_clause = "AND c.creator_slug = %s" if creator_slug else ""
-    params: list = [days]
+    # Bind params in the same order the placeholders appear in the SQL:
+    # the slug clause (if present) comes first, then the silence threshold.
+    params: list = []
     if creator_slug:
         params.append(creator_slug)
+    params.append(days)
 
     with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         cur.execute(
@@ -75,10 +78,10 @@ def get_silent_fans(conn, days: int, creator_slug: str | None) -> list[dict]:
             WHERE  c.phone_number NOT LIKE 'whatsapp:%%'
             {slug_clause}
             GROUP BY c.phone_number, c.fan_name, c.fan_location, c.fan_tier, c.creator_slug
-            HAVING MAX(m.created_at) < NOW() - INTERVAL '%s days'
+            HAVING MAX(m.created_at) < NOW() - (%s * INTERVAL '1 day')
             ORDER BY last_message_at ASC
             """,
-            params + [days],
+            params,
         )
         return [dict(r) for r in cur.fetchall()]
 
