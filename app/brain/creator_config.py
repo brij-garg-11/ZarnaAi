@@ -182,6 +182,61 @@ def _load_from_db(slug: str) -> Optional[dict]:
     return data
 
 
+# Fields the operator dashboard ("My Bot") owns and that must take effect on the
+# live bot the moment the creator saves them — even for a creator like Zarna whose
+# base config lives in a JSON file. These are written to bot_configs.config_json by
+# operator save_bot_data(). We deliberately overlay ONLY this allowlist so the
+# dashboard can't accidentally alter voice/guardrail config that lives in the file.
+_BOT_OVERRIDE_FIELDS = (
+    "send_contact_card",
+    "profile_photo_url",
+    "sms_display_name",
+    "first_message",
+)
+
+
+def _load_bot_overrides(slug: str) -> dict:
+    """Return the allowlisted SMS-profile overrides saved via the operator dashboard.
+
+    Reads bot_configs.config_json (same Postgres the operator writes to) and returns
+    only the _BOT_OVERRIDE_FIELDS that are present. Returns {} on any failure so the
+    live config is never blocked by a DB hiccup.
+    """
+    dsn = os.getenv("DATABASE_URL", "")
+    if not dsn:
+        return {}
+    try:
+        import psycopg2
+    except ImportError:
+        return {}
+    try:
+        conn = psycopg2.connect(dsn.replace("postgres://", "postgresql://", 1))
+        conn.autocommit = True
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT config_json FROM bot_configs WHERE creator_slug = %s",
+                    (slug,),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:
+        _LOGGER.debug("CreatorConfig[%s]: bot_configs overlay lookup failed (%s)", slug, exc)
+        return {}
+    if not row or not row[0]:
+        return {}
+    cfg = row[0]
+    if isinstance(cfg, str):
+        try:
+            cfg = json.loads(cfg)
+        except Exception:
+            return {}
+    if not isinstance(cfg, dict):
+        return {}
+    return {k: cfg[k] for k in _BOT_OVERRIDE_FIELDS if k in cfg}
+
+
 def load_creator(slug: str) -> Optional[CreatorConfig]:
     """
     Load a CreatorConfig for the given slug.
@@ -223,6 +278,17 @@ def load_creator(slug: str) -> Optional[CreatorConfig]:
             slug, path,
         )
         return None
+
+    # Overlay the dashboard-owned SMS-profile fields (vCard + first message) so the
+    # operator's "My Bot" toggle takes effect on the live bot without a redeploy or a
+    # file edit. Scoped to _BOT_OVERRIDE_FIELDS; everything else stays from the file.
+    overrides = _load_bot_overrides(slug)
+    if overrides:
+        data = {**data, **overrides}
+        _LOGGER.info(
+            "CreatorConfig[%s]: applied dashboard overrides for %s",
+            slug, sorted(overrides.keys()),
+        )
 
     try:
         config = _build_from_dict(slug, data)
