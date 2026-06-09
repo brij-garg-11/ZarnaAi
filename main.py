@@ -561,10 +561,18 @@ def _process_twilio_message(phone_number: str, message_text: str, quiz_context: 
         if is_first_contact:
             try:
                 from app.messaging.contact_card import maybe_send_first_contact
+                # Load a FRESH config (file + dashboard overrides) so the operator's
+                # "send contact card / first message" toggle takes effect the moment
+                # they save it — the brain's cached creator_config is only read at
+                # startup. Falls back to the cached config if the fresh load misses.
+                from app.brain.creator_config import load_creator as _load_creator
+                first_contact_cfg = (
+                    _load_creator(slug) if slug else None
+                ) or getattr(active_brain, "creator_config", None)
                 maybe_send_first_contact(
                     twilio,
                     phone_number,
-                    getattr(active_brain, "creator_config", None),
+                    first_contact_cfg,
                     from_number=from_number or "",
                 )
             except Exception:

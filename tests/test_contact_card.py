@@ -161,3 +161,40 @@ class TestMaybeSendFirstContact:
         sent = cc.maybe_send_first_contact(a, "+1555", cfg, from_number="+1999")
         assert sent is True
         assert any(c["media_url"] is None for c in a.calls)
+
+
+# ---------------------------------------------------------------------------
+# Dashboard overlay: the "My Bot" toggle (bot_configs) drives the live config
+# ---------------------------------------------------------------------------
+
+class TestDashboardOverlay:
+    def test_overrides_applied_on_top_of_file(self, monkeypatch):
+        import app.brain.creator_config as ccfg
+        monkeypatch.setattr(ccfg, "_load_bot_overrides", lambda slug: {
+            "send_contact_card": True,
+            "sms_display_name": "Zarna G",
+            "first_message": "Hey, it's Zarna!",
+            "profile_photo_url": "https://img.example/zarna.jpg",
+        })
+        cfg = ccfg.load_creator("zarna")
+        assert cfg is not None
+        assert cfg.send_contact_card is True
+        assert cfg.sms_display_name == "Zarna G"
+        assert cfg.first_message == "Hey, it's Zarna!"
+        assert cfg.profile_photo_url == "https://img.example/zarna.jpg"
+
+    def test_off_by_default_when_no_overrides(self, monkeypatch):
+        import app.brain.creator_config as ccfg
+        monkeypatch.setattr(ccfg, "_load_bot_overrides", lambda slug: {})
+        cfg = ccfg.load_creator("zarna")
+        assert cfg is not None
+        # Zarna's file sets none of these — feature stays OFF until toggled.
+        assert cfg.send_contact_card is False
+        assert cfg.first_message == ""
+        assert cfg.profile_photo_url == ""
+
+    def test_overlay_only_touches_allowlisted_fields(self):
+        import app.brain.creator_config as ccfg
+        assert set(ccfg._BOT_OVERRIDE_FIELDS) == {
+            "send_contact_card", "profile_photo_url", "sms_display_name", "first_message",
+        }
