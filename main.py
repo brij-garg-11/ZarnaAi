@@ -23,6 +23,11 @@ from app.inbound_security import (
 from app.brain.handler import create_brain
 from app.messaging.slicktext_adapter import create_slicktext_adapter, _is_reaction as _slick_is_reaction
 from app.messaging.twilio_adapter import create_twilio_adapter
+from app.messaging.slicktext_migration import (
+    migration_enabled as _slicktext_migration_enabled,
+    handle_migration as _handle_slicktext_migration,
+)
+from app.admin_auth import get_db_connection as _get_db_connection
 from app.admin import admin_bp
 from app.analytics.blueprint import analytics_bp
 from app.live_shows.blueprint import live_shows_bp
@@ -459,6 +464,22 @@ def slicktext_webhook():
     if _is_rate_limited(phone_number):
         logging.warning("Rate limit hit for ...%s — dropping message", phone_number[-4:] if phone_number else "?")
         return jsonify({"status": "rate_limited"}), 200
+
+    # SlickText → Twilio migration: when enabled, the legacy SlickText number
+    # stops running the AI conversation and instead pulls the fan onto the new
+    # Twilio number (one-time opener FROM Twilio + a bridge reply on SlickText).
+    # STOP/opt-out and live-show joins are handled above and still work.
+    if _slicktext_migration_enabled():
+        logging.info(
+            "SlickText migration mode: redirecting ...%s to the Twilio number",
+            phone_number[-4:] if phone_number else "?",
+        )
+        threading.Thread(
+            target=_handle_slicktext_migration,
+            args=(phone_number, twilio, slicktext, _get_db_connection),
+            daemon=True,
+        ).start()
+        return jsonify({"status": "ok", "migration": "redirected"}), 200
 
     # Check for an active pop quiz for this fan — inject context so AI can react in character.
     quiz_ctx = None
