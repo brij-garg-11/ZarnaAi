@@ -76,6 +76,33 @@ class TestBuildVcard:
 
 
 # ---------------------------------------------------------------------------
+# Photo loading — http(s) URLs and bundled local-file assets
+# ---------------------------------------------------------------------------
+
+class TestPhotoLoading:
+    def test_reads_local_absolute_path(self, tmp_path):
+        f = tmp_path / "pic.bin"
+        f.write_bytes(b"rawbytes")
+        assert cc._read_photo_bytes("perf", str(f)) == b"rawbytes"
+
+    def test_resolves_relative_path_against_project_root(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(cc, "_PROJECT_ROOT", str(tmp_path))
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "pic.bin").write_bytes(b"hello")
+        assert cc._read_photo_bytes("perf", "sub/pic.bin") == b"hello"
+
+    def test_missing_local_file_returns_none(self):
+        assert cc._read_photo_bytes("perf", "does/not/exist.png") is None
+
+    def test_bundled_zarna_asset_loads_and_embeds(self):
+        # Guards that the committed creator photo stays valid + decodable.
+        pytest.importorskip("PIL")
+        mime, b64 = cc._load_photo_b64("zarna", "app/assets/creator_photos/zarna.png")
+        assert mime == "image/jpeg"
+        assert len(b64) > 1000
+
+
+# ---------------------------------------------------------------------------
 # Footer handling
 # ---------------------------------------------------------------------------
 
