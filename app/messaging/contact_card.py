@@ -37,22 +37,48 @@ COMPLIANCE_FOOTER = os.getenv(
 _photo_cache: dict[str, Optional[tuple[str, str]]] = {}
 _photo_cache_lock = threading.Lock()
 
+# Repo root, so a creator can ship a fixed headshot as a bundled asset
+# (e.g. "app/assets/creator_photos/zarna.png") instead of relying on an
+# external image host staying reachable at send time.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _read_photo_bytes(slug: str, photo_url: str) -> Optional[bytes]:
+    """Load raw image bytes from an http(s) URL or a bundled local asset path.
+
+    Local paths are resolved relative to the project root (unless absolute), so
+    ``profile_photo_url`` can point at a file committed alongside the code.
+    """
+    if photo_url.startswith(("http://", "https://")):
+        try:
+            import urllib.request
+
+            req = urllib.request.Request(
+                photo_url, headers={"User-Agent": "Mozilla/5.0 (compatible; ZarnaVCard/1.0)"}
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.read()
+        except Exception:
+            logger.warning("vcard: failed to fetch photo for slug=%s url=%s", slug, photo_url,
+                           exc_info=True)
+            return None
+
+    path = photo_url if os.path.isabs(photo_url) else os.path.join(_PROJECT_ROOT, photo_url)
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except Exception:
+        logger.warning("vcard: failed to read local photo for slug=%s path=%s", slug, path,
+                       exc_info=True)
+        return None
+
 
 def _load_photo_b64(slug: str, photo_url: str) -> Optional[tuple[str, str]]:
-    """Fetch the profile photo, centre-crop to square, return (mime, base64) or None."""
+    """Load the profile photo, centre-crop to square, return (mime, base64) or None."""
     if not photo_url:
         return None
-    try:
-        import urllib.request
-
-        req = urllib.request.Request(
-            photo_url, headers={"User-Agent": "Mozilla/5.0 (compatible; ZarnaVCard/1.0)"}
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            raw = resp.read()
-    except Exception:
-        logger.warning("vcard: failed to fetch photo for slug=%s url=%s", slug, photo_url,
-                       exc_info=True)
+    raw = _read_photo_bytes(slug, photo_url)
+    if raw is None:
         return None
     try:
         from PIL import Image
