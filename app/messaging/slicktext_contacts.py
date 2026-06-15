@@ -14,6 +14,20 @@ DEFAULT_TEXTWORDS: tuple[tuple[int, str], ...] = (
 DEFAULT_PAGE_SIZE = 200
 DEFAULT_BACKFILL_THRESHOLD = "2026-03-26"
 
+# SQL expression deriving the NANP area code (as a 1-element TEXT[]) from a
+# phone_number column. Mirrors app.area_codes.area_code_from_phone in pure SQL
+# so bulk SlickText imports tag area codes without a Python round-trip.
+_AREA_CODE_SQL = """
+    CASE
+      WHEN length(regexp_replace(phone_number, '\\D', '', 'g')) = 11
+           AND left(regexp_replace(phone_number, '\\D', '', 'g'), 1) = '1'
+        THEN ARRAY[substring(regexp_replace(phone_number, '\\D', '', 'g') from 2 for 3)]
+      WHEN length(regexp_replace(phone_number, '\\D', '', 'g')) = 10
+        THEN ARRAY[left(regexp_replace(phone_number, '\\D', '', 'g'), 3)]
+      ELSE '{}'::text[]
+    END
+"""
+
 
 @dataclass(frozen=True)
 class SyncStats:
@@ -222,8 +236,9 @@ def sync_contacts_to_postgres(
                 if not dry_run:
                     cur.execute(
                         """
-                        INSERT INTO contacts (phone_number, source, created_at)
-                        SELECT phone_number, 'slicktext', subscribed_date::timestamp
+                        INSERT INTO contacts (phone_number, source, created_at, area_codes)
+                        SELECT phone_number, 'slicktext', subscribed_date::timestamp,
+                               """ + _AREA_CODE_SQL + """
                         FROM tmp_slicktext_contacts
                         WHERE subscribed_date IS NOT NULL
                         ON CONFLICT (phone_number) DO UPDATE
@@ -236,8 +251,9 @@ def sync_contacts_to_postgres(
                     )
                     cur.execute(
                         """
-                        INSERT INTO contacts (phone_number, source)
-                        SELECT phone_number, 'slicktext'
+                        INSERT INTO contacts (phone_number, source, area_codes)
+                        SELECT phone_number, 'slicktext',
+                               """ + _AREA_CODE_SQL + """
                         FROM tmp_slicktext_contacts
                         WHERE subscribed_date IS NULL
                         ON CONFLICT (phone_number) DO NOTHING
