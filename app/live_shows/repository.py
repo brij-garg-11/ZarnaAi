@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -22,9 +23,59 @@ from app.admin_auth import get_db_connection
 from app.live_shows.event_time import normalize_event_timezone
 from app.messaging.broadcast import normalize_e164
 
+logger = logging.getLogger(__name__)
+
 
 def _conn():
     return get_db_connection()
+
+
+def save_broadcast_message(phone: str, body: str, creator_slug: str | None = None) -> None:
+    """Persist a live-show broadcast into the shared conversation history.
+
+    Mirrors the operator blast pattern (operator/app/blast_sender.py):
+    writes an assistant row tagged msg_source='blast' so the broadcast shows
+    up in the inbox thread — giving a fan's later reply preceding context —
+    while being excluded from the LLM conversation history
+    (get_conversation_history filters msg_source='blast').
+
+    Also upserts a contact so the recipient appears in the inbox list with a
+    card; the card then auto-populates as the fan replies (handler._update_memory).
+
+    Best-effort: any failure here must never break the send loop, so we log
+    and swallow exceptions.
+    """
+    norm = normalize_e164(phone)
+    if not norm:
+        return
+    slug = (creator_slug or os.getenv("CREATOR_SLUG") or "zarna").strip().lower()
+    c = _conn()
+    if not c:
+        return
+    try:
+        with c:
+            with c.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO contacts (phone_number, source, creator_slug)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (phone_number) DO NOTHING
+                    """,
+                    (norm, "live_show_broadcast", slug),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO messages (phone_number, role, text, msg_source, creator_slug)
+                    VALUES (%s, 'assistant', %s, 'blast', %s)
+                    """,
+                    (norm, body, slug),
+                )
+    except Exception:
+        logger.warning(
+            "save_broadcast_message failed for ...%s", norm[-4:], exc_info=True
+        )
+    finally:
+        c.close()
 
 
 def list_shows() -> List[Dict[str, Any]]:

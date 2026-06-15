@@ -124,6 +124,14 @@ def _run_broadcast(
         def prog(_done: int, succeeded: int, failed: int) -> None:
             repo.update_job_progress(job_id, succeeded, failed)
 
+        # Persist each successful send to the shared conversation history so the
+        # broadcast shows up in the inbox thread (and the fan's later reply has
+        # preceding context), and the recipient appears in the inbox list with a
+        # contact card. Tagged msg_source='blast' so it's excluded from LLM
+        # context. Mirrors the operator "Send Blast" behaviour.
+        def on_sent(phone: str) -> None:
+            repo.save_broadcast_message(phone, body)
+
         res = run_loop_broadcast(
             phones=phones,
             body=body,
@@ -131,6 +139,7 @@ def _run_broadcast(
             deliver_whatsapp=wa,
             slicktext_send=slick.send_reply,
             progress=prog,
+            on_success=on_sent,
         )
         err = "; ".join(res.errors) if res.errors else None
         repo.complete_job(job_id, res.succeeded, res.failed, err)
