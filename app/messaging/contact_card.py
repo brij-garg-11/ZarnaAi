@@ -96,24 +96,56 @@ def _load_photo_b64(slug: str, photo_url: str) -> Optional[tuple[str, str]]:
         return None
 
 
+def _split_name(display_name: str) -> tuple[str, str]:
+    """Split a display name into (given, family) for the vCard ``N`` property.
+
+    iOS files a contact as a *person* (First/Last) only when ``N`` is populated;
+    a single token becomes the given name with an empty family name.
+    """
+    parts = (display_name or "").split()
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return parts[0], ""
+    return parts[0], " ".join(parts[1:])
+
+
+def _fold_vcard_line(line: str) -> list[str]:
+    """Fold a long vCard line per RFC 2426 (75-octet lines, continuations start
+    with a single space). iOS silently drops inline photos whose base64 sits on
+    one giant unfolded line, which is why the contact preview showed no image."""
+    if len(line) <= 75:
+        return [line]
+    out = [line[:75]]
+    rest = line[75:]
+    while rest:
+        out.append(" " + rest[:74])
+        rest = rest[74:]
+    return out
+
+
 def build_performer_vcard(creator_config, tel: str = "") -> str:
     """Build the vCard text for a performer from their CreatorConfig.
 
     ``tel`` (the creator's SMS number) is included as the contact phone so iOS
     links the saved contact to the conversation. The photo is embedded base64.
+
+    The card is built as a *person* (structured ``N`` First/Last, no ``ORG``) so
+    iOS doesn't file it under the business/company section, and the photo uses
+    the folded vCard-3.0 ``PHOTO;ENCODING=b`` form so the inline image renders.
     """
     display_name = (
         getattr(creator_config, "sms_display_name", "")
         or getattr(creator_config, "name", "")
         or "Contact"
     )
+    given, family = _split_name(display_name)
     slug = getattr(creator_config, "slug", "") or "creator"
     lines = [
         "BEGIN:VCARD",
         "VERSION:3.0",
+        f"N:{family};{given};;;",
         f"FN:{display_name}",
-        "N:;;;;",
-        f"ORG:{display_name}",
     ]
     tel = (tel or "").strip()
     if tel:
@@ -127,7 +159,8 @@ def build_performer_vcard(creator_config, tel: str = "") -> str:
             cached = _photo_cache[slug]
         if cached:
             mime, b64 = cached
-            lines.append(f"PHOTO;TYPE={mime.split('/')[-1].upper()};ENCODING=BASE64:{b64}")
+            photo_prop = f"PHOTO;ENCODING=b;TYPE={mime.split('/')[-1].upper()}:{b64}"
+            lines.extend(_fold_vcard_line(photo_prop))
 
     lines.append("END:VCARD")
     return "\r\n".join(lines) + "\r\n"

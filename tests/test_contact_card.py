@@ -69,10 +69,38 @@ class TestBuildVcard:
     def test_embeds_photo_when_available(self, monkeypatch):
         monkeypatch.setattr(cc, "_load_photo_b64", lambda slug, url: ("image/jpeg", "QUJD"))
         vcf = cc.build_performer_vcard(_cfg(profile_photo_url="https://img/x.png"))
-        assert "PHOTO;TYPE=JPEG;ENCODING=BASE64:QUJD" in vcf
+        # vCard 3.0 inline form so iOS renders the photo (not ENCODING=BASE64).
+        assert "PHOTO;ENCODING=b;TYPE=JPEG:QUJD" in vcf
 
     def test_no_photo_line_when_no_url(self):
         assert "PHOTO" not in cc.build_performer_vcard(_cfg())
+
+    def test_files_as_person_not_company(self):
+        # Structured N (First/Last) + no ORG so iOS treats it as a person, not a
+        # business — regression for the empty contact photo + business section.
+        vcf = cc.build_performer_vcard(_cfg(sms_display_name="Zarna AI"))
+        assert "N:AI;Zarna;;;" in vcf
+        assert "FN:Zarna AI" in vcf
+        assert "ORG:" not in vcf
+
+    def test_single_word_name_has_empty_family(self):
+        vcf = cc.build_performer_vcard(_cfg(sms_display_name="Zarna"))
+        assert "N:;Zarna;;;" in vcf
+        assert "FN:Zarna" in vcf
+
+    def test_long_photo_base64_is_line_folded(self, monkeypatch):
+        # Unfolded base64 made iOS drop the inline image; lines must be <=75 chars
+        # with continuation lines starting with a single space (RFC 2426).
+        monkeypatch.setattr(cc, "_load_photo_b64", lambda slug, url: ("image/jpeg", "A" * 500))
+        vcf = cc.build_performer_vcard(_cfg(profile_photo_url="https://img/x.png"))
+        photo_idx = [i for i, l in enumerate(vcf.split("\r\n")) if l.startswith("PHOTO")]
+        assert photo_idx, "expected a PHOTO line"
+        physical = vcf.split("\r\n")
+        start = photo_idx[0]
+        # First PHOTO line and its continuations all stay within 75 octets.
+        assert len(physical[start]) <= 75
+        assert physical[start + 1].startswith(" ")
+        assert all(len(l) <= 75 for l in physical[start:start + 3])
 
 
 # ---------------------------------------------------------------------------
