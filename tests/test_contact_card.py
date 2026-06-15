@@ -88,12 +88,29 @@ class TestBuildVcard:
         assert "PHOTO" not in cc.build_performer_vcard(_cfg())
 
     def test_files_as_person_not_company(self):
-        # Structured N (First/Last) + no ORG so iOS treats it as a person, not a
-        # business — regression for the empty contact photo + business section.
+        # Structured N (First/Last) so iOS treats it as a person, not a business —
+        # regression for the empty contact photo + business section. ORG is only
+        # added when sms_org is configured (see test_includes_org_when_set).
         vcf = cc.build_performer_vcard(_cfg(sms_display_name="Zarna AI"))
         assert "N:AI;Zarna;;;" in vcf
         assert "FN:Zarna AI" in vcf
         assert "ORG:" not in vcf
+
+    def test_includes_org_when_set(self):
+        # The optional company/subtitle line (vCard ORG) shows under the name.
+        vcf = cc.build_performer_vcard(_cfg(sms_display_name="Zarna AI", sms_org="Almost Therapist"))
+        assert "ORG:Almost Therapist" in vcf
+        # Still a person: structured N is populated alongside the ORG line.
+        assert "N:AI;Zarna;;;" in vcf
+
+    def test_org_value_is_escaped(self):
+        # Commas/semicolons in a company name must be escaped so iOS doesn't read
+        # them as ORG value-list / org-unit separators.
+        vcf = cc.build_performer_vcard(_cfg(sms_org="Berry, Inc; LLC"))
+        assert "ORG:Berry\\, Inc\\; LLC" in vcf
+
+    def test_no_org_line_when_blank(self):
+        assert "ORG" not in cc.build_performer_vcard(_cfg(sms_org="   "))
 
     def test_single_word_name_has_empty_family(self):
         vcf = cc.build_performer_vcard(_cfg(sms_display_name="Zarna"))
@@ -326,5 +343,6 @@ class TestDashboardOverlay:
     def test_overlay_only_touches_allowlisted_fields(self):
         import app.brain.creator_config as ccfg
         assert set(ccfg._BOT_OVERRIDE_FIELDS) == {
-            "send_contact_card", "profile_photo_url", "sms_display_name", "first_message",
+            "send_contact_card", "profile_photo_url", "sms_display_name", "sms_org",
+            "first_message",
         }
