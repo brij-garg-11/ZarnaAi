@@ -136,10 +136,15 @@ def run_loop_broadcast(
     deliver_whatsapp: bool,
     slicktext_send: Callable[[str, str], bool],
     progress: Optional[Callable[[int, int, int], None]] = None,
+    on_success: Optional[Callable[[str], None]] = None,
 ) -> BroadcastResult:
     """
     Send the same body to every phone. SlickText path uses the adapter (SMS).
     Twilio path uses REST directly to support Messaging Service.
+
+    on_success, if provided, is called with each phone number that was sent
+    successfully (used to persist the broadcast to conversation history). It is
+    best-effort — exceptions are swallowed so persistence never blocks sending.
     """
     errors: List[str] = []
     if deliver_whatsapp and provider == "slicktext":
@@ -163,6 +168,13 @@ def run_loop_broadcast(
 
         if ok:
             succeeded += 1
+            if on_success:
+                try:
+                    on_success(phone)
+                except Exception:
+                    logger.warning(
+                        "broadcast on_success hook failed for %s", phone[-4:], exc_info=True
+                    )
         else:
             failed += 1
         if progress:
