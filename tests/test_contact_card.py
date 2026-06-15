@@ -20,16 +20,28 @@ from app.messaging import contact_card as cc
 
 
 class FakeAdapter:
-    def __init__(self, raise_on=None):
+    def __init__(self, raise_on=None, fail_on=None):
         self.calls = []
-        self.raise_on = raise_on  # 'mms' | 'text' | None
+        self.raise_on = raise_on  # 'mms' | 'text' | None — raises an exception
+        self.fail_on = fail_on    # 'mms' | 'text' | None — returns False (send rejected)
 
     def send_reply(self, to_number, body="", from_number=None, media_url=None):
         kind = "mms" if media_url else "text"
         if self.raise_on == kind:
             raise RuntimeError("boom")
         self.calls.append({"to": to_number, "body": body, "from": from_number, "media_url": media_url})
-        return True
+        return self.fail_on != kind
+
+
+class FakeStorage:
+    def __init__(self, raise_on_save=False):
+        self.saved = []
+        self.raise_on_save = raise_on_save
+
+    def save_message(self, phone_number, role, text):
+        if self.raise_on_save:
+            raise RuntimeError("db down")
+        self.saved.append({"phone": phone_number, "role": role, "text": text})
 
 
 def _cfg(**kw):
@@ -221,6 +233,49 @@ class TestMaybeSendFirstContact:
         sent = cc.maybe_send_first_contact(a, "+1555", cfg, from_number="+1999")
         assert sent is True
         assert any(c["media_url"] is None for c in a.calls)
+
+    def test_persists_card_and_welcome_to_inbox(self, monkeypatch):
+        # When storage is provided, both the vCard MMS and the welcome text are
+        # recorded as assistant turns so they appear in the operator inbox.
+        monkeypatch.setenv("PUBLIC_BASE_URL", "https://api.test")
+        a = FakeAdapter()
+        s = FakeStorage()
+        cfg = _cfg(send_contact_card=True, first_message="Hey!", sms_display_name="Z")
+        cc.maybe_send_first_contact(a, "+1555", cfg, from_number="+1999", storage=s)
+        assert [m["role"] for m in s.saved] == ["assistant", "assistant"]
+        assert all(m["phone"] == "+1555" for m in s.saved)
+        assert "Tap to save Z to your contacts." in s.saved[0]["text"]
+        assert "Hey!" in s.saved[1]["text"]
+
+    def test_no_storage_does_not_persist_or_error(self, monkeypatch):
+        # Backward-compatible: omitting storage keeps the old send-only behaviour.
+        monkeypatch.setenv("PUBLIC_BASE_URL", "https://api.test")
+        a = FakeAdapter()
+        cfg = _cfg(send_contact_card=True, first_message="Hey!")
+        assert cc.maybe_send_first_contact(a, "+1555", cfg, from_number="+1999") is True
+
+    def test_does_not_persist_when_send_rejected(self, monkeypatch):
+        # If Twilio rejects the MMS (send_reply returns False) we must not record
+        # a card the fan never received; the welcome still sends and is recorded.
+        monkeypatch.setenv("PUBLIC_BASE_URL", "https://api.test")
+        a = FakeAdapter(fail_on="mms")
+        s = FakeStorage()
+        cfg = _cfg(send_contact_card=True, first_message="Hey!", sms_display_name="Z")
+        cc.maybe_send_first_contact(a, "+1555", cfg, from_number="+1999", storage=s)
+        assert [m["text"] for m in s.saved] == [
+            t for t in (cc.first_message_with_footer("Hey!"),)
+        ]
+
+    def test_persist_failure_never_breaks_send(self, monkeypatch):
+        # A storage outage must not stop the messages going out or raise.
+        monkeypatch.setenv("PUBLIC_BASE_URL", "https://api.test")
+        a = FakeAdapter()
+        s = FakeStorage(raise_on_save=True)
+        cfg = _cfg(send_contact_card=True, first_message="Hey!", sms_display_name="Z")
+        sent = cc.maybe_send_first_contact(a, "+1555", cfg, from_number="+1999", storage=s)
+        assert sent is True
+        assert len(a.calls) == 2  # both messages still sent
+        assert s.saved == []      # nothing recorded, but no exception escaped
 
     def test_vcard_base_url_never_uses_operator_api(self, monkeypatch):
         # The vCard is served by THIS app; OPERATOR_API_BASE_URL points at a

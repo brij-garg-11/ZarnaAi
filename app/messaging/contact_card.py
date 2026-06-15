@@ -203,9 +203,35 @@ def first_message_with_footer(first_message: str) -> str:
     return body
 
 
-def maybe_send_first_contact(adapter, to_number: str, creator_config, from_number: str = "") -> bool:
+def _persist_outbound(storage, to_number: str, body: str) -> None:
+    """Record an outbound first-contact message in the conversation store.
+
+    Without this the vCard/welcome sends go straight to Twilio and never land in
+    the operator inbox, so the conversation looks like it started with the fan's
+    first reply. Best-effort: a storage failure must never block the send.
+    """
+    if storage is None or not (body or "").strip():
+        return
+    try:
+        storage.save_message(to_number, "assistant", body)
+    except Exception:
+        logger.warning("first_contact: failed to persist outbound to inbox for to=...%s",
+                       to_number[-4:] if to_number else "?", exc_info=True)
+
+
+def maybe_send_first_contact(
+    adapter,
+    to_number: str,
+    creator_config,
+    from_number: str = "",
+    storage=None,
+) -> bool:
     """
     Send the vCard MMS and/or first-message welcome to a brand-new fan.
+
+    When ``storage`` is provided, each successfully sent message is also recorded
+    as an ``assistant`` turn so it shows up in the operator inbox (the vCard +
+    welcome otherwise bypass the conversation store and are invisible there).
 
     Returns True if anything was sent. Safe no-op (returns False) when the
     creator has neither send_contact_card nor first_message configured, or when
@@ -232,14 +258,20 @@ def maybe_send_first_contact(adapter, to_number: str, creator_config, from_numbe
             vcard_url = f"{base}/vcard/performer/{slug}.vcf"
             if tel_q:
                 vcard_url += f"?tel={tel_q}"
+            card_body = (
+                f"Tap to save {getattr(creator_config, 'sms_display_name', '') or getattr(creator_config, 'name', 'me')} "
+                "to your contacts."
+            )
             try:
                 ok = adapter.send_reply(
                     to_number,
-                    body=f"Tap to save {getattr(creator_config, 'sms_display_name', '') or getattr(creator_config, 'name', 'me')} to your contacts.",
+                    body=card_body,
                     from_number=from_number or None,
                     media_url=vcard_url,
                 )
                 sent_any = sent_any or bool(ok)
+                if ok:
+                    _persist_outbound(storage, to_number, card_body)
             except Exception:
                 logger.warning("vcard: send failed for slug=%s to=...%s", slug,
                                to_number[-4:] if to_number else "?", exc_info=True)
@@ -252,6 +284,8 @@ def maybe_send_first_contact(adapter, to_number: str, creator_config, from_numbe
         try:
             ok = adapter.send_reply(to_number, body=welcome, from_number=from_number or None)
             sent_any = sent_any or bool(ok)
+            if ok:
+                _persist_outbound(storage, to_number, welcome)
         except Exception:
             logger.warning("first_message: send failed for slug=%s to=...%s", slug,
                            to_number[-4:] if to_number else "?", exc_info=True)
