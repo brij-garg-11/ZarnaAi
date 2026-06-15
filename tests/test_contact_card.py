@@ -233,6 +233,27 @@ class TestMaybeSendFirstContact:
         assert len(a.calls) == 1
         assert a.calls[0]["media_url"] is None
 
+    def test_card_tel_falls_back_to_twilio_number(self, monkeypatch):
+        # Dedicated deployments (e.g. Zarna) pass no explicit from_number because
+        # replies route via the A2P messaging service. The card must still embed
+        # the service's number (TWILIO_PHONE_NUMBER) so the saved contact has a
+        # phone number and links to the conversation thread.
+        monkeypatch.setenv("PUBLIC_BASE_URL", "https://api.test")
+        monkeypatch.setenv("TWILIO_PHONE_NUMBER", "+18556081717")
+        a = FakeAdapter()
+        cfg = _cfg(send_contact_card=True)
+        cc.maybe_send_first_contact(a, "+1555", cfg, from_number="")
+        assert "tel=%2B18556081717" in a.calls[0]["media_url"]
+
+    def test_explicit_from_number_wins_over_twilio_env(self, monkeypatch):
+        monkeypatch.setenv("PUBLIC_BASE_URL", "https://api.test")
+        monkeypatch.setenv("TWILIO_PHONE_NUMBER", "+18556081717")
+        a = FakeAdapter()
+        cfg = _cfg(send_contact_card=True)
+        cc.maybe_send_first_contact(a, "+1555", cfg, from_number="+1999")
+        assert "tel=%2B1999" in a.calls[0]["media_url"]
+        assert "8556081717" not in a.calls[0]["media_url"]
+
     def test_card_only_no_first_message(self, monkeypatch):
         monkeypatch.setenv("PUBLIC_BASE_URL", "https://api.test")
         a = FakeAdapter()
