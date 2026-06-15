@@ -66,6 +66,7 @@ class CreatorConfig:
     # opt-in message). send_contact_card gates the vCard; first_message gates the
     # welcome text. profile_photo_url / sms_display_name feed the contact card.
     sms_display_name: str = ""
+    sms_org: str = ""  # contact-card company/subtitle line (vCard ORG), optional
     profile_photo_url: str = ""
     send_contact_card: bool = False
     first_message: str = ""
@@ -107,6 +108,7 @@ def _build_from_dict(slug: str, data: dict) -> CreatorConfig:
         upcoming_shows=tuple(s for s in data.get("upcoming_shows", []) if isinstance(s, dict)),
         custom_links=tuple(l for l in data.get("custom_links", []) if isinstance(l, dict)),
         sms_display_name=data.get("sms_display_name", ""),
+        sms_org=data.get("sms_org", ""),
         profile_photo_url=data.get("profile_photo_url", ""),
         send_contact_card=bool(data.get("send_contact_card", False)),
         first_message=data.get("first_message", ""),
@@ -191,6 +193,7 @@ _BOT_OVERRIDE_FIELDS = (
     "send_contact_card",
     "profile_photo_url",
     "sms_display_name",
+    "sms_org",
     "first_message",
 )
 

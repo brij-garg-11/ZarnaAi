@@ -110,6 +110,22 @@ def _split_name(display_name: str) -> tuple[str, str]:
     return parts[0], " ".join(parts[1:])
 
 
+def _escape_vcard_value(value: str) -> str:
+    """Escape a free-text value for a vCard property (RFC 2426).
+
+    ``ORG`` uses ``;`` to separate org units and ``,`` for value lists, so an
+    unescaped company name containing those would be mis-parsed by iOS. Escape
+    backslashes first, then the structural separators and newlines.
+    """
+    return (
+        (value or "")
+        .replace("\\", "\\\\")
+        .replace(";", "\\;")
+        .replace(",", "\\,")
+        .replace("\n", "\\n")
+    )
+
+
 def _fold_vcard_line(line: str) -> list[str]:
     """Fold a long vCard line per RFC 2426 (75-octet lines, continuations start
     with a single space). iOS silently drops inline photos whose base64 sits on
@@ -130,9 +146,11 @@ def build_performer_vcard(creator_config, tel: str = "") -> str:
     ``tel`` (the creator's SMS number) is included as the contact phone so iOS
     links the saved contact to the conversation. The photo is embedded base64.
 
-    The card is built as a *person* (structured ``N`` First/Last, no ``ORG``) so
-    iOS doesn't file it under the business/company section, and the photo uses
-    the folded vCard-3.0 ``PHOTO;ENCODING=b`` form so the inline image renders.
+    The card is built as a *person* (structured ``N`` First/Last) so iOS files it
+    under People rather than the business section, and the photo uses the folded
+    vCard-3.0 ``PHOTO;ENCODING=b`` form so the inline image renders. An optional
+    ``sms_org`` adds the company/subtitle line (``ORG``) shown under the name —
+    iOS keeps it a person because ``N`` is populated.
     """
     display_name = (
         getattr(creator_config, "sms_display_name", "")
@@ -147,6 +165,9 @@ def build_performer_vcard(creator_config, tel: str = "") -> str:
         f"N:{family};{given};;;",
         f"FN:{display_name}",
     ]
+    org = (getattr(creator_config, "sms_org", "") or "").strip()
+    if org:
+        lines.append(f"ORG:{_escape_vcard_value(org)}")
     tel = (tel or "").strip()
     if tel:
         lines.append(f"TEL;TYPE=CELL:{tel}")

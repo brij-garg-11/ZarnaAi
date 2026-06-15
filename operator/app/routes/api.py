@@ -2482,6 +2482,7 @@ def bot_data():
             custom_links=db_cfg.get("custom_links", []),
             # SMS profile + first-message (opt-in) — new My Bot sections
             sms_display_name=db_cfg.get("sms_display_name", db_cfg.get("name", "")),
+            sms_org=db_cfg.get("sms_org", ""),
             profile_photo_url=db_cfg.get("profile_photo_url", ""),
             send_contact_card=bool(db_cfg.get("send_contact_card", False)),
             first_message=db_cfg.get("first_message", ""),
@@ -2521,6 +2522,7 @@ def bot_data():
         custom_links=cfg.get("custom_links", []),
         # SMS profile + first-message (opt-in) — new My Bot sections
         sms_display_name=cfg.get("sms_display_name", cfg.get("name", cfg.get("display_name", ""))),
+        sms_org=cfg.get("sms_org", ""),
         profile_photo_url=cfg.get("profile_photo_url", ""),
         send_contact_card=bool(cfg.get("send_contact_card", False)),
         first_message=cfg.get("first_message", ""),
@@ -2589,7 +2591,7 @@ def save_bot_data():
         "website_url", "podcast_url", "media_urls", "banned_words", "links",
         "custom_links",
         # SMS profile + first-message (opt-in) — new My Bot sections
-        "sms_display_name", "profile_photo_url", "send_contact_card", "first_message",
+        "sms_display_name", "sms_org", "profile_photo_url", "send_contact_card", "first_message",
     }
     updates = {k: v for k, v in data.items() if k in allowed_performer}
     if not updates:
