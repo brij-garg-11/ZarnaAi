@@ -259,6 +259,17 @@ def count_audience(
                     "WHERE LOWER(fan_location) LIKE %s" + slug_sql,
                     tuple([f"%{audience_filter.lower()}%", *slug_params]),
                 )
+            elif audience_type == "area_code" and audience_filter:
+                from .area_codes import parse_area_codes
+                codes = parse_area_codes(audience_filter)
+                if codes:
+                    cur.execute(
+                        "SELECT COUNT(DISTINCT phone_number) FROM contacts "
+                        "WHERE area_codes && %s::text[]" + slug_sql,
+                        tuple([codes, *slug_params]),
+                    )
+                else:
+                    cur.execute("SELECT 0")
             elif audience_type == "show" and audience_filter:
                 try:
                     show_id = int(audience_filter)
@@ -359,6 +370,17 @@ def get_audience_phones(
                     "WHERE LOWER(fan_location) LIKE %s AND phone_number NOT LIKE 'whatsapp:%%'" + slug_sql,
                     tuple([f"%{audience_filter.lower()}%", *slug_params]),
                 )
+            elif audience_type == "area_code" and audience_filter:
+                from .area_codes import parse_area_codes
+                codes = parse_area_codes(audience_filter)
+                if codes:
+                    cur.execute(
+                        "SELECT DISTINCT phone_number FROM contacts "
+                        "WHERE area_codes && %s::text[] AND phone_number NOT LIKE 'whatsapp:%%'" + slug_sql,
+                        tuple([codes, *slug_params]),
+                    )
+                else:
+                    cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE FALSE")
             elif audience_type == "show" and audience_filter:
                 try:
                     show_id = int(audience_filter)
@@ -490,6 +512,14 @@ def _build_compound_clauses(
         elif ftype == "location":
             clauses.append("LOWER(COALESCE(fan_location,'')) LIKE %s")
             params.append(f"%{val.lower()}%")
+        elif ftype == "area_code":
+            from .area_codes import parse_area_codes
+            codes = parse_area_codes(val)
+            if codes:
+                clauses.append("area_codes && %s::text[]")
+                params.append(codes)
+            else:
+                clauses.append("FALSE")
     return clauses, params
 
 

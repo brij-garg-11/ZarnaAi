@@ -61,6 +61,8 @@ ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_name      TEXT    DEFAULT '';
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS creator_slug  TEXT    NOT NULL DEFAULT 'zarna';
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_score     INT     DEFAULT 0;
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS fan_tier      TEXT    DEFAULT 'engaged';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS area_codes    TEXT[]  DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS contacts_area_codes_gin ON contacts USING GIN (area_codes);
 """
 
 # One statement per execute — psycopg2 limitation.
@@ -525,17 +527,25 @@ class PostgresStorage(BaseStorage):
     # ------------------------------------------------------------------
 
     def save_contact(self, phone_number: str, source: Optional[str] = None) -> Contact:
+        from app.area_codes import area_code_from_phone
+        npa = area_code_from_phone(phone_number)
+        area_codes = [npa] if npa else []
         conn = self._acquire()
         try:
             with conn:
                 with conn.cursor() as cur:
+                    # Auto-fill area_codes on insert; for existing rows, only
+                    # backfill when still empty so manual additions are kept.
                     cur.execute(
                         """
-                        INSERT INTO contacts (phone_number, source, creator_slug)
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (phone_number) DO NOTHING
+                        INSERT INTO contacts (phone_number, source, creator_slug, area_codes)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (phone_number) DO UPDATE
+                          SET area_codes = EXCLUDED.area_codes
+                          WHERE contacts.area_codes = '{}'
+                            AND EXCLUDED.area_codes <> '{}'
                         """,
-                        (phone_number, source, self._creator_slug),
+                        (phone_number, source, self._creator_slug, area_codes),
                     )
         finally:
             self._release(conn)

@@ -183,8 +183,8 @@
         <!-- Audience -->
         <div class="mb-5">
           <label class="section-label mb-2 block">Audience</label>
-          <div class="grid grid-cols-3 sm:grid-cols-7 gap-2 mb-3">
-            {% for val, lbl in [("all","Everyone"),("tier","By Tier"),("show","By Show"),("tag","By Tag"),("location","By Location"),("random","Random %"),("compound","Compound")] %}
+          <div class="grid grid-cols-3 sm:grid-cols-8 gap-2 mb-3">
+            {% for val, lbl in [("all","Everyone"),("tier","By Tier"),("show","By Show"),("tag","By Tag"),("location","By Location"),("area_code","By Area"),("random","Random %"),("compound","Compound")] %}
             <label class="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg border cursor-pointer text-xs font-medium transition-colors"
                    :style="audienceType==='{{ val }}' ? 'border-color:var(--pink);background:#3a2a0e;color:var(--pink);' : 'border-color:#3d3530;color:#a89080;'">
               <input type="radio" name="audience_type" value="{{ val }}" x-model="audienceType" class="sr-only"
@@ -230,6 +230,24 @@
                    x-model="audienceFilter"
                    @input.debounce.500ms="updateCount()">
           </div>
+          <div x-show="audienceType==='area_code'" x-transition>
+            <div class="flex flex-wrap gap-2 mb-2">
+              {% for slug, lbl in [("ny","NY"),("nj","NJ"),("nynj","NY + NJ")] %}
+              <button type="button"
+                      @click="audienceFilter='{{ slug }}'; updateCount()"
+                      class="px-3 py-1.5 rounded-lg border text-xs font-medium"
+                      :style="audienceFilter==='{{ slug }}' ? 'border-color:var(--pink);background:#3a2a0e;color:var(--pink);' : 'border-color:#3d3530;color:#a89080;'">
+                {{ lbl }}
+              </button>
+              {% endfor %}
+            </div>
+            <input type="text" name="audience_filter_area_code" class="zarna-input"
+                   placeholder="Preset above, or area codes e.g. 212, 718, 201…"
+                   value="{{ active_draft.audience_filter or '' }}"
+                   x-model="audienceFilter"
+                   @input.debounce.500ms="updateCount()">
+            <p class="text-xs mt-1" style="color:#6b7280;">Derived from each fan's phone number. Use NY/NJ presets or type specific area codes.</p>
+          </div>
           <div x-show="audienceType==='tier'" x-transition>
             <select name="audience_filter_tier" class="zarna-input" x-model="audienceFilter"
                     @change="updateCount()">
@@ -261,6 +279,7 @@
                     <option value="tier">Tier</option>
                     <option value="tag">Tag</option>
                     <option value="location">Location</option>
+                    <option value="area_code">Area code</option>
                   </select>
                   <template x-if="f.type === 'tier'">
                     <select x-model="f.value" @change="updateCount()" class="zarna-input flex-1">
@@ -278,6 +297,10 @@
                   <template x-if="f.type === 'location'">
                     <input type="text" x-model="f.value" @input.debounce.500ms="updateCount()"
                            class="zarna-input flex-1" placeholder="e.g. New York">
+                  </template>
+                  <template x-if="f.type === 'area_code'">
+                    <input type="text" x-model="f.value" @input.debounce.500ms="updateCount()"
+                           class="zarna-input flex-1" placeholder="ny, nj, or 212, 718…">
                   </template>
                   <button type="button" @click="removeFilter(i)" class="shrink-0 text-xs px-2 py-1.5 rounded"
                           style="color:#f87171;border:1px solid #f87171;background:transparent;">✕</button>
@@ -716,6 +739,7 @@ function blastCompose() {
     get resolvedFilter() {
       if (this.audienceType === 'tag') return this.audienceFilter;
       if (this.audienceType === 'location') return this.audienceFilter;
+      if (this.audienceType === 'area_code') return this.audienceFilter;
       if (this.audienceType === 'show') return this.audienceFilter;
       if (this.audienceType === 'tier') return this.audienceFilter;
       if (this.audienceType === 'compound') return JSON.stringify(this.compoundFilters);

@@ -20,6 +20,7 @@ except (ImportError, AttributeError):
     _UndefinedColumn = type("UndefinedColumnSentinel", (Exception,), {})
 
 from app.admin_auth import get_db_connection
+from app.area_codes import area_code_from_phone
 from app.live_shows.event_time import normalize_event_timezone
 from app.messaging.broadcast import normalize_e164
 
@@ -55,13 +56,17 @@ def save_broadcast_message(phone: str, body: str, creator_slug: str | None = Non
     try:
         with c:
             with c.cursor() as cur:
+                _npa = area_code_from_phone(norm)
                 cur.execute(
                     """
-                    INSERT INTO contacts (phone_number, source, creator_slug)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (phone_number) DO NOTHING
+                    INSERT INTO contacts (phone_number, source, creator_slug, area_codes)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (phone_number) DO UPDATE
+                      SET area_codes = EXCLUDED.area_codes
+                      WHERE contacts.area_codes = '{}'
+                        AND EXCLUDED.area_codes <> '{}'
                     """,
-                    (norm, "live_show_broadcast", slug),
+                    (norm, "live_show_broadcast", slug, [_npa] if _npa else []),
                 )
                 cur.execute(
                     """
@@ -301,13 +306,17 @@ def add_signup(show_id: int, phone: str, channel: str, creator_slug: str = None)
                 inserted = cur.rowcount > 0
                 # Ensure the fan exists in contacts so analytics can segment
                 # show-acquired fans from organic fans (source preserved if already set).
+                _npa = area_code_from_phone(norm)
                 cur.execute(
                     """
-                    INSERT INTO contacts (phone_number, source, creator_slug)
-                    VALUES (%s, 'live_show', %s)
-                    ON CONFLICT (phone_number) DO NOTHING
+                    INSERT INTO contacts (phone_number, source, creator_slug, area_codes)
+                    VALUES (%s, 'live_show', %s, %s)
+                    ON CONFLICT (phone_number) DO UPDATE
+                      SET area_codes = EXCLUDED.area_codes
+                      WHERE contacts.area_codes = '{}'
+                        AND EXCLUDED.area_codes <> '{}'
                     """,
-                    (norm, slug),
+                    (norm, slug, [_npa] if _npa else []),
                 )
                 return inserted
     finally:
