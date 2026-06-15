@@ -275,7 +275,14 @@ def maybe_send_first_contact(
         base = _vcard_base_url()
         if base:
             from urllib.parse import quote
-            tel_q = quote((from_number or "").strip(), safe="")
+            # Embed the SMS number on the card so the saved contact is complete
+            # and links to the conversation. For a dedicated deployment (e.g.
+            # Zarna) the caller passes no explicit from_number because replies
+            # route via the A2P messaging service — so fall back to that
+            # service's number (TWILIO_PHONE_NUMBER). Without this the vCard
+            # ships with no TEL and "Save" creates a numberless contact.
+            tel_number = (from_number or "").strip() or os.getenv("TWILIO_PHONE_NUMBER", "").strip()
+            tel_q = quote(tel_number, safe="")
             vcard_url = f"{base}/vcard/performer/{slug}.vcf"
             if tel_q:
                 vcard_url += f"?tel={tel_q}"
