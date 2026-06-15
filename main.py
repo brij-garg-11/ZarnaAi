@@ -595,6 +595,7 @@ def _process_twilio_message(phone_number: str, message_text: str, quiz_context: 
                     phone_number,
                     first_contact_cfg,
                     from_number=from_number or "",
+                    storage=getattr(active_brain, "storage", None),
                 )
             except Exception:
                 logging.warning(

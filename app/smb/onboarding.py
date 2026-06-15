@@ -331,6 +331,26 @@ def _classify_answer(answer: str, tenant: BusinessTenant) -> dict:
     return {"0": answer.strip()}
 
 
+def _persist_vcard_to_inbox(phone_number: str, tenant: BusinessTenant, body: str) -> None:
+    """Record the contact-card MMS as an assistant turn so it shows in the inbox.
+
+    Best-effort: a storage failure must never break the (already-sent) MMS.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        with conn:
+            smb_storage.save_message(conn, tenant.slug, phone_number, "assistant", body)
+    except Exception:
+        logger.warning(
+            "SMB vcard: failed to persist contact card to inbox for ...%s",
+            phone_number[-4:] if phone_number else "?", exc_info=True,
+        )
+    finally:
+        conn.close()
+
+
 def _send_vcard_mms(phone_number: str, tenant: BusinessTenant) -> None:
     """Send the tenant vCard as a follow-up MMS so the subscriber can save the contact."""
     # Use the operator app domain (api.zar.bot) — stable, predictable URL.
@@ -357,13 +377,17 @@ def _send_vcard_mms(phone_number: str, tenant: BusinessTenant) -> None:
             return
 
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        card_body = f"Tap to save {tenant.display_name} to your contacts."
         msg = client.messages.create(
             to=phone_number,
             from_=tenant.sms_number,
-            body=f"Tap to save {tenant.display_name} to your contacts.",
+            body=card_body,
             media_url=[vcard_url],
         )
         logger.info("SMB vcard sent: to=...%s SID=%s", phone_number[-4:], msg.sid)
+        # Record it in the conversation store so it shows in the inbox — the raw
+        # Twilio client above bypasses the normal reply path that persists turns.
+        _persist_vcard_to_inbox(phone_number, tenant, card_body)
     except Exception:
         logger.warning(
             "SMB vcard: failed to send to ...%s", phone_number[-4:] if phone_number else "?",
