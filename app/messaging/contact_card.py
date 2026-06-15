@@ -140,10 +140,19 @@ def clear_photo_cache() -> None:
 
 
 def _vcard_base_url() -> str:
+    """Public base URL for THIS app's vCard route.
+
+    The ``/vcard/performer/<slug>.vcf`` route is served by *this* app, so the
+    media URL handed to Twilio MUST point at this app's own public domain.
+
+    Do NOT fall back to ``OPERATOR_API_BASE_URL`` here — that points at a
+    *different* service (the operator API, e.g. api.zar.bot) which has no vCard
+    route, so the media URL 404s and the MMS fails with Twilio error 11200.
+    """
     domain = (
-        os.getenv("OPERATOR_API_BASE_URL")
-        or os.getenv("RAILWAY_PUBLIC_DOMAIN")
+        os.getenv("PERFORMER_VCARD_BASE_URL")
         or os.getenv("PUBLIC_BASE_URL")
+        or os.getenv("RAILWAY_PUBLIC_DOMAIN")
         or ""
     ).strip()
     if domain and not domain.startswith("http"):
