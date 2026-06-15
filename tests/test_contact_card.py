@@ -145,7 +145,10 @@ class TestMaybeSendFirstContact:
         assert cc.COMPLIANCE_FOOTER in a.calls[0]["body"]
 
     def test_sends_vcard_then_welcome(self, monkeypatch):
-        monkeypatch.setenv("OPERATOR_API_BASE_URL", "https://api.test")
+        monkeypatch.setenv("PUBLIC_BASE_URL", "https://api.test")
+        # Regression guard: the operator API domain must NOT be used for the
+        # vCard media URL (it 404s -> Twilio 11200).
+        monkeypatch.setenv("OPERATOR_API_BASE_URL", "https://operator.wrong")
         a = FakeAdapter()
         cfg = _cfg(send_contact_card=True, first_message="Hey!", sms_display_name="Z")
         sent = cc.maybe_send_first_contact(a, "+1555", cfg, from_number="+1999")
@@ -153,6 +156,7 @@ class TestMaybeSendFirstContact:
         assert len(a.calls) == 2
         # vCard MMS first, with the media URL pointing at the performer route.
         assert a.calls[0]["media_url"].startswith("https://api.test/vcard/performer/perf.vcf")
+        assert "operator.wrong" not in a.calls[0]["media_url"]
         assert "tel=%2B1999" in a.calls[0]["media_url"]
         assert a.calls[0]["from"] == "+1999"
         # Welcome text second.
@@ -160,6 +164,7 @@ class TestMaybeSendFirstContact:
         assert "Hey!" in a.calls[1]["body"]
 
     def test_vcard_skipped_without_base_url_but_welcome_sent(self, monkeypatch):
+        monkeypatch.delenv("PERFORMER_VCARD_BASE_URL", raising=False)
         monkeypatch.delenv("OPERATOR_API_BASE_URL", raising=False)
         monkeypatch.delenv("RAILWAY_PUBLIC_DOMAIN", raising=False)
         monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
@@ -172,7 +177,7 @@ class TestMaybeSendFirstContact:
         assert a.calls[0]["media_url"] is None
 
     def test_card_only_no_first_message(self, monkeypatch):
-        monkeypatch.setenv("OPERATOR_API_BASE_URL", "https://api.test")
+        monkeypatch.setenv("PUBLIC_BASE_URL", "https://api.test")
         a = FakeAdapter()
         cfg = _cfg(send_contact_card=True)
         sent = cc.maybe_send_first_contact(a, "+1555", cfg, from_number="+1999")
@@ -181,13 +186,28 @@ class TestMaybeSendFirstContact:
         assert a.calls[0]["media_url"] is not None
 
     def test_never_raises_when_adapter_fails(self, monkeypatch):
-        monkeypatch.setenv("OPERATOR_API_BASE_URL", "https://api.test")
+        monkeypatch.setenv("PUBLIC_BASE_URL", "https://api.test")
         a = FakeAdapter(raise_on="mms")
         cfg = _cfg(send_contact_card=True, first_message="Hey!")
         # MMS raises, but the welcome text still sends and no exception escapes.
         sent = cc.maybe_send_first_contact(a, "+1555", cfg, from_number="+1999")
         assert sent is True
         assert any(c["media_url"] is None for c in a.calls)
+
+    def test_vcard_base_url_never_uses_operator_api(self, monkeypatch):
+        # The vCard is served by THIS app; OPERATOR_API_BASE_URL points at a
+        # different service and must never be used (regression for MMS 11200).
+        monkeypatch.delenv("PERFORMER_VCARD_BASE_URL", raising=False)
+        monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
+        monkeypatch.delenv("RAILWAY_PUBLIC_DOMAIN", raising=False)
+        monkeypatch.setenv("OPERATOR_API_BASE_URL", "https://api.zar.bot")
+        assert cc._vcard_base_url() == ""
+        # The app's own Railway domain is used instead.
+        monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "web-prod.up.railway.app")
+        assert cc._vcard_base_url() == "https://web-prod.up.railway.app"
+        # An explicit override wins over everything.
+        monkeypatch.setenv("PERFORMER_VCARD_BASE_URL", "https://cards.example.com")
+        assert cc._vcard_base_url() == "https://cards.example.com"
 
 
 # ---------------------------------------------------------------------------
