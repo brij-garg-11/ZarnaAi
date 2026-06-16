@@ -233,6 +233,12 @@ def _slug_clause(slug: str | None, table_alias: str = "") -> tuple[str, list]:
     return f" AND {prefix}creator_slug = %s", [slug]
 
 
+# Derives the 3-digit NANP area code (NPA) live from a phone number, ignoring
+# any country code and non-digit characters. Used so area-code targeting works
+# for every contact, not just those whose area_codes column has been populated.
+_PHONE_NPA_SQL = "LEFT(RIGHT(REGEXP_REPLACE(phone_number, '\\D', '', 'g'), 10), 3)"
+
+
 def count_audience(
     audience_type: str,
     audience_filter: str,
@@ -253,6 +259,17 @@ def count_audience(
                     "WHERE %s = ANY(fan_tags)" + slug_sql,
                     tuple([audience_filter.lower(), *slug_params]),
                 )
+            elif audience_type == "tags" and audience_filter:
+                tags = _parse_tag_list(audience_filter)
+                if tags:
+                    # Array overlap = ANY/union semantics (match any selected tag).
+                    cur.execute(
+                        "SELECT COUNT(DISTINCT phone_number) FROM contacts "
+                        "WHERE fan_tags && %s::text[]" + slug_sql,
+                        tuple([tags, *slug_params]),
+                    )
+                else:
+                    cur.execute("SELECT 0")
             elif audience_type == "location" and audience_filter:
                 cur.execute(
                     "SELECT COUNT(DISTINCT phone_number) FROM contacts "
@@ -263,10 +280,15 @@ def count_audience(
                 from .area_codes import parse_area_codes
                 codes = parse_area_codes(audience_filter)
                 if codes:
+                    # Match the stored area_codes column OR the area code derived
+                    # live from the phone number. The column is only populated on
+                    # contact activity (sparse for older fans), so the phone-derived
+                    # NPA keeps targeting accurate for the full audience.
                     cur.execute(
                         "SELECT COUNT(DISTINCT phone_number) FROM contacts "
-                        "WHERE area_codes && %s::text[]" + slug_sql,
-                        tuple([codes, *slug_params]),
+                        "WHERE (area_codes && %s::text[] OR " + _PHONE_NPA_SQL + " = ANY(%s::text[]))"
+                        + slug_sql,
+                        tuple([codes, codes, *slug_params]),
                     )
                 else:
                     cur.execute("SELECT 0")
@@ -364,6 +386,16 @@ def get_audience_phones(
                     "WHERE %s = ANY(fan_tags) AND phone_number NOT LIKE 'whatsapp:%%'" + slug_sql,
                     tuple([audience_filter.lower(), *slug_params]),
                 )
+            elif audience_type == "tags" and audience_filter:
+                tags = _parse_tag_list(audience_filter)
+                if tags:
+                    cur.execute(
+                        "SELECT DISTINCT phone_number FROM contacts "
+                        "WHERE fan_tags && %s::text[] AND phone_number NOT LIKE 'whatsapp:%%'" + slug_sql,
+                        tuple([tags, *slug_params]),
+                    )
+                else:
+                    cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE FALSE")
             elif audience_type == "location" and audience_filter:
                 cur.execute(
                     "SELECT DISTINCT phone_number FROM contacts "
@@ -376,8 +408,9 @@ def get_audience_phones(
                 if codes:
                     cur.execute(
                         "SELECT DISTINCT phone_number FROM contacts "
-                        "WHERE area_codes && %s::text[] AND phone_number NOT LIKE 'whatsapp:%%'" + slug_sql,
-                        tuple([codes, *slug_params]),
+                        "WHERE (area_codes && %s::text[] OR " + _PHONE_NPA_SQL + " = ANY(%s::text[])) "
+                        "AND phone_number NOT LIKE 'whatsapp:%%'" + slug_sql,
+                        tuple([codes, codes, *slug_params]),
                     )
                 else:
                     cur.execute("SELECT DISTINCT phone_number FROM contacts WHERE FALSE")
@@ -516,11 +549,30 @@ def _build_compound_clauses(
             from .area_codes import parse_area_codes
             codes = parse_area_codes(val)
             if codes:
-                clauses.append("area_codes && %s::text[]")
+                clauses.append(
+                    "(area_codes && %s::text[] OR " + _PHONE_NPA_SQL + " = ANY(%s::text[]))"
+                )
+                params.append(codes)
                 params.append(codes)
             else:
                 clauses.append("FALSE")
     return clauses, params
+
+
+def _parse_tag_list(raw: str | None) -> list[str]:
+    """Split a comma-separated tag filter into a deduped, lowercased list.
+
+    Used by the ``tags`` (multi-tag, OR) audience type so the picker can pass
+    several tags in one ``audience_filter`` string (e.g. ``"new-york,boston"``).
+    """
+    if not raw:
+        return []
+    out: list[str] = []
+    for token in raw.split(","):
+        tag = token.strip().lower()
+        if tag and tag not in out:
+            out.append(tag)
+    return out
 
 
 def _get_optouts(cur) -> set:
@@ -550,6 +602,40 @@ def get_all_tags(creator_slug: str | None = None) -> list[str]:
                     ORDER BY tag
                 """)
             return [r[0] for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_tag_counts(creator_slug: str | None = None) -> list[dict]:
+    """Distinct fan_tags with subscriber counts, ordered by reach (desc).
+
+    Powers the blast audience tag picker so the operator can see how many
+    fans each tag would reach before selecting it. Tenant-scoped when
+    ``creator_slug`` is provided.
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            if creator_slug:
+                cur.execute("""
+                    SELECT tag, COUNT(DISTINCT phone_number) AS n FROM (
+                        SELECT phone_number, UNNEST(fan_tags) AS tag FROM contacts
+                        WHERE fan_tags IS NOT NULL AND fan_tags != '{}'
+                          AND creator_slug = %s
+                    ) sub
+                    GROUP BY tag
+                    ORDER BY n DESC, tag
+                """, (creator_slug,))
+            else:
+                cur.execute("""
+                    SELECT tag, COUNT(DISTINCT phone_number) AS n FROM (
+                        SELECT phone_number, UNNEST(fan_tags) AS tag FROM contacts
+                        WHERE fan_tags IS NOT NULL AND fan_tags != '{}'
+                    ) sub
+                    GROUP BY tag
+                    ORDER BY n DESC, tag
+                """)
+            return [{"tag": r[0], "count": r[1]} for r in cur.fetchall()]
     finally:
         conn.close()
 
