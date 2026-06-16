@@ -12,8 +12,10 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 # Mid tier (conversation): override to your org’s mini model ID, e.g. gpt-4o-mini
 MID_MODEL = os.getenv("MID_MODEL", "gpt-4o-mini")
-# High tier (nuanced / long / advice): override to current Claude Sonnet ID
-HIGH_MODEL = os.getenv("HIGH_MODEL", "claude-sonnet-4-20250514")
+# High tier (nuanced / long / advice): override to current Claude Sonnet ID.
+# claude-sonnet-4-20250514 was retired by Anthropic on 2026-06-15; use the
+# current Sonnet 4.6 snapshot (same $3/$15 per-M-token pricing).
+HIGH_MODEL = os.getenv("HIGH_MODEL", "claude-sonnet-4-6")
 # auto | on | off — off forces all replies through Gemini even if keys are set
 MULTI_MODEL_REPLY = os.getenv("MULTI_MODEL_REPLY", "auto").strip().lower()
 
