@@ -53,6 +53,7 @@ def _load_guard():
             "list_shows": lambda **kw: [],
             "list_blast_drafts": lambda **kw: [],
             "get_all_tags": lambda **kw: [],
+            "get_tag_counts": lambda **kw: [],
         },
         "operator_app_pkg.db": {"get_conn": lambda: None},
     }.items():

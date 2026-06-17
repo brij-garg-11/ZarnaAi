@@ -13,6 +13,7 @@ from ..routes.auth import login_required, current_user, resolve_slug, get_author
 _BUSINESS_CONFIGS_DIR = Path(__file__).parent.parent / "business_configs"
 from ..queries import (
     get_overview_stats, get_media_kit_stats, list_shows, list_blast_drafts, get_all_tags,
+    get_tag_counts,
     get_blast_reply_stats, get_blast_reply_stats_map,
 )
 from ..db import get_conn
@@ -1402,7 +1403,7 @@ def api_save_blast(draft_id):
     if channel not in ("twilio", "slicktext"):
         channel = "twilio"
     audience_type = data.get("audience_type", "all")
-    if audience_type not in ("all", "tag", "location", "area_code", "random", "show", "tier", "engaged"):
+    if audience_type not in ("all", "tag", "tags", "location", "area_code", "random", "show", "tier", "engaged"):
         audience_type = "all"
     audience_filter = (data.get("audience_filter") or "").strip()[:200]
     sample_pct = max(1, min(100, int(data.get("sample_pct", 100) or 100)))
@@ -1494,6 +1495,20 @@ def api_upload_image():
         return jsonify(success=False, error=str(e)), 500
 
 
+@api_bp.route("/api/blasts/tags", methods=["GET"])
+@login_required
+def api_blast_tags():
+    """Available fan tags with subscriber counts, for the audience tag picker."""
+    _require_performer_account()
+    user = current_user() or {}
+    slug = None if user.get("is_super_admin") else (user.get("creator_slug") or None)
+    try:
+        return jsonify(success=True, tags=get_tag_counts(creator_slug=slug))
+    except Exception as e:
+        logger.exception("api_blast_tags error")
+        return jsonify(success=False, tags=[], error=str(e)), 500
+
+
 @api_bp.route("/api/blasts/preview-count", methods=["POST"])
 @login_required
 def api_blast_preview_count():
@@ -1502,7 +1517,7 @@ def api_blast_preview_count():
     _require_performer_account()
     data = request.get_json(silent=True) or {}
     audience_type = data.get("audience_type", "all")
-    if audience_type not in ("all", "tag", "location", "area_code", "random", "show", "tier", "engaged"):
+    if audience_type not in ("all", "tag", "tags", "location", "area_code", "random", "show", "tier", "engaged"):
         audience_type = "all"
     audience_filter = (data.get("audience_filter") or "").strip()
     sample_pct = max(1, min(100, int(data.get("sample_pct", 100) or 100)))
@@ -1589,7 +1604,7 @@ def api_blast_send(draft_id):
 
     if channel not in ("twilio", "slicktext"):
         channel = "twilio"
-    if audience_type not in ("all", "tag", "location", "area_code", "random", "show", "tier", "engaged"):
+    if audience_type not in ("all", "tag", "tags", "location", "area_code", "random", "show", "tier", "engaged"):
         audience_type = "all"
 
     if not body:
