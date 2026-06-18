@@ -41,6 +41,9 @@ _SHOW_KEYWORDS = {
     # "do you have any shows in <place>?", "are you playing in <place>?", etc.
     "coming to", "next show", "upcoming show", "upcoming shows",
     "shows in", "show in", "any shows", "playing in",
+    # "are you coming back to <city>?" — same SHOW intent as "coming to",
+    # but the extra "back" breaks the "coming to" substring, so list it too.
+    "coming back to", "come back to",
 }
 # Fan statements about already having tickets — must NOT trigger a SHOW sell reply.
 # "I already have my tickets!" should stay PERSONAL/FEEDBACK, not get a ticket link.
@@ -279,6 +282,21 @@ _FEEDBACK_PHRASES = (
     "we have seen you", "seen you many times",
 )
 
+# A praise phrase only means "this is purely a reaction" when it stands alone.
+# When the same message ALSO carries a question or an explicit request signal
+# ("you're so funny, where can I see you live?"), it is NOT pure feedback — the
+# fan is asking for something. These cues tell the fast path to stop short-
+# circuiting to FEEDBACK and instead fall through to the structured-intent
+# checks and, failing those, the Gemini classifier (which reads the whole
+# message). Cues are deliberately request/interrogative signals, never topic
+# words like "show", so plain praise ("great show!") still fast-paths.
+_FEEDBACK_OVERRIDE_CUES = re.compile(
+    r"\?"
+    r"|\b(where|when|can i|could i|do you|are you|will you|gonna|going to|"
+    r"headed|near me|how can|how do|tickets?|come see|see you live|see u live)\b",
+    re.IGNORECASE,
+)
+
 # ── Personal: fan sharing biographical info about themselves ─────────────────
 _PERSONAL_PHRASES = re.compile(
     r"\b("
@@ -351,8 +369,11 @@ def _fast_classify(message: str) -> Intent | None:
     # MIL quiz answers ("mother in law" etc.) → engagement reaction = feedback
     if any(p in lower for p in _MIL_ANSWERS):
         return Intent.FEEDBACK
-    # Post-show praise and general reactions
-    if any(p in lower for p in _FEEDBACK_PHRASES):
+    # Post-show praise and general reactions — but only when the message is
+    # purely a reaction. If it ALSO carries a question or request signal
+    # ("you're so funny, where can I see you live?"), don't let the praise mask
+    # the real ask: fall through to the structured checks / Gemini classifier.
+    if any(p in lower for p in _FEEDBACK_PHRASES) and not _FEEDBACK_OVERRIDE_CUES.search(lower):
         return Intent.FEEDBACK
 
     # AI / bot questions → QUESTION

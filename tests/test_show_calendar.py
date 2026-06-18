@@ -526,3 +526,48 @@ class TestShowIntentRouting:
         # ("your shows" is not "shows in") — leave it to the LLM classifier.
         from app.brain.intent import _fast_classify
         assert _fast_classify("do your kids watch your shows") is not Intent.SHOW
+
+    def test_coming_back_to_city_is_show(self):
+        from app.brain.intent import _fast_classify
+        assert _fast_classify("are you coming back to Lexington?") == Intent.SHOW
+        assert _fast_classify("when will you come back to philly") == Intent.SHOW
+
+
+class TestPraiseDoesNotMaskRequest:
+    """A compliment must not short-circuit a real request to FEEDBACK.
+
+    Before the fix, a leading praise phrase ("you're so funny", "great show")
+    returned FEEDBACK from the fast path and the message never reached the
+    SHOW keyword check or the Gemini classifier.
+    """
+
+    def test_praise_plus_show_keyword_is_show(self):
+        # "when are you" is a SHOW keyword; the praise must not pre-empt it.
+        from app.brain.intent import _fast_classify
+        assert _fast_classify("you're so funny, when are you in London?") == Intent.SHOW
+
+    def test_praise_plus_coming_back_is_show(self):
+        from app.brain.intent import _fast_classify
+        assert _fast_classify(
+            "great show last night! when are you coming back to philly?"
+        ) == Intent.SHOW
+
+    def test_praise_plus_vague_request_defers_to_llm(self):
+        # No SHOW keyword here ("see you live" is not one), so the fast path must
+        # NOT label it FEEDBACK — it returns None to let the Gemini classifier
+        # read the whole message (which classifies it as SHOW live).
+        from app.brain.intent import _fast_classify
+        result = _fast_classify("ur so funny, where can i actually see u live")
+        assert result is None
+
+    def test_pure_praise_still_fast_paths_to_feedback(self):
+        # Regression: plain compliments must keep skipping the LLM.
+        from app.brain.intent import _fast_classify
+        assert _fast_classify("great show!") == Intent.FEEDBACK
+        assert _fast_classify("you're hilarious") == Intent.FEEDBACK
+        assert _fast_classify("loved it tonight, you killed it") == Intent.FEEDBACK
+
+    def test_having_tickets_still_feedback(self):
+        # Regression: possession guard unchanged.
+        from app.brain.intent import _fast_classify
+        assert _fast_classify("I already have my tickets!") == Intent.FEEDBACK
