@@ -1,7 +1,13 @@
 import logging
 import re
 import threading
+from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
+
+try:  # zoneinfo is stdlib on 3.9+; degrade gracefully if the tz db is missing.
+    from zoneinfo import ZoneInfo
+except Exception:  # pragma: no cover - only on exotic runtimes
+    ZoneInfo = None  # type: ignore
 
 from google import genai
 
@@ -34,6 +40,43 @@ _TOKEN_PRICES = {
     "openai":    {"input": 0.15 / 1_000_000, "output": 0.60 / 1_000_000},
     "anthropic": {"input": 3.00 / 1_000_000, "output": 15.00 / 1_000_000},
 }
+
+
+# Default timezone for "today"/"tonight" reasoning. Zarna and the platform are
+# US-East based; a creator config may override via a ``timezone`` attribute.
+_DEFAULT_TZ = "America/New_York"
+
+
+def _current_date_line(creator_config: "Optional[CreatorConfig]" = None) -> str:
+    """A one-line 'today is ...' anchor so the model can reason about time.
+
+    Without this the LLM has no idea what day it is, so a fan asking "are you
+    performing tonight?" gets answered as if every show were in the future —
+    even when a show on the calendar is literally today. Never raises.
+    """
+    tz_name = ""
+    if creator_config is not None:
+        tz_name = (getattr(creator_config, "timezone", "") or "").strip()
+    tz_name = tz_name or _DEFAULT_TZ
+
+    now = None
+    if ZoneInfo is not None:
+        try:
+            now = datetime.now(ZoneInfo(tz_name))
+        except Exception:
+            now = None
+    if now is None:
+        now = datetime.now()
+
+    # "Friday, June 19, 2026" — strip the leading zero from single-digit days
+    # ( %-d isn't portable across platforms).
+    formatted = now.strftime("%A, %B %d, %Y").replace(" 0", " ")
+    return (
+        f"Today's date is {formatted}. Use this whenever the fan refers to time "
+        f'("today", "tonight", "tomorrow", "this weekend", "right now"). If a show '
+        f"on the calendar falls on today's date, that show IS tonight — say so plainly "
+        f"instead of describing it as an upcoming/future show."
+    )
 
 
 def calc_ai_cost(provider: str, prompt_tokens: int, completion_tokens: int) -> float:
@@ -492,6 +535,10 @@ def _build_prompt(
     # string when the creator has no custom links, so prompts are unchanged.
     custom_links_block = _format_custom_links(creator_config)
 
+    # Current-date anchor so the model can reason about "today"/"tonight"/etc.
+    # Injected into the conversational + SHOW prompts below.
+    date_line = _current_date_line(creator_config)
+
     # Quiz mode overrides all intent routing — the fan is answering a quiz, not requesting
     # show tickets, clips, etc. Force the GENERAL path so the context is never ignored.
     if quiz_context:
@@ -570,6 +617,7 @@ Do not make up video titles. Never use the word "honey" or "darling". No profani
         return f"""You are {_creator_name}'s AI assistant.
 
 The user is asking about shows or tour dates: {user_message}
+{date_line}
 {sell_ctx_block}{variant_note}{directive_block}
 {_guardrails}
 {_voice_lock}
@@ -632,7 +680,8 @@ Background knowledge about {_creator_name} (use to make responses richer — nev
 {_voice_lock}
 {tone_guidance}
 {_examples}
-{examples_text}{memory_text}{history_text}Fan greeting: {user_message}
+{examples_text}{memory_text}{history_text}{date_line}
+Fan greeting: {user_message}
 {_style}
 Critical for this message: welcome them warmly in {_creator_name}'s voice — sharp, high-energy, never generic.
 Max 2 sentences. If this is clearly their very first message and you have nothing to riff on yet, a
@@ -650,7 +699,8 @@ Background knowledge about {_creator_name} (use to make responses richer — nev
 {_voice_lock}
 {tone_guidance}
 {_examples}
-{examples_text}{memory_text}{history_text}Fan reaction: {user_message}
+{examples_text}{memory_text}{history_text}{date_line}
+Fan reaction: {user_message}
 {_style}
 Critical for this message: the fan is reacting — laughing, agreeing, or answering one of {_creator_name}'s bits.
 Acknowledge it in ONE punchy line (sharp, in-character, not generic "You got it!").
@@ -674,7 +724,8 @@ Background knowledge about {_creator_name} (use to make responses richer and mor
 {_voice_lock}
 {tone_guidance}
 {_examples}
-{examples_text}{memory_text}{history_text}{blast_ctx_block}{custom_links_block}Question from fan: {user_message}
+{examples_text}{memory_text}{history_text}{blast_ctx_block}{custom_links_block}{date_line}
+Question from fan: {user_message}
 {_style}
 Critical for this message: answer the question directly in plain language first — no echo-mock, no keyword+? dodge. A follow-up question back is optional — only add one if it genuinely flows and you haven't asked one recently. Often the best reply to a question is just a great answer that ends on a period."""
 
@@ -689,7 +740,8 @@ Background knowledge about {_creator_name} (use to make responses richer and mor
 {_voice_lock}
 {tone_guidance}
 {_examples}
-{examples_text}{memory_text}{history_text}{blast_ctx_block}{custom_links_block}Fan shares: {user_message}
+{examples_text}{memory_text}{history_text}{blast_ctx_block}{custom_links_block}{date_line}
+Fan shares: {user_message}
 {_style}
 Critical for this message: riff on what they shared — find the funny or warm angle in their specific detail. A follow-up question is optional — only if it genuinely earns its place and you haven't asked one recently. Often just landing the joke or observation is the better move. Default to ending on a period. Do not pivot to {_creator_name}'s life unless they asked."""
 
@@ -704,7 +756,8 @@ Background knowledge about {_creator_name} (use to make responses richer and mor
 {_voice_lock}
 {tone_guidance}
 {_examples}
-{examples_text}{memory_text}{history_text}{blast_ctx_block}{custom_links_block}{quiz_block}Message: {user_message}
+{examples_text}{memory_text}{history_text}{blast_ctx_block}{custom_links_block}{quiz_block}{date_line}
+Message: {user_message}
 {_style}"""
 
 

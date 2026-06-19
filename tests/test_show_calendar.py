@@ -329,6 +329,52 @@ class TestGeneratorIntegration:
         assert "We were just in Cleveland!" in prompt
         assert "https://example.com/tickets/" in prompt
 
+    def test_show_prompt_includes_todays_date(self):
+        # The bot must know what "today" is so a fan asking about "tonight"
+        # isn't told a show happening today is in the future.
+        from datetime import datetime
+        try:
+            from zoneinfo import ZoneInfo
+            today = datetime.now(ZoneInfo("America/New_York"))
+        except Exception:
+            today = datetime.now()
+        expected = today.strftime("%A, %B %d, %Y").replace(" 0", " ")
+        prompt = self._prompt()
+        assert "Today's date is" in prompt
+        assert expected in prompt
+
+    def test_conversational_prompts_include_todays_date(self):
+        # Date awareness applies to ordinary chat too, not only SHOW replies.
+        cfg = _cfg(tickets="https://example.com/tickets/")
+        for intent in (Intent.GENERAL, Intent.QUESTION, Intent.GREETING,
+                       Intent.PERSONAL, Intent.FEEDBACK):
+            prompt = _build_prompt(
+                intent, "hey what's up?", chunks=[], history=[], creator_config=cfg,
+            )
+            assert "Today's date is" in prompt, f"missing date line for {intent}"
+
+
+def test_current_date_line_respects_config_timezone():
+    # A creator in a different timezone gets that timezone's local date.
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+    except Exception:
+        import pytest
+        pytest.skip("zoneinfo unavailable")
+    from app.brain.generator import _current_date_line
+    cfg = CreatorConfig(slug="tz", name="TZ", timezone="Asia/Tokyo")
+    line = _current_date_line(cfg)
+    expected = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%A, %B %d, %Y").replace(" 0", " ")
+    assert expected in line
+
+
+def test_today_for_config_uses_timezone():
+    cfg = CreatorConfig(slug="tz", name="TZ", timezone="America/New_York")
+    # Should not raise and should return a date object.
+    from datetime import date
+    assert isinstance(sc._today_for_config(cfg), date)
+
 
 # ---------------------------------------------------------------------------
 # Config date-label parsing

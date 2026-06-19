@@ -36,7 +36,33 @@ from typing import List, Optional
 
 import requests
 
+try:  # stdlib on 3.9+; fall back to UTC if the tz database is unavailable.
+    from zoneinfo import ZoneInfo
+except Exception:  # pragma: no cover
+    ZoneInfo = None  # type: ignore
+
 _LOGGER = logging.getLogger(__name__)
+
+# Timezone used to decide whether a show is "today" when the config doesn't
+# specify one. Matches the platform's home timezone (US-Eastern).
+_DEFAULT_TZ = "America/New_York"
+
+
+def _today_for_config(creator_config=None) -> date:
+    """Local 'today' for the creator, so a show tonight isn't misread as past.
+
+    Falls back to UTC if the creator has no timezone or zoneinfo is missing.
+    """
+    tz_name = ""
+    if creator_config is not None:
+        tz_name = (getattr(creator_config, "timezone", "") or "").strip()
+    tz_name = tz_name or _DEFAULT_TZ
+    if ZoneInfo is not None:
+        try:
+            return datetime.now(ZoneInfo(tz_name)).date()
+        except Exception:
+            pass
+    return datetime.now(timezone.utc).date()
 
 # US state/territory abbreviation -> full name, so a fan typing "Kentucky" matches
 # a show whose config region is "KY" (and vice-versa). Lowercased at use sites.
@@ -287,7 +313,8 @@ def _build_calendar(creator_config) -> ShowCalendar:
         upcoming = _parse_bandsintown(_fetch_bandsintown(artist, past=False))
         recent_past = _parse_bandsintown(_fetch_bandsintown(artist, past=True))
         if upcoming or recent_past:
-            return ShowCalendar(upcoming=upcoming, recent_past=_filter_recent_past(recent_past))
+            return ShowCalendar(upcoming=upcoming,
+                                recent_past=_filter_recent_past(recent_past, creator_config))
         _LOGGER.info("show_calendar: Bandsintown empty for %r — using config fallback", artist)
     # Manual fallback: split config shows into upcoming vs recent-past by date,
     # so we never recommend a show whose date has already passed and we *can*
@@ -296,7 +323,7 @@ def _build_calendar(creator_config) -> ShowCalendar:
 
 
 def _calendar_from_config(creator_config) -> ShowCalendar:
-    today = datetime.now(timezone.utc).date()
+    today = _today_for_config(creator_config)
     upcoming: List[Show] = []
     recent_past: List[Show] = []
     for s in _shows_from_config(creator_config):
@@ -313,9 +340,9 @@ def _calendar_from_config(creator_config) -> ShowCalendar:
     return ShowCalendar(upcoming=upcoming, recent_past=recent_past)
 
 
-def _filter_recent_past(shows: List[Show]) -> List[Show]:
+def _filter_recent_past(shows: List[Show], creator_config=None) -> List[Show]:
     """Keep only past shows within the recent window, so we don't surface stale tours."""
-    today = datetime.now(timezone.utc).date()
+    today = _today_for_config(creator_config)
     keep: List[Show] = []
     for s in shows:
         if not s.date_iso:
