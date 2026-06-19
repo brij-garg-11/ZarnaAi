@@ -5,7 +5,7 @@ WHY
 ---
 Area-code blast targeting (e.g. "everyone in NY/NJ") needs every contact tagged
 with the NANP area code (NPA) of their number. New/updated contacts are tagged
-automatically on write, but the existing ~4,500 Zarna subscribers predate the
+automatically on write, but the existing ~11,000 Zarna subscribers predate the
 column, so this one-time pass fills them in.
 
 Only contacts whose ``area_codes`` is still empty are touched, so any manual

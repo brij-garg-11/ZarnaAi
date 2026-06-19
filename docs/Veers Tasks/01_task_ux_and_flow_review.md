@@ -32,7 +32,7 @@ Read these in order. Don't skip.
    - `https://zarna.ai/pricing`
 
 **Two audiences we serve:**
-- **Performers / Comedians / Creators** — people like Zarna Garg (comedian with 4,500 SMS subscribers). They want their fans to feel like they're texting the real her.
+- **Performers / Comedians / Creators** — people like Zarna Garg (comedian with 11,000 SMS subscribers). They want their fans to feel like they're texting the real her.
 - **Small businesses** — places like a comedy club that want to engage their walk-in audience over SMS.
 
 ---

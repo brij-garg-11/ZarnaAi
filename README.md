@@ -2,7 +2,7 @@
 
 Managed AI SMS fan-engagement platform for creators. Fans text a creator's dedicated phone number and get AI-generated replies that sound and feel like the creator. The operator (Brij) runs all infrastructure as a managed service.
 
-**Currently live:** Zarna Garg — ~4,500 subscribers.
+**Currently live:** Zarna Garg — ~11,000 subscribers.
 
 ---
 
