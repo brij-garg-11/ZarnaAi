@@ -57,6 +57,11 @@ class CreatorConfig:
     bandsintown_artist: str = ""
     upcoming_shows: Tuple[dict, ...] = field(default_factory=tuple)
 
+    # IANA timezone used to anchor "today"/"tonight" reasoning in replies and to
+    # decide whether a calendar show is happening today. Defaults to US-Eastern
+    # when unset (matches Zarna + the platform's home timezone).
+    timezone: str = ""
+
     # Custom links (Item 3) — creator-defined links the AI may surface when
     # relevant. Each item: {"label": str, "url": str, "when_to_send": str}.
     custom_links: Tuple[dict, ...] = field(default_factory=tuple)
@@ -106,6 +111,7 @@ def _build_from_dict(slug: str, data: dict) -> CreatorConfig:
         links=links,
         bandsintown_artist=data.get("bandsintown_artist", ""),
         upcoming_shows=tuple(s for s in data.get("upcoming_shows", []) if isinstance(s, dict)),
+        timezone=str(data.get("timezone", data.get("show_calendar_tz", "")) or "").strip(),
         custom_links=tuple(l for l in data.get("custom_links", []) if isinstance(l, dict)),
         sms_display_name=data.get("sms_display_name", ""),
         sms_org=data.get("sms_org", ""),
