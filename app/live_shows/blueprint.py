@@ -240,7 +240,7 @@ def list_shows():
 <div class="callout">
   <strong>Live mode</strong> — Only one show can be <code>live</code> at a time. <strong>Go live</strong> ends any other live show.<br>
   <strong>Past events</strong> keep their signup list; open a show to see numbers or download CSV.<br><br>
-  <strong>Bulk send</strong> — Twilio one-per-number; SlickText one-by-one or v2 Campaign. <code>LIVE_SHOW_BROADCAST_PROVIDER</code> = <code>slicktext</code> | <code>twilio</code> | <code>auto</code>.
+  <strong>Bulk send</strong> — Twilio sends concurrently (up to <code>TWILIO_BROADCAST_MPS</code>, default 25/sec); SlickText one-by-one or v2 Campaign. <code>LIVE_SHOW_BROADCAST_PROVIDER</code> = <code>slicktext</code> | <code>twilio</code> | <code>auto</code> (auto → Twilio when configured).
 </div>
 <p><a class="btn" href="/admin/live-shows/new">+ New live show</a></p>
 <div class="card">
@@ -484,7 +484,7 @@ def show_detail(show_id: int):
       <code>POST /campaigns</code> with <code>status: send</code>. Do not delete that list until SlickText finishes sending unless you know it is safe.</small>
     <label>Provider override</label>
     <select name="provider">
-      <option value="">Auto (LIVE_SHOW_BROADCAST_PROVIDER / resolve)</option>
+      <option value="">Auto (Twilio when configured)</option>
       <option value="slicktext">SlickText</option>
       <option value="twilio">Twilio</option>
     </select>

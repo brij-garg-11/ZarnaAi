@@ -119,8 +119,9 @@ TWILIO_PHONE_NUMBER          = os.getenv("TWILIO_PHONE_NUMBER", "")
 TWILIO_MESSAGING_SERVICE_SID = os.getenv("TWILIO_MESSAGING_SERVICE_SID", "")
 
 # --- Live show broadcasts (optional) ---
-# LIVE_SHOW_BROADCAST_PROVIDER = slicktext | twilio | auto (default: auto)
-# LIVE_SHOW_BROADCAST_DELAY_MS — ms between each outbound API call in loop mode (default 350)
+# LIVE_SHOW_BROADCAST_PROVIDER = slicktext | twilio | auto (default: auto → Twilio when configured)
+# LIVE_SHOW_BROADCAST_DELAY_MS — ms between sends in the SlickText loop (default 350; Twilio ignores this)
+# TWILIO_BROADCAST_MPS — Twilio messages/sec cap for blasts; sends concurrently up to this (default 25)
 # TWILIO_MESSAGING_SERVICE_SID — if set, Twilio bulk uses MessagingServiceSid instead of From number
 # SLICKTEXT_CAMPAIGN_DELETE_TEMP_LIST — true to DELETE the temp list after queuing a campaign (default false;
 #   deleting too early may break sends; only enable if SlickText confirms it is safe for your account)

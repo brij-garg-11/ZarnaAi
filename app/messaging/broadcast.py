@@ -30,17 +30,22 @@ API reference: https://api.slicktext.com/docs/v2/campaigns
 Environment
 -----------
 - `LIVE_SHOW_BROADCAST_PROVIDER` — `slicktext` | `twilio` | `auto`
-  (`auto` = SlickText if v1 or v2 outbound keys exist, else Twilio).
+  (`auto` = Twilio when Twilio is configured, else SlickText).
 - `TWILIO_MESSAGING_SERVICE_SID` — optional; if set, bulk Twilio uses it instead of
   `TWILIO_PHONE_NUMBER` as `From`.
-- `LIVE_SHOW_BROADCAST_DELAY_MS` — milliseconds between sends in loop mode (default 350).
+- `TWILIO_BROADCAST_MPS` — Twilio messages-per-second cap for blasts (default 25).
+  Twilio sends concurrently up to this rate. Lower it if you hit account limits.
+- `LIVE_SHOW_BROADCAST_DELAY_MS` — milliseconds between sends for the SlickText
+  loop (default 350). Ignored by the Twilio path, which is rate-limited by MPS.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable, List, Literal, Optional
 
@@ -63,7 +68,23 @@ def resolve_broadcast_provider() -> ProviderName:
         return "slicktext"
     if raw == "twilio":
         return "twilio"
-    # auto
+    # auto — default to Twilio now that the account supports high-throughput
+    # (up to 25 MPS) sending, which is faster and cheaper for live-show blasts
+    # than the per-number SlickText loop. Fall back to SlickText only when Twilio
+    # isn't configured at all (so a Twilio-less deployment still works).
+    from app.config import (
+        TWILIO_ACCOUNT_SID,
+        TWILIO_AUTH_TOKEN,
+        TWILIO_MESSAGING_SERVICE_SID,
+        TWILIO_PHONE_NUMBER,
+    )
+
+    twilio_ok = bool(TWILIO_ACCOUNT_SID) and bool(TWILIO_AUTH_TOKEN) and (
+        bool(TWILIO_MESSAGING_SERVICE_SID) or bool(TWILIO_PHONE_NUMBER)
+    )
+    if twilio_ok:
+        return "twilio"
+
     from app.config import (
         SLICKTEXT_API_KEY,
         SLICKTEXT_BRAND_ID,
@@ -85,6 +106,46 @@ def _delay_between_sends():
     time.sleep(max(0, ms) / 1000.0)
 
 
+# Default Twilio throughput for blasts. Accounts with a registered A2P/toll-free
+# sender support 25 messages/sec; cap conservatively so a misconfigured env can't
+# hammer the API into 429s.
+_DEFAULT_BROADCAST_MPS = 25
+_MAX_BROADCAST_MPS = 100
+
+
+def _broadcast_mps() -> int:
+    try:
+        v = int(os.getenv("TWILIO_BROADCAST_MPS", str(_DEFAULT_BROADCAST_MPS)))
+    except ValueError:
+        v = _DEFAULT_BROADCAST_MPS
+    return max(1, min(v, _MAX_BROADCAST_MPS))
+
+
+class _RateLimiter:
+    """Thread-safe pacer that caps acquisitions to ``rate_per_sec`` across threads.
+
+    Each worker calls ``acquire()`` immediately before a send; the limiter spaces
+    grants out by ``1/rate`` seconds so the combined throughput of all worker
+    threads never exceeds the target messages-per-second.
+    """
+
+    def __init__(self, rate_per_sec: float):
+        self._interval = 1.0 / rate_per_sec if rate_per_sec > 0 else 0.0
+        self._lock = threading.Lock()
+        self._next_at = 0.0
+
+    def acquire(self) -> None:
+        if self._interval <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            scheduled = max(now, self._next_at)
+            self._next_at = scheduled + self._interval
+        wait = scheduled - now
+        if wait > 0:
+            time.sleep(wait)
+
+
 def normalize_e164(phone: str) -> str:
     """Strip whatsapp: prefix for SMS / SlickText."""
     p = (phone or "").strip()
@@ -93,15 +154,21 @@ def normalize_e164(phone: str) -> str:
     return p
 
 
-def _twilio_send_one(to_raw: str, body: str, deliver_whatsapp: bool) -> bool:
+def _twilio_client_or_none():
+    """Build a Twilio REST client, or None when creds are missing."""
     from twilio.rest import Client
-    from app.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER
+    from app.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
 
     if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
         logger.error("Twilio not configured for broadcast")
-        return False
+        return None
+    return Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-    client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+def _twilio_send_with_client(client, to_raw: str, body: str, deliver_whatsapp: bool) -> bool:
+    """Send a single message with an already-built client. Thread-safe."""
+    from app.config import TWILIO_PHONE_NUMBER
+
     messaging_service_sid = (os.getenv("TWILIO_MESSAGING_SERVICE_SID") or "").strip()
     try:
         if deliver_whatsapp:
@@ -124,8 +191,15 @@ def _twilio_send_one(to_raw: str, body: str, deliver_whatsapp: bool) -> bool:
             client.messages.create(**kwargs)
         return True
     except Exception as e:
-        logger.warning("Twilio broadcast to %s failed: %s", to_raw[-4:], e)
+        logger.warning("Twilio broadcast to %s failed: %s", str(to_raw)[-4:], e)
         return False
+
+
+def _twilio_send_one(to_raw: str, body: str, deliver_whatsapp: bool) -> bool:
+    client = _twilio_client_or_none()
+    if client is None:
+        return False
+    return _twilio_send_with_client(client, to_raw, body, deliver_whatsapp)
 
 
 def run_loop_broadcast(
@@ -155,16 +229,24 @@ def run_loop_broadcast(
             errors=["SlickText integration is SMS-only; use Twilio for WhatsApp or set deliver_as to SMS."],
         )
 
+    # Twilio supports concurrent, high-throughput sending — run it in a thread
+    # pool paced to the account's messages-per-second limit. SlickText keeps the
+    # polite sequential loop (its per-number API has tighter rate limits).
+    if provider == "twilio":
+        return _run_twilio_broadcast(
+            phones=phones,
+            body=body,
+            deliver_whatsapp=deliver_whatsapp,
+            progress=progress,
+            on_success=on_success,
+        )
+
     succeeded = 0
     failed = 0
     n = len(phones)
     for i, phone in enumerate(phones):
-        ok = False
-        if provider == "slicktext":
-            to = normalize_e164(phone)
-            ok = slicktext_send(to, body)
-        else:
-            ok = _twilio_send_one(phone, body, deliver_whatsapp=deliver_whatsapp)
+        to = normalize_e164(phone)
+        ok = slicktext_send(to, body)
 
         if ok:
             succeeded += 1
@@ -183,3 +265,81 @@ def run_loop_broadcast(
             _delay_between_sends()
 
     return BroadcastResult(attempted=n, succeeded=succeeded, failed=failed, errors=errors[:20])
+
+
+def _run_twilio_broadcast(
+    *,
+    phones: List[str],
+    body: str,
+    deliver_whatsapp: bool,
+    progress: Optional[Callable[[int, int, int], None]] = None,
+    on_success: Optional[Callable[[str], None]] = None,
+) -> BroadcastResult:
+    """Concurrent Twilio blast, paced to TWILIO_BROADCAST_MPS messages/sec."""
+    n = len(phones)
+    if n == 0:
+        return BroadcastResult(attempted=0, succeeded=0, failed=0, errors=[])
+
+    # Fail fast (and report an accurate all-failed result) if creds are missing.
+    if _twilio_client_or_none() is None:
+        return BroadcastResult(
+            attempted=n, succeeded=0, failed=n,
+            errors=["Twilio not configured for broadcast"],
+        )
+
+    # Each worker thread gets its OWN Twilio client so no HTTP session is shared
+    # across threads — removes any thread-safety doubt at the cost of a handful
+    # of cheap client objects.
+    _tls = threading.local()
+
+    def _thread_client():
+        c = getattr(_tls, "client", None)
+        if c is None:
+            c = _twilio_client_or_none()
+            _tls.client = c
+        return c
+
+    mps = _broadcast_mps()
+    limiter = _RateLimiter(mps)
+    lock = threading.Lock()
+    state = {"succeeded": 0, "failed": 0, "done": 0, "last_progress": 0.0}
+
+    def worker(phone: str) -> None:
+        limiter.acquire()
+        client = _thread_client()
+        ok = bool(client) and _twilio_send_with_client(client, phone, body, deliver_whatsapp)
+        if ok and on_success:
+            try:
+                on_success(phone)
+            except Exception:
+                logger.warning(
+                    "broadcast on_success hook failed for %s", str(phone)[-4:], exc_info=True
+                )
+        emit = None
+        with lock:
+            if ok:
+                state["succeeded"] += 1
+            else:
+                state["failed"] += 1
+            state["done"] += 1
+            now = time.monotonic()
+            # Throttle progress DB writes to ~2/sec; always emit the final one.
+            if state["done"] == n or (now - state["last_progress"]) >= 0.5:
+                state["last_progress"] = now
+                emit = (state["done"], state["succeeded"], state["failed"])
+        if emit and progress:
+            try:
+                progress(*emit)
+            except Exception:
+                logger.warning("broadcast progress hook failed", exc_info=True)
+
+    workers = max(1, min(mps, n))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(worker, phones))
+
+    return BroadcastResult(
+        attempted=n,
+        succeeded=state["succeeded"],
+        failed=state["failed"],
+        errors=[],
+    )
