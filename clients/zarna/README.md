@@ -68,12 +68,12 @@ See `creator_config/zarna.json` for the full voice guide. Key notes:
 
 ---
 
-## Live Stats (as of March 2026)
+## Live Stats (as of June 2026)
 
-- **Total subscribers:** 4,504
-- **Active (7-day):** 760 (16.5% engagement rate)
-- **Fans with saved memory:** 482
-- **All-time messages:** 9,611
+- **Total subscribers:** 10,528
+- **Active (7-day):** 563 (5.3% engagement rate)
+- **Fans with saved memory:** 1,447
+- **All-time messages:** 72,047
 
 ---
 

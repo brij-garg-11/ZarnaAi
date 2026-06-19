@@ -121,7 +121,7 @@ Brij has set these up for you. If any of these don't work when you try, ping Bri
 
 | Resource | Why you don't have it |
 |---|---|
-| Production database (write) | One bad query wipes Zarna's 4,500-fan production data |
+| Production database (write) | One bad query wipes Zarna's 11,000-fan production data |
 | Production database (direct psql) | Read-only is technically possible but not granted by default — ask Brij if a phase needs it |
 | Live Stripe mode | Real customer cards, real refund power, real subscription cancellation power |
 | Live Twilio account / parent account | A2P registration, real outbound throughput, real billing |

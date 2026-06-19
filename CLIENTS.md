@@ -8,7 +8,7 @@ This repo powers a managed AI texting platform for creators. The same codebase i
 
 | # | Client | Status | Subscribers | Deployment |
 |---|---|---|---|---|
-| 1 | Zarna Garg | ✅ Live | ~4,500 | `clients/zarna/` |
+| 1 | Zarna Garg | ✅ Live | ~11,000 | `clients/zarna/` |
 
 ---
 
