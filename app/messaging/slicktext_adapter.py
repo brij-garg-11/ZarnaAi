@@ -33,6 +33,7 @@ from app.config import (
     SLICKTEXT_API_KEY,
     SLICKTEXT_BRAND_ID,
 )
+from app.utils.sms_segments import split_for_sms
 
 logger = logging.getLogger(__name__)
 
@@ -243,15 +244,44 @@ class SlickTextAdapter:
         return truncated
 
     def send_reply(self, to_number: str, body: str) -> bool:
-        """Send an outbound SMS reply. Routes to v1 or v2 automatically."""
+        """Send an outbound SMS reply. Routes to v1 or v2 automatically.
+
+        Replies longer than a single SMS (SlickText rejects bodies over
+        ``_SMS_HARD_CAP``) are split into multiple sequential texts so the full
+        message is delivered instead of being cut off mid-thought.
+        """
         if not (body or "").strip():
             logger.info("[REPLY TO %s]: skipped (empty body)", to_number)
             return False
-        body = self._enforce_sms_length(body)
-        logger.info(f"[REPLY TO {to_number}]: {body}")
-        if self._version == "v1":
-            return self._send_v1(to_number, body)
-        return self._send_v2(to_number, body)
+
+        parts = split_for_sms(body, limit=self._SMS_HARD_CAP)
+        if len(parts) > 1:
+            logger.info(
+                "[REPLY TO %s]: %d chars → delivering as %d SMS parts",
+                to_number,
+                len(body),
+                len(parts),
+            )
+
+        all_sent = True
+        for idx, part in enumerate(parts, start=1):
+            if len(parts) > 1:
+                logger.info(f"[REPLY TO {to_number}] part {idx}/{len(parts)}: {part}")
+            else:
+                logger.info(f"[REPLY TO {to_number}]: {part}")
+            if self._version == "v1":
+                sent = self._send_v1(to_number, part)
+            else:
+                sent = self._send_v2(to_number, part)
+            if not sent:
+                # Stop on first failure so we don't deliver a tail without its head.
+                logger.error(
+                    "[REPLY TO %s]: failed on part %d/%d — aborting remaining parts",
+                    to_number, idx, len(parts),
+                )
+                return False
+            all_sent = all_sent and sent
+        return all_sent
 
     def _lookup_contact_id_v1(self, to_number: str) -> Optional[str]:
         """

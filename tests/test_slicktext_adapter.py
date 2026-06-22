@@ -127,6 +127,60 @@ def test_send_reply_success():
     print("✓ send_reply: correct payload sent, returns True on 200")
 
 
+def test_send_reply_splits_long_body_into_multiple_messages():
+    """A reply longer than the SMS hard cap is delivered as multiple sends,
+    not truncated, and each part stays within the cap."""
+    adapter = _v2_adapter(api_key="testkey", brand_id="99999")
+
+    body = (
+        "Okay, here are three jokes for Sanjay's birthday. "
+        "1. He loves Claude so much that when he asked it for the meaning of life "
+        "it told him to take a nap and he agreed instantly. "
+        "2. Sanjay can fall asleep anywhere, give him a warm room and a chair and "
+        "he is gone before the conversation even starts. "
+        "3. He never stops yapping which is impressive for a man asleep most of "
+        "the day, so happy birthday to a true multitasker who naps and narrates."
+    )
+    assert len(body) > adapter._SMS_HARD_CAP  # precondition: must require a split
+
+    with patch("app.messaging.slicktext_adapter.requests.post") as mock_post:
+        mock_post.return_value = MagicMock(status_code=200)
+        result = adapter.send_reply("+15554449998", body)
+
+    assert result is True
+    assert mock_post.call_count >= 2, "long reply should be split across sends"
+    sent_bodies = [c.kwargs["json"]["body"] for c in mock_post.call_args_list]
+    for b in sent_bodies:
+        assert len(b) <= adapter._SMS_HARD_CAP
+    joined = " ".join(sent_bodies)
+    assert "1." in joined and "2." in joined and "3." in joined
+    assert "multitasker" in joined  # nothing dropped off the end
+    print("✓ send_reply: long body split into multiple SMS, content preserved")
+
+
+def test_send_reply_short_body_single_message():
+    """Short replies still go out as exactly one message (no behavior change)."""
+    adapter = _v2_adapter(api_key="testkey", brand_id="99999")
+    with patch("app.messaging.slicktext_adapter.requests.post") as mock_post:
+        mock_post.return_value = MagicMock(status_code=200)
+        result = adapter.send_reply("+15554449998", "Short and sweet.")
+    assert result is True
+    assert mock_post.call_count == 1
+    print("✓ send_reply: short body sent as a single message")
+
+
+def test_send_reply_aborts_remaining_parts_on_failure():
+    """If an early part fails, we stop instead of sending an orphaned tail."""
+    adapter = _v2_adapter(api_key="testkey", brand_id="99999")
+    body = "word " * 300  # forces a multi-part split
+    with patch("app.messaging.slicktext_adapter.requests.post") as mock_post:
+        mock_post.return_value = MagicMock(status_code=409, text="nope")
+        result = adapter.send_reply("+15554449998", body)
+    assert result is False
+    assert mock_post.call_count == 1  # stopped after the first failing part
+    print("✓ send_reply: stops sending after first failed part")
+
+
 def test_send_reply_api_failure():
     """Paid plan required — test account returns 409, should return False."""
     adapter = _v2_adapter(api_key="testkey", brand_id="99999")
