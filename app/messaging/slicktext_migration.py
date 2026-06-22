@@ -6,14 +6,25 @@ fans who still text the OLD SlickText number should be pulled onto the new
 Twilio thread. When migration mode is enabled, the SlickText number stops
 running the full AI conversation and instead:
 
-  1. Sends a ONE-TIME opener FROM the new Twilio number so a thread starts
-     there (with the standard compliance footer on first contact).
-  2. Replies on SlickText pointing the fan to the new number (every time, as a
-     gentle reminder).
+  1. Sends a redirect opener FROM the new Twilio number so a thread starts (or
+     resumes) there, with the standard compliance footer. This fires on every
+     inbound, throttled by a per-fan cooldown (``SLICKTEXT_MIGRATION_OPENER_
+     COOLDOWN_HOURS``, default 24h) so a fan who texts the old line repeatedly
+     isn't spammed. This is the path we rely on, because it does NOT depend on
+     SlickText being able to send.
+  2. Best-effort reply ON SlickText pointing the fan to the new number. This
+     requires an active SlickText plan with outbound credits; if SlickText is
+     downgraded/cancelled the send simply fails and is swallowed — the fan is
+     still reached via the Twilio opener in step 1.
 
 STOP/opt-out handling and live-show joins are handled upstream in the webhook
 and are unaffected. Everything here is gated by ``SLICKTEXT_MIGRATION_MODE`` and
 is OFF by default, so normal SlickText behaviour is unchanged until toggled on.
+
+NOTE: All of this only runs if SlickText still delivers inbound webhooks to us.
+If the SlickText number is fully cancelled (number released) or inbound delivery
+stops, nothing here fires — the redirect then has to happen at the carrier /
+SlickText level, or by porting the old number to Twilio.
 """
 from __future__ import annotations
 
@@ -36,6 +47,20 @@ def migration_enabled() -> bool:
     return os.getenv("SLICKTEXT_MIGRATION_MODE", "false").strip().lower() in (
         "1", "true", "yes", "on",
     )
+
+
+def opener_cooldown_seconds() -> int:
+    """How long to wait before re-sending the Twilio opener to the same fan.
+
+    Configurable via ``SLICKTEXT_MIGRATION_OPENER_COOLDOWN_HOURS`` (default 24h).
+    A value of ``0`` means send on every single inbound (no throttling).
+    """
+    raw = os.getenv("SLICKTEXT_MIGRATION_OPENER_COOLDOWN_HOURS", "24").strip()
+    try:
+        hours = float(raw)
+    except (TypeError, ValueError):
+        hours = 24.0
+    return max(0, int(hours * 3600))
 
 
 def format_us_number(e164: str) -> str:
@@ -72,16 +97,27 @@ def slicktext_bridge_text(new_number: str) -> str:
     return template.format(new=format_us_number(new_number))
 
 
-def claim_migration_send(phone_number: str, get_conn: Callable) -> bool:
-    """Atomically record that the Twilio opener is being sent to this fan.
+def claim_migration_send(
+    phone_number: str,
+    get_conn: Callable,
+    cooldown_seconds: Optional[int] = None,
+) -> bool:
+    """Atomically decide whether to send the Twilio opener to this fan now.
 
-    Returns True only the FIRST time for a given number (so the caller sends the
-    opener exactly once); False on subsequent texts. Lazily creates the tracking
-    table so the feature is self-contained. Never raises — on any DB error we
-    return False (skip the opener) rather than risk a crash in the webhook path.
+    Returns True when the opener should be sent: either the fan has never been
+    redirected, or their last redirect was longer ago than ``cooldown_seconds``.
+    Returns False while inside the cooldown window so a fan who texts the old
+    number repeatedly isn't spammed from the new number. When ``cooldown_seconds``
+    is 0 it returns True on every inbound.
+
+    Lazily creates the tracking table so the feature is self-contained. Never
+    raises — on any DB error we return False (skip the opener) rather than risk a
+    crash in the webhook path.
     """
     if not phone_number:
         return False
+    if cooldown_seconds is None:
+        cooldown_seconds = opener_cooldown_seconds()
     conn = None
     try:
         conn = get_conn()
@@ -90,10 +126,14 @@ def claim_migration_send(phone_number: str, get_conn: Callable) -> bool:
         with conn:
             with conn.cursor() as cur:
                 cur.execute(_TABLE_DDL)
+                # Insert on first contact; otherwise refresh the timestamp only
+                # if we're past the cooldown. rowcount == 1 means "send now".
                 cur.execute(
-                    "INSERT INTO twilio_migration_log (phone_number) VALUES (%s) "
-                    "ON CONFLICT (phone_number) DO NOTHING",
-                    (phone_number,),
+                    "INSERT INTO twilio_migration_log (phone_number, migrated_at) "
+                    "VALUES (%s, NOW()) "
+                    "ON CONFLICT (phone_number) DO UPDATE SET migrated_at = NOW() "
+                    "WHERE twilio_migration_log.migrated_at < NOW() - make_interval(secs => %s)",
+                    (phone_number, cooldown_seconds),
                 )
                 return cur.rowcount == 1
     except Exception:
@@ -119,19 +159,30 @@ def handle_migration(
 ) -> None:
     """Pull a fan who texted the old SlickText number onto the new Twilio number.
 
-    Sends a one-time opener FROM the Twilio number (starting the new thread) and
-    a bridge reply on SlickText. Never raises — SMS failures are logged and
-    swallowed so a delivery hiccup can't take down the webhook.
+    Sends a redirect opener FROM the Twilio number (cooldown-throttled per fan)
+    plus a best-effort bridge reply on SlickText. Never raises — SMS failures are
+    logged and swallowed so a delivery hiccup can't take down the webhook. The
+    Twilio opener is the reliable path; the SlickText bridge is best-effort and
+    will quietly fail if SlickText has no outbound credits.
     """
     if not phone_number:
         return
     if new_number is None:
         new_number = os.getenv("TWILIO_PHONE_NUMBER", "")
 
-    # 1. One-time opener from the NEW Twilio number (no from_number → routes via
-    #    the verified A2P messaging service).
-    first_time = claim_migration_send(phone_number, get_conn)
-    if first_time and twilio_adapter is not None:
+    # One redirect nudge per fan per cooldown window. Gating BOTH sends behind the
+    # cooldown keeps us inside the SlickText plan's monthly outbound-credit cap
+    # (e.g. 500/mo on the $29 plan) — a fan who texts the old number repeatedly
+    # gets redirected once per window, not once per text. Within the cooldown we
+    # stay silent: the fan was already told where to go.
+    if not claim_migration_send(phone_number, get_conn):
+        return
+
+    # 1. Opener from the NEW Twilio number (no from_number → routes via the
+    #    verified A2P messaging service). This is the reliable path: it does NOT
+    #    depend on SlickText being able to send, and it doesn't use SlickText
+    #    credits, so it keeps working even if the SlickText plan runs dry.
+    if twilio_adapter is not None:
         try:
             twilio_adapter.send_reply(phone_number, twilio_opener_text())
         except Exception:
@@ -140,7 +191,10 @@ def handle_migration(
                 phone_number[-4:], exc_info=True,
             )
 
-    # 2. Bridge reply on the OLD SlickText number pointing to the new number.
+    # 2. Best-effort bridge reply on the OLD SlickText number pointing to the new
+    #    number. Consumes one SlickText outbound credit — if the plan is out of
+    #    credits (or downgraded/cancelled) this just fails and is swallowed; the
+    #    fan was already reached via the Twilio opener above.
     if slicktext_adapter is not None:
         try:
             slicktext_adapter.send_reply(phone_number, slicktext_bridge_text(new_number))

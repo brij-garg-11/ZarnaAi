@@ -122,18 +122,47 @@ def test_message_templates_are_env_overridable(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# claim_migration_send — first-time True, then False; never raises
+# opener_cooldown_seconds — env-driven, sane default
 # ---------------------------------------------------------------------------
 
-def test_claim_returns_true_when_row_inserted():
+def test_opener_cooldown_defaults_to_24h(monkeypatch):
+    monkeypatch.delenv("SLICKTEXT_MIGRATION_OPENER_COOLDOWN_HOURS", raising=False)
+    assert m.opener_cooldown_seconds() == 24 * 3600
+
+
+def test_opener_cooldown_honours_env(monkeypatch):
+    monkeypatch.setenv("SLICKTEXT_MIGRATION_OPENER_COOLDOWN_HOURS", "0")
+    assert m.opener_cooldown_seconds() == 0
+    monkeypatch.setenv("SLICKTEXT_MIGRATION_OPENER_COOLDOWN_HOURS", "1.5")
+    assert m.opener_cooldown_seconds() == 5400
+
+
+def test_opener_cooldown_falls_back_on_garbage(monkeypatch):
+    monkeypatch.setenv("SLICKTEXT_MIGRATION_OPENER_COOLDOWN_HOURS", "nope")
+    assert m.opener_cooldown_seconds() == 24 * 3600
+
+
+# ---------------------------------------------------------------------------
+# claim_migration_send — send when fresh/past-cooldown, skip within cooldown
+# ---------------------------------------------------------------------------
+
+def test_claim_returns_true_when_row_inserted_or_refreshed():
     conn = FakeConn(rowcount=1)
     assert m.claim_migration_send("+15551234567", lambda: conn) is True
     assert conn.closed is True
 
 
-def test_claim_returns_false_when_conflict_no_insert():
+def test_claim_returns_false_within_cooldown():
     conn = FakeConn(rowcount=0)
     assert m.claim_migration_send("+15551234567", lambda: conn) is False
+
+
+def test_claim_passes_cooldown_to_query():
+    conn = FakeConn(rowcount=1)
+    m.claim_migration_send("+15551234567", lambda: conn, cooldown_seconds=42)
+    upsert = conn._cur.executed[-1]
+    assert "make_interval" in upsert[0]
+    assert upsert[1] == ("+15551234567", 42)
 
 
 def test_claim_returns_false_without_phone_or_conn():
@@ -149,10 +178,10 @@ def test_claim_swallows_db_errors():
 
 
 # ---------------------------------------------------------------------------
-# handle_migration — opener once, bridge every time
+# handle_migration — opener when past cooldown, bridge best-effort every time
 # ---------------------------------------------------------------------------
 
-def test_handle_migration_sends_opener_and_bridge_first_time(monkeypatch):
+def test_handle_migration_sends_opener_and_bridge_when_due(monkeypatch):
     monkeypatch.setattr(m, "claim_migration_send", lambda phone, get_conn: True)
     twilio, slick = FakeAdapter(), FakeAdapter()
 
@@ -164,14 +193,31 @@ def test_handle_migration_sends_opener_and_bridge_first_time(monkeypatch):
     assert "(855) 608-1717" in slick.calls[0][1]
 
 
-def test_handle_migration_skips_opener_when_already_migrated(monkeypatch):
+def test_handle_migration_silent_within_cooldown(monkeypatch):
+    """Within the cooldown window we send nothing on either channel — the fan was
+    redirected recently, and this keeps us inside the SlickText credit cap."""
     monkeypatch.setattr(m, "claim_migration_send", lambda phone, get_conn: False)
     twilio, slick = FakeAdapter(), FakeAdapter()
 
     m.handle_migration("+15551234567", twilio, slick, lambda: None, new_number="+18556081717")
 
-    assert len(twilio.calls) == 0          # opener is one-time only
-    assert len(slick.calls) == 1           # bridge reminder still sent
+    assert len(twilio.calls) == 0
+    assert len(slick.calls) == 0
+
+
+def test_handle_migration_reaches_fan_even_when_slicktext_send_fails(monkeypatch):
+    """On a downgraded/free SlickText plan the bridge send fails, but the fan is
+    still reached via the Twilio opener."""
+    monkeypatch.setattr(m, "claim_migration_send", lambda phone, get_conn: True)
+    twilio = FakeAdapter()
+
+    class DeadSlickText:
+        def send_reply(self, *a, **k):
+            raise RuntimeError("no outbound credits")
+
+    m.handle_migration("+15551234567", twilio, DeadSlickText(), lambda: None, new_number="+18556081717")
+
+    assert len(twilio.calls) == 1          # fan still hears from the new number
 
 
 def test_handle_migration_noop_without_phone(monkeypatch):
