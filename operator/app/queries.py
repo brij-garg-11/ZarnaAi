@@ -239,6 +239,22 @@ def _slug_clause(slug: str | None, table_alias: str = "") -> tuple[str, list]:
 _PHONE_NPA_SQL = "LEFT(RIGHT(REGEXP_REPLACE(phone_number, '\\D', '', 'g'), 10), 3)"
 
 
+# Per-tier Smart Send cadence windows. A fan is suppressed if they were blasted
+# within this many days. Must stay in sync with CADENCE_DAYS in
+# operator/app/routes/api.py (the smart-send-preview endpoint) so the previewed
+# "sending" count equals exactly who the "smart" audience actually sends to.
+# The CASE keys off the joined contacts alias ``c.fan_tier``.
+_SMART_CADENCE_CASE = """
+    CASE c.fan_tier
+      WHEN 'superfan' THEN INTERVAL '5 days'
+      WHEN 'engaged'  THEN INTERVAL '7 days'
+      WHEN 'lurker'   THEN INTERVAL '14 days'
+      WHEN 'dormant'  THEN INTERVAL '30 days'
+      ELSE INTERVAL '0 days'
+    END
+"""
+
+
 def count_audience(
     audience_type: str,
     audience_filter: str,
@@ -349,6 +365,29 @@ def count_audience(
                          LIMIT %s
                        ) sub""",
                     tuple([*slug_params, n]),
+                )
+            elif audience_type == "smart":
+                # Cadence-aware Smart Send: every fan in a known tier, minus
+                # opt-outs, minus anyone already blasted within their tier's
+                # cadence window. Mirrors the smart-send-preview endpoint so the
+                # previewed "sending" total equals who actually receives the blast.
+                c_slug_sql, c_slug_params = _slug_clause(creator_slug, "c.")
+                bd_slug_sql, bd_slug_params = _slug_clause(creator_slug, "bd.")
+                cur.execute(
+                    """SELECT COUNT(DISTINCT c.phone_number)
+                       FROM contacts c
+                       WHERE c.fan_tier IN ('superfan','engaged','lurker','dormant')
+                         AND c.phone_number NOT LIKE 'whatsapp:%%'
+                         AND c.phone_number NOT IN (SELECT phone_number FROM broadcast_optouts)
+                         """ + c_slug_sql + """
+                         AND NOT EXISTS (
+                           SELECT 1 FROM blast_recipients br
+                           JOIN blast_drafts bd ON bd.id = br.blast_id
+                           WHERE br.phone_number = c.phone_number
+                             """ + bd_slug_sql + """
+                             AND br.sent_at >= NOW() - (""" + _SMART_CADENCE_CASE + """)
+                         )""",
+                    tuple([*c_slug_params, *bd_slug_params]),
                 )
             else:
                 cur.execute(
@@ -466,6 +505,26 @@ def get_audience_phones(
                        ORDER BY engagement_score DESC
                        LIMIT %s""",
                     tuple([*slug_params, n]),
+                )
+            elif audience_type == "smart":
+                # Cadence-aware Smart Send — see count_audience() for the rationale.
+                # Opt-outs are stripped by the shared filter below (optout_set).
+                c_slug_sql, c_slug_params = _slug_clause(creator_slug, "c.")
+                bd_slug_sql, bd_slug_params = _slug_clause(creator_slug, "bd.")
+                cur.execute(
+                    """SELECT DISTINCT c.phone_number
+                       FROM contacts c
+                       WHERE c.fan_tier IN ('superfan','engaged','lurker','dormant')
+                         AND c.phone_number NOT LIKE 'whatsapp:%%'
+                         """ + c_slug_sql + """
+                         AND NOT EXISTS (
+                           SELECT 1 FROM blast_recipients br
+                           JOIN blast_drafts bd ON bd.id = br.blast_id
+                           WHERE br.phone_number = c.phone_number
+                             """ + bd_slug_sql + """
+                             AND br.sent_at >= NOW() - (""" + _SMART_CADENCE_CASE + """)
+                         )""",
+                    tuple([*c_slug_params, *bd_slug_params]),
                 )
             else:
                 cur.execute(

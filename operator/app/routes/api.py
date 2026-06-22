@@ -1403,7 +1403,7 @@ def api_save_blast(draft_id):
     if channel not in ("twilio", "slicktext"):
         channel = "twilio"
     audience_type = data.get("audience_type", "all")
-    if audience_type not in ("all", "tag", "tags", "location", "area_code", "random", "show", "tier", "engaged"):
+    if audience_type not in ("all", "tag", "tags", "location", "area_code", "random", "show", "tier", "engaged", "smart"):
         audience_type = "all"
     audience_filter = (data.get("audience_filter") or "").strip()[:200]
     sample_pct = max(1, min(100, int(data.get("sample_pct", 100) or 100)))
@@ -1517,7 +1517,7 @@ def api_blast_preview_count():
     _require_performer_account()
     data = request.get_json(silent=True) or {}
     audience_type = data.get("audience_type", "all")
-    if audience_type not in ("all", "tag", "tags", "location", "area_code", "random", "show", "tier", "engaged"):
+    if audience_type not in ("all", "tag", "tags", "location", "area_code", "random", "show", "tier", "engaged", "smart"):
         audience_type = "all"
     audience_filter = (data.get("audience_filter") or "").strip()
     sample_pct = max(1, min(100, int(data.get("sample_pct", 100) or 100)))
@@ -1604,7 +1604,7 @@ def api_blast_send(draft_id):
 
     if channel not in ("twilio", "slicktext"):
         channel = "twilio"
-    if audience_type not in ("all", "tag", "tags", "location", "area_code", "random", "show", "tier", "engaged"):
+    if audience_type not in ("all", "tag", "tags", "location", "area_code", "random", "show", "tier", "engaged", "smart"):
         audience_type = "all"
 
     if not body:
