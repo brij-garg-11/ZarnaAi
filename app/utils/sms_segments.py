@@ -82,3 +82,56 @@ def segments_for_length(char_count: int, has_media: bool = False) -> int:
     if char_count <= 160:
         return 1
     return math.ceil(char_count / 153)
+
+
+# Boundary where SlickText starts rejecting a single outbound body. Anything
+# longer is delivered as multiple sequential texts (see split_for_sms) so we
+# never cut a reply off mid-thought.
+_SENTENCE_END_RE = re.compile(r"[.!?]\s")
+
+
+def split_for_sms(text: str, limit: int = 400, max_parts: int = 4):
+    """Split a long reply into <=``limit``-char parts on natural boundaries.
+
+    Long-but-legitimate replies (e.g. a "give me 3 jokes" list) exceed what a
+    single SMS can carry, so we deliver them as several sequential texts instead
+    of truncating. Splits prefer line breaks, then sentence ends, then word
+    boundaries. Only the final part is hard-trimmed, and only if the text is so
+    long it would exceed ``max_parts`` (a guard against runaway output).
+
+    Returns a list of non-empty parts. A short message returns ``[text]``;
+    empty input returns ``[]``.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    if len(text) <= limit:
+        return [text]
+
+    parts = []
+    remaining = text
+    while remaining:
+        # Last part we're allowed to emit: take the rest, hard-trimming only if
+        # it still overflows the single-message limit.
+        if len(remaining) <= limit or len(parts) == max_parts - 1:
+            if len(remaining) > limit:
+                remaining = remaining[:limit].rsplit(" ", 1)[0].rstrip() + "…"
+            parts.append(remaining.strip())
+            break
+
+        window = remaining[:limit]
+        cut = window.rfind("\n")
+        if cut < limit // 2:
+            # No usable line break — fall back to the last sentence end.
+            last = None
+            for m in _SENTENCE_END_RE.finditer(window):
+                last = m
+            cut = (last.end() - 1) if last else -1
+        if cut < limit // 2:
+            cut = window.rfind(" ")
+        if cut <= 0:
+            cut = limit  # no boundary at all — hard cut to keep making progress
+        parts.append(remaining[:cut].strip())
+        remaining = remaining[cut:].strip()
+
+    return [p for p in parts if p]

@@ -761,8 +761,14 @@ Message: {user_message}
 {_style}"""
 
 
-_MAX_CHARS = 380  # Safe for 6-segment Unicode SMS (Unicode forces 67 chars/segment;
-                  # 380 chars leaves headroom for the ellipsis and any emoji)
+# Generous safety ceiling only. Brevity is enforced by the prompt/style guide
+# ("max 3 sentences"), NOT by chopping the model's output here — a hard
+# sentence cap used to sever list-style answers (e.g. "give me 3 jokes":
+# "...asleep. 1." with the actual jokes cut off). Genuinely long replies are
+# delivered as multiple SMS by the messaging adapter, not truncated. This
+# ceiling exists purely to guard against pathological runaway output, and it
+# always trims on a clean sentence/word boundary.
+_MAX_CHARS = 1200
 
 
 def _apply_emphasis_policy(text: str, suppress_all: bool) -> str:
@@ -846,16 +852,32 @@ def _strip_echo_mock(reply: str, fan_message: str) -> str:
 
 def _trim_reply(text: str) -> str:
     """
-    Trim the model's output to at most 3 sentences.
-    Splits on sentence-ending punctuation followed by a space or end-of-string,
-    so it doesn't break URLs like https://zarnagarg.com/tickets/.
+    Light cleanup plus a generous safety ceiling.
+
+    We intentionally do NOT cap by sentence count anymore. The prompt already
+    keeps everyday chat short, and a hard 3-sentence cap used to chop list-style
+    answers (e.g. "3 jokes: 1. ... 2. ... 3. ...") right after the "1."
+    enumerator, because "1." reads as its own sentence. Long-but-legitimate
+    replies are split into multiple SMS downstream rather than truncated here.
+
+    Only absurdly long output (> _MAX_CHARS) is trimmed, and always on a clean
+    sentence/word boundary so we never sever a word or a URL.
     """
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    trimmed = " ".join(sentences[:3])
-    # Hard char ceiling as a fallback
-    if len(trimmed) > _MAX_CHARS:
-        trimmed = trimmed[:_MAX_CHARS].rsplit(" ", 1)[0] + "…"
-    return trimmed
+    text = text.strip()
+    if len(text) <= _MAX_CHARS:
+        return text
+
+    window = text[:_MAX_CHARS]
+    # Prefer the last sentence end; fall back to a line break, then a space.
+    cut = max(
+        window.rfind(". "),
+        window.rfind("! "),
+        window.rfind("? "),
+        window.rfind("\n"),
+    )
+    if cut >= _MAX_CHARS // 2:
+        return window[: cut + 1].strip()
+    return window.rsplit(" ", 1)[0].rstrip() + "…"
 
 
 # Fallback replies used when the LLM returns empty text. The literal "Zarna"
