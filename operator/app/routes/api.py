@@ -759,7 +759,7 @@ def inbox_thread(phone_last4):
                 return jsonify(messages=[], fan={}), 404
 
             cur.execute("""
-                SELECT role, text AS body, created_at, intent, tone_mode, sell_variant
+                SELECT role, text AS body, created_at, intent, tone_mode, sell_variant, media_url
                 FROM messages
                 WHERE phone_number = %s AND creator_slug = %s
                 ORDER BY created_at ASC
@@ -771,6 +771,7 @@ def inbox_thread(phone_last4):
                     "created_at": r["created_at"].isoformat(),
                     "intent": r.get("intent"),
                     "tone_mode": r.get("tone_mode"),
+                    "media_url": r.get("media_url"),
                 }
                 for r in cur.fetchall()
             ]
@@ -812,25 +813,32 @@ def api_inbox_send(phone_last4):
     Delivers via Twilio, then logs it to the messages table as role='assistant'
     so it appears inline in the thread history.
 
-    Body: { "text": "Hey, great to hear from you!" }
+    Body: { "text": "Hey, great to hear from you!", "media_url": "https://…" }
+    `media_url` is optional and is used to attach a recorded voice message (or
+    other audio) as an MMS. When it is present the text may be empty. It must
+    point at media we host (the /operator/blast/img/ serve route) so Twilio
+    only ever fetches files we uploaded.
     Returns: { success, message_id, sent_at }
     """
     _require_performer_account()
     from datetime import datetime, timezone
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
+    media_url = (data.get("media_url") or "").strip()
 
-    if not text:
-        return jsonify(success=False, error="Message text is required."), 400
+    if media_url and "/operator/blast/img/" not in media_url:
+        return jsonify(success=False, error="Invalid media_url — upload the file first."), 400
+    if not text and not media_url:
+        return jsonify(success=False, error="Message text or an audio attachment is required."), 400
     if len(text) > 1600:
         return jsonify(success=False, error="Message too long (max 1600 chars)."), 400
 
     # ── Credit gate ─────────────────────────────────────────────────────
     # Estimate segments for this message so the soft-grace decision uses the
-    # actual credit cost, not just "1". Callers with MMS (images) go through
-    # the blast flow, not this endpoint.
+    # actual credit cost, not just "1". An attached audio clip makes this an
+    # MMS, which is billed accordingly.
     from ..billing.credits import check_send_quota, count_segments
-    segments = count_segments(text, has_media=False)
+    segments = count_segments(text, has_media=bool(media_url))
 
     user = current_user()
     try:
@@ -863,13 +871,17 @@ def api_inbox_send(phone_last4):
     if not phone:
         return jsonify(success=False, error=f"No fan found for '{phone_last4}'."), 404
 
-    # Send via SlickText (all outbound messages use SlickText until Twilio inbound is live)
+    # Send via Twilio. Audio attachments require Twilio's media_url MMS support
+    # (SlickText can't attach arbitrary media), and all outbound is on Twilio.
     try:
         from ..blast_sender import _send_one
-        ok = _send_one(phone, text, channel="slicktext")
+        ok = _send_one(phone, text, channel="twilio", media_url=media_url)
         if not ok:
-            return jsonify(success=False, error="SlickText send failed — check credentials."), 500
-        logger.info("api_inbox_send: sent to ***%s via slicktext", phone_last4)
+            return jsonify(success=False, error="Twilio send failed — check credentials."), 500
+        logger.info(
+            "api_inbox_send: sent to ***%s via twilio%s",
+            phone_last4, " (mms)" if media_url else "",
+        )
     except Exception as e:
         logger.exception("api_inbox_send: send failed for ***%s", phone_last4)
         return jsonify(success=False, error=f"Send failed: {e}"), 500
@@ -895,10 +907,10 @@ def api_inbox_send(phone_last4):
         with conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO messages (phone_number, role, text, created_at, source, creator_slug)
-                    VALUES (%s, 'assistant', %s, %s, 'manual_operator', %s)
+                    INSERT INTO messages (phone_number, role, text, created_at, source, creator_slug, media_url)
+                    VALUES (%s, 'assistant', %s, %s, 'manual_operator', %s, %s)
                     RETURNING id
-                """, (phone, text, sent_at, inbox_slug))
+                """, (phone, text, sent_at, inbox_slug, media_url or None))
                 message_id = cur.fetchone()[0]
         conn.close()
         logger.info("api_inbox_send: logged message id=%s for ***%s", message_id, phone_last4)
@@ -910,6 +922,7 @@ def api_inbox_send(phone_last4):
         message_id=message_id,
         sent_at=sent_at.isoformat(),
         phone_last4=phone_last4,
+        media_url=media_url or None,
     )
 
 
@@ -1492,6 +1505,85 @@ def api_upload_image():
         return jsonify(success=True, url=url, size=len(data), image_id=image_id)
     except Exception as e:
         logger.exception("api_upload_image error")
+        return jsonify(success=False, error=str(e)), 500
+
+
+# Audio formats Twilio accepts as MMS media. iPhone Voice Memos export .m4a
+# (audio/mp4); most Android recorders produce .mp3, .amr, or .ogg.
+_AUDIO_MIME_BY_EXT = {
+    "m4a": "audio/mp4",
+    "mp4": "audio/mp4",
+    "mp3": "audio/mpeg",
+    "amr": "audio/amr",
+    "ogg": "audio/ogg",
+    "wav": "audio/wav",
+    "caf": "audio/x-caf",
+}
+
+# Twilio's hard MMS media limit is 5 MB; carriers/handsets are far happier well
+# under ~1 MB, so keep clips short (~30–60s) for reliable delivery.
+_AUDIO_MAX_BYTES = 5 * 1024 * 1024
+
+
+@api_bp.route("/api/inbox/upload-audio", methods=["POST"])
+@login_required
+def api_upload_audio():
+    """
+    Upload an audio clip (e.g. a recorded voice message) for a one-to-one MMS
+    send from the inbox. Stores it alongside blast images and returns a public
+    URL that Twilio can fetch as `media_url`.
+
+    Accepts multipart/form-data with field name 'audio'.
+    Returns { success, url, size }.
+    """
+    import uuid, base64
+
+    f = request.files.get("audio")
+    if not f or not f.filename:
+        return jsonify(success=False, error="No audio file received."), 400
+
+    ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else ""
+    mime_type = _AUDIO_MIME_BY_EXT.get(ext)
+    if not mime_type:
+        return jsonify(
+            success=False,
+            error=f"Unsupported audio format .{ext or '?'} — use m4a, mp3, amr, ogg, wav, or caf.",
+        ), 400
+
+    try:
+        import secrets as _secrets
+        data = f.read()
+        if not data:
+            return jsonify(success=False, error="Audio file is empty."), 400
+        if len(data) > _AUDIO_MAX_BYTES:
+            return jsonify(
+                success=False,
+                error="Audio is too large for MMS (5 MB max). Record a shorter clip.",
+            ), 400
+
+        filename = f"{uuid.uuid4().hex}.{ext}"
+        data_b64 = base64.b64encode(data).decode("ascii")
+        access_token = _secrets.token_hex(16)
+        conn = get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO operator_blast_images (filename, mime_type, data_b64, access_token) "
+                        "VALUES (%s, %s, %s, %s) RETURNING id",
+                        (filename, mime_type, data_b64, access_token),
+                    )
+                    media_id = cur.fetchone()[0]
+        finally:
+            conn.close()
+
+        scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+        host   = request.headers.get("X-Forwarded-Host", request.host)
+        url = f"{scheme}://{host}/operator/blast/img/{media_id}/{access_token}/{filename}"
+        logger.info("api_upload_audio: stored id=%s size=%d mime=%s url=%s", media_id, len(data), mime_type, url)
+        return jsonify(success=True, url=url, size=len(data), media_id=media_id)
+    except Exception as e:
+        logger.exception("api_upload_audio error")
         return jsonify(success=False, error=str(e)), 500
 
 

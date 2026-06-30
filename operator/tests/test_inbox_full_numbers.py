@@ -23,7 +23,8 @@ def inbox_data():
             CREATE TABLE IF NOT EXISTS messages (
                 id BIGSERIAL PRIMARY KEY, phone_number TEXT, role TEXT, text TEXT,
                 created_at TIMESTAMPTZ DEFAULT NOW(), creator_slug TEXT,
-                intent TEXT, tone_mode TEXT, sell_variant TEXT, source TEXT)
+                intent TEXT, tone_mode TEXT, sell_variant TEXT, source TEXT,
+                media_url TEXT)
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS contacts (

@@ -104,6 +104,9 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_tlc_phone ON tracked_link_clicks(phone_number) WHERE phone_number IS NOT NULL",
         # msg_source on messages: 'bot' for reply messages, 'blast' for mass-send messages
         "ALTER TABLE messages ADD COLUMN IF NOT EXISTS msg_source TEXT DEFAULT 'bot'",
+        # media_url: public URL of an MMS attachment (e.g. a voice-message clip
+        # sent manually from the inbox). NULL/empty for plain text messages.
+        "ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_url TEXT",
         # sent_to on tracked_links: cumulative recipients across all blasts using this link
         "ALTER TABLE tracked_links ADD COLUMN IF NOT EXISTS sent_to INT DEFAULT 0",
         "ALTER TABLE operator_blast_images ADD COLUMN IF NOT EXISTS data_b64 TEXT",

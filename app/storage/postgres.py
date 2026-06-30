@@ -141,6 +141,9 @@ _ENGAGEMENT_ANALYTICS_MIGRATIONS = (
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS msg_source          TEXT DEFAULT 'bot'",
     # A/B variant for sell-intent replies (Pillar 3, Step 7)
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS sell_variant        TEXT",
+    # Public URL of an MMS media attachment (e.g. a voice-message clip sent
+    # manually from the inbox). NULL/empty for plain text messages.
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_url           TEXT",
     # AI cost tracking — exact per-message costs from provider usage metadata
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS provider          TEXT",
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS prompt_tokens     INT",
