@@ -176,15 +176,18 @@ class TestBuildDirective:
         assert sc.build_show_directive("chicago?", _cfg()) is None
 
     def test_upcoming_match_uses_show_link_and_names_date(self):
+        # Relative future date so the show stays "upcoming" as time passes
+        # (a hardcoded date silently lapses into the past and breaks this).
+        label = _label(datetime.now(timezone.utc).date() + timedelta(days=20))
         cfg = _cfg(shows=[
-            {"city": "Austin", "venue": "Cap City", "date": "Jun 25, 2026",
+            {"city": "Austin", "venue": "Cap City", "date": label,
              "ticket_url": "https://t/austin"},
         ])
         d = sc.build_show_directive("are you coming to austin?", cfg)
         assert d is not None
         assert d.ticket_url == "https://t/austin"
         assert "Austin" in d.instruction
-        assert "Jun 25, 2026" in d.instruction
+        assert label in d.instruction
         assert "Cap City" in d.instruction
 
     def test_upcoming_match_without_show_link_falls_back_to_generic(self):
@@ -194,9 +197,12 @@ class TestBuildDirective:
         assert d.ticket_url == "https://generic/tickets"
 
     def test_no_city_match_lists_upcoming(self):
+        # Relative future dates so both shows stay upcoming regardless of when
+        # the suite runs.
+        today = datetime.now(timezone.utc).date()
         cfg = _cfg(shows=[
-            {"city": "Austin", "venue": "Cap City", "date": "Jun 25, 2026"},
-            {"city": "Chicago", "venue": "Zanies", "date": "Jul 12, 2026"},
+            {"city": "Austin", "venue": "Cap City", "date": _label(today + timedelta(days=15))},
+            {"city": "Chicago", "venue": "Zanies", "date": _label(today + timedelta(days=25))},
         ], tickets="https://generic/tickets")
         d = sc.build_show_directive("are you touring anywhere?", cfg)
         assert d is not None
@@ -258,8 +264,9 @@ class TestPriorityAndCache:
 
     def test_falls_back_to_config_when_api_empty(self, monkeypatch):
         monkeypatch.setattr(sc, "_fetch_bandsintown", lambda artist, past=False: [])
+        label = _label(datetime.now(timezone.utc).date() + timedelta(days=20))
         cfg = _cfg(slug="fallback", artist="zarna garg",
-                   shows=[{"city": "Austin", "venue": "Cap City", "date": "Jun 25, 2026"}])
+                   shows=[{"city": "Austin", "venue": "Cap City", "date": label}])
         cal = sc.get_calendar(cfg)
         assert [s.city for s in cal.upcoming] == ["Austin"]
 

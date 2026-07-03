@@ -246,6 +246,7 @@ def maybe_send_first_contact(
     creator_config,
     from_number: str = "",
     storage=None,
+    send_welcome: bool = True,
 ) -> bool:
     """
     Send the vCard MMS and/or first-message welcome to a brand-new fan.
@@ -253,6 +254,11 @@ def maybe_send_first_contact(
     When ``storage`` is provided, each successfully sent message is also recorded
     as an ``assistant`` turn so it shows up in the operator inbox (the vCard +
     welcome otherwise bypass the conversation store and are invisible there).
+
+    ``send_welcome`` controls whether the ``first_message`` welcome text is sent.
+    Live-show keyword joins pass ``send_welcome=False`` so only the vCard fires —
+    the live-show join confirmation already acts as the welcome (and carries the
+    compliance footer itself), so sending the welcome too would double-text.
 
     Returns True if anything was sent. Safe no-op (returns False) when the
     creator has neither send_contact_card nor first_message configured, or when
@@ -264,7 +270,7 @@ def maybe_send_first_contact(
 
     send_card = bool(getattr(creator_config, "send_contact_card", False))
     first_msg = getattr(creator_config, "first_message", "") or ""
-    if not send_card and not first_msg.strip():
+    if not send_card and not (send_welcome and first_msg.strip()):
         return False
 
     slug = getattr(creator_config, "slug", "") or "creator"
@@ -306,8 +312,9 @@ def maybe_send_first_contact(
         else:
             logger.warning("vcard: no public base URL configured — skipping vCard for slug=%s", slug)
 
-    # 2. The welcome text with the compliance footer.
-    welcome = first_message_with_footer(first_msg)
+    # 2. The welcome text with the compliance footer (skipped for live-show
+    #    joins, where the join confirmation is the welcome).
+    welcome = first_message_with_footer(first_msg) if send_welcome else ""
     if welcome:
         try:
             ok = adapter.send_reply(to_number, body=welcome, from_number=from_number or None)
