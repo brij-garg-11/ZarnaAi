@@ -160,20 +160,89 @@ def _record_reaction(phone: str, message: str) -> None:
         logging.exception("_record_reaction: DB insert failed for ...%s", phone[-4:] if phone else "?")
 
 
-def _send_join_confirmation_async(phone: str, channel: str, body: str) -> None:
-    """Queue a confirmation SMS through the bounded pool so webhooks stay fast."""
+# Minimal opt-in confirmation for keyword joins that produce no themed
+# confirmation copy (e.g. "other"-category shows). The compliance footer is
+# appended by _send_join_confirmation_async, so a brand-new fan still receives
+# the required A2P disclosure rather than a silent, message-less signup.
+MINIMAL_OPT_IN_CONFIRMATION = "You're on the list!"
+
+
+def _send_join_confirmation_async(
+    phone: str, channel: str, body: str, append_compliance: bool = False
+) -> None:
+    """Queue a confirmation SMS through the bounded pool so webhooks stay fast.
+
+    When ``append_compliance`` is True (a brand-new fan's first-ever message),
+    the A2P/CTIA disclosure footer is appended — for keyword-only live-show
+    joins this confirmation IS the opt-in message, so it must carry the
+    disclosure (the AI/welcome path that normally adds it is skipped). Returning
+    fans re-joining a later show pass False and are not re-nagged.
+    """
+    from app.messaging.contact_card import COMPLIANCE_FOOTER
+
+    out_body = body or ""
+    if append_compliance and COMPLIANCE_FOOTER and COMPLIANCE_FOOTER.lower() not in out_body.lower():
+        out_body = f"{out_body.rstrip()}\n\n{COMPLIANCE_FOOTER}"
 
     def run():
         try:
             ch = (channel or "").lower()
             if ch == "slicktext":
-                slicktext.send_reply(phone, body)
+                slicktext.send_reply(phone, out_body)
             else:
-                twilio.send_reply(phone, body)
+                twilio.send_reply(phone, out_body)
         except Exception as e:
             logging.error("Join confirmation SMS failed (...%s): %s", phone[-4:] if phone else "?", e)
 
     _confirm_pool.submit(run)
+
+
+def _live_show_is_new_fan(phone: str) -> bool:
+    """True when this phone has no prior message on record — i.e. a keyword join
+    is this fan's first-ever contact, so the confirmation must carry the A2P
+    disclosure. Best-effort: any failure returns False so we never block or
+    double-send (the normal first-contact path still covers a later real text).
+    """
+    if not phone:
+        return False
+    try:
+        return bool(brain.storage.is_first_message(phone))
+    except Exception:
+        logging.warning(
+            "live-show: is_first_message check failed for ...%s",
+            phone[-4:] if phone else "?", exc_info=True,
+        )
+        return False
+
+
+def _send_live_show_contact_card_async(to_number: str, from_number: str = "") -> None:
+    """Send ONLY the vCard (no welcome text) to a brand-new fan who joined via a
+    live-show keyword. The join confirmation acts as the welcome, so the
+    ``first_message`` text is suppressed. No-op unless ``send_contact_card`` is
+    enabled for the creator, so the live Zarna deployment (card off) is
+    unaffected. Runs in a daemon thread so the webhook stays fast.
+    """
+    def run():
+        try:
+            from app.messaging.contact_card import maybe_send_first_contact
+            from app.brain.creator_config import load_creator as _load_creator
+            slug = getattr(brain, "slug", None) or os.getenv("CREATOR_SLUG") or ""
+            cfg = (_load_creator(slug) if slug else None) or getattr(brain, "creator_config", None)
+            maybe_send_first_contact(
+                twilio,
+                to_number,
+                cfg,
+                from_number=from_number or "",
+                storage=getattr(brain, "storage", None),
+                send_welcome=False,
+            )
+        except Exception:
+            logging.warning(
+                "live-show contact card send failed for ...%s",
+                to_number[-4:] if to_number else "?", exc_info=True,
+            )
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 app = Flask(__name__)
@@ -436,11 +505,25 @@ def slicktext_webhook():
     if raw_phone and raw_body:
         signup_res = _safe_try_live_show_signup(raw_phone, raw_body, "slicktext")
 
+    # For keyword-only joins the AI/welcome path (which normally carries the A2P
+    # disclosure) is skipped, so compute first-contact BEFORE the early return
+    # and ride the disclosure on the join confirmation itself for brand-new fans.
+    ls_new_fan = False
+    if raw_phone and (signup_res.join_confirmation_sms or signup_res.suppress_ai):
+        ls_new_fan = _live_show_is_new_fan(raw_phone)
+
     if signup_res.join_confirmation_sms and signup_res.confirmation_phone:
         _send_join_confirmation_async(
             signup_res.confirmation_phone,
             signup_res.confirmation_channel or "slicktext",
             signup_res.join_confirmation_sms,
+            append_compliance=ls_new_fan,
+        )
+    elif signup_res.suppress_ai and ls_new_fan and raw_phone:
+        # Keyword join with no themed confirmation copy (e.g. "other" category) —
+        # still deliver a minimal disclosure-bearing opt-in so no signup is silent.
+        _send_join_confirmation_async(
+            raw_phone, "slicktext", MINIMAL_OPT_IN_CONFIRMATION, append_compliance=True,
         )
 
     # Track opt-outs: persist phone to broadcast_optouts and increment blast counter.
@@ -917,12 +1000,32 @@ def twilio_webhook():
         _tw_ch = "twilio_whatsapp" if raw_from.lower().startswith("whatsapp:") else "twilio"
         signup_res = _safe_try_live_show_signup(raw_from, raw_body, _tw_ch)
 
+    # Keyword-only joins skip the AI/welcome path that normally carries the A2P
+    # disclosure, so detect first-contact before the early return and ride the
+    # disclosure on the join confirmation (and send the contact card) for new fans.
+    ls_new_fan = False
+    if raw_from and (signup_res.join_confirmation_sms or signup_res.suppress_ai):
+        ls_new_fan = _live_show_is_new_fan(raw_from)
+
     if signup_res.join_confirmation_sms and signup_res.confirmation_phone:
         _send_join_confirmation_async(
             signup_res.confirmation_phone,
             signup_res.confirmation_channel or "twilio",
             signup_res.join_confirmation_sms,
+            append_compliance=ls_new_fan,
         )
+    elif signup_res.suppress_ai and ls_new_fan and raw_from:
+        # Keyword join with no themed confirmation copy (e.g. "other" category) —
+        # still deliver a minimal disclosure-bearing opt-in so no signup is silent.
+        _send_join_confirmation_async(
+            raw_from, "twilio", MINIMAL_OPT_IN_CONFIRMATION, append_compliance=True,
+        )
+
+    # Contact card (vCard MMS) for a brand-new keyword joiner — card only, no
+    # welcome text (the join confirmation is the welcome). No-op unless the
+    # creator enabled send_contact_card, so Zarna (card off) is unaffected.
+    if signup_res.suppress_ai and ls_new_fan and raw_from:
+        _send_live_show_contact_card_async(raw_from)
 
     # Track opt-outs: persist phone to broadcast_optouts and increment blast counter.
     _TW_OPT_OUT_KEYWORDS = {"stop", "stopall", "unsubscribe", "cancel", "end", "quit"}

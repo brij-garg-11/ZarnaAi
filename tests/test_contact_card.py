@@ -263,6 +263,28 @@ class TestMaybeSendFirstContact:
         assert len(a.calls) == 1
         assert a.calls[0]["media_url"] is not None
 
+    def test_send_welcome_false_sends_card_only(self, monkeypatch):
+        # Live-show joins pass send_welcome=False: the vCard fires but the
+        # first_message welcome is suppressed (the join confirmation is the
+        # welcome and carries the compliance footer itself).
+        monkeypatch.setenv("PUBLIC_BASE_URL", "https://api.test")
+        a = FakeAdapter()
+        cfg = _cfg(send_contact_card=True, first_message="Hey!")
+        sent = cc.maybe_send_first_contact(
+            a, "+1555", cfg, from_number="+1999", send_welcome=False
+        )
+        assert sent is True
+        assert len(a.calls) == 1
+        assert a.calls[0]["media_url"] is not None  # only the vCard MMS
+        assert all("Hey!" not in (c["body"] or "") for c in a.calls)
+
+    def test_send_welcome_false_noop_when_only_first_message(self):
+        # Card off + welcome suppressed → nothing to send.
+        a = FakeAdapter()
+        cfg = _cfg(first_message="Hey!")
+        assert cc.maybe_send_first_contact(a, "+1555", cfg, send_welcome=False) is False
+        assert a.calls == []
+
     def test_never_raises_when_adapter_fails(self, monkeypatch):
         monkeypatch.setenv("PUBLIC_BASE_URL", "https://api.test")
         a = FakeAdapter(raise_on="mms")
