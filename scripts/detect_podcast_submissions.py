@@ -57,7 +57,8 @@ if not GEMINI_API_KEY:
     sys.exit(1)
 
 _gemini = genai.Client(api_key=GEMINI_API_KEY)
-_MODEL = "gemini-2.0-flash"
+# gemini-2.0-flash was retired by Google (404); use the current flash model.
+_MODEL = os.getenv("INTENT_MODEL", "gemini-2.5-flash")
 
 # ---------------------------------------------------------------------------
 # AI detection
