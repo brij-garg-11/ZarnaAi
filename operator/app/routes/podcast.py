@@ -313,14 +313,16 @@ def register_podcast_api_routes(api_bp, slug_or_abort, require_performer_account
                 cur.execute(
                     """
                     SELECT s.id, s.phone_number, s.question, s.fan_name, s.status,
-                           s.created_at, c.fan_name AS contact_name
+                           s.created_at, m.created_at AS message_at, c.fan_name AS contact_name
                     FROM podcast_submissions s
+                    LEFT JOIN messages m
+                           ON m.id = s.message_id
                     LEFT JOIN contacts c
                            ON c.phone_number = s.phone_number AND c.creator_slug = s.creator_slug
                     WHERE s.campaign_id = %s
                       AND s.creator_slug = %s
                       AND s.status != 'skip'
-                    ORDER BY s.created_at ASC
+                    ORDER BY m.created_at ASC NULLS LAST, s.created_at ASC
                     """,
                     (campaign_id, slug),
                 )
@@ -331,13 +333,17 @@ def register_podcast_api_routes(api_bp, slug_or_abort, require_performer_account
             return jsonify(error="failed to load submissions"), 500
 
         def fmt(r):
+            # Show when the fan actually texted (message_at), not when the scan
+            # filed the submission (s.created_at).
+            sent_at = r["message_at"] or r["created_at"]
             return {
                 "id": r["id"],
+                "phone": r["phone_number"] or "",
                 "phone_last4": (r["phone_number"] or "")[-4:],
                 "question": r["question"],
                 "fan_name": r["fan_name"] or r["contact_name"] or "",
                 "status": r["status"],
-                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "created_at": sent_at.isoformat() if sent_at else None,
             }
 
         to_review = [fmt(r) for r in rows if r["status"] == "new"]
@@ -473,14 +479,16 @@ def register_podcast_api_routes(api_bp, slug_or_abort, require_performer_account
                 cur.execute(
                     """
                     SELECT s.phone_number, s.question, s.fan_name, s.status, s.created_at,
-                           c.fan_name AS contact_name
+                           m.created_at AS message_at, c.fan_name AS contact_name
                     FROM podcast_submissions s
+                    LEFT JOIN messages m
+                           ON m.id = s.message_id
                     LEFT JOIN contacts c
                            ON c.phone_number = s.phone_number AND c.creator_slug = s.creator_slug
                     WHERE s.campaign_id = %s
                       AND s.creator_slug = %s
                       AND s.status IN ('confirmed','answered')
-                    ORDER BY s.created_at ASC
+                    ORDER BY m.created_at ASC NULLS LAST, s.created_at ASC
                     """,
                     (campaign_id, slug),
                 )
@@ -495,7 +503,8 @@ def register_podcast_api_routes(api_bp, slug_or_abort, require_performer_account
         w.writerow(["date", "fan_name", "phone_last4", "question", "status"])
         for r in rows:
             name = r["fan_name"] or r["contact_name"] or ""
-            date_str = r["created_at"].strftime("%Y-%m-%d") if r["created_at"] else ""
+            sent_at = r["message_at"] or r["created_at"]
+            date_str = sent_at.strftime("%Y-%m-%d") if sent_at else ""
             w.writerow([date_str, name, (r["phone_number"] or "")[-4:], r["question"], r["status"]])
         return Response(
             buf.getvalue(),
