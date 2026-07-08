@@ -630,6 +630,40 @@ def init_db():
         )
         """,
         "CREATE INDEX IF NOT EXISTS idx_access_requests_status ON access_requests(status, created_at)",
+
+        # ── Podcast Q&A (shared with main app via same DATABASE_URL) ─────────
+        # Fans text in a question + name for a shout-out on the next episode.
+        # Created here too so the operator can serve/scan even if it boots
+        # before the main app has run its migrations.
+        """
+        CREATE TABLE IF NOT EXISTS podcast_campaigns (
+            id           SERIAL PRIMARY KEY,
+            label        TEXT NOT NULL,
+            promoted_at  DATE,
+            creator_slug TEXT NOT NULL DEFAULT 'zarna',
+            created_at   TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS podcast_submissions (
+            id            BIGSERIAL PRIMARY KEY,
+            phone_number  TEXT NOT NULL,
+            message_id    BIGINT,
+            campaign_id   INT REFERENCES podcast_campaigns(id) ON DELETE SET NULL,
+            question      TEXT NOT NULL DEFAULT '',
+            fan_name      TEXT NOT NULL DEFAULT '',
+            status        TEXT NOT NULL DEFAULT 'new',
+            creator_slug  TEXT NOT NULL DEFAULT 'zarna',
+            created_at    TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE (phone_number, message_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_podcast_submissions_campaign ON podcast_submissions (campaign_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_podcast_submissions_phone ON podcast_submissions (phone_number)",
+        "ALTER TABLE podcast_campaigns ADD COLUMN IF NOT EXISTS scan_status TEXT NOT NULL DEFAULT 'idle'",
+        "ALTER TABLE podcast_campaigns ADD COLUMN IF NOT EXISTS scan_found  INT NOT NULL DEFAULT 0",
+        "ALTER TABLE podcast_campaigns ADD COLUMN IF NOT EXISTS scan_error  TEXT",
+        "ALTER TABLE podcast_campaigns ADD COLUMN IF NOT EXISTS scanned_at  TIMESTAMPTZ",
     ]
 
     conn = get_conn()

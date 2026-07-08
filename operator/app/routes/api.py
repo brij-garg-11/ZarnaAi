@@ -6118,3 +6118,10 @@ def api_admin_list_alerts(slug_param: str):
         for r in rows
     ]
     return jsonify(alerts=alerts)
+
+
+# ── Podcast Q&A ────────────────────────────────────────────────────────────────
+# Registered from a submodule to keep this file from growing further.
+from .podcast import register_podcast_api_routes  # noqa: E402
+
+register_podcast_api_routes(api_bp, _slug_or_abort, _require_performer_account)
