@@ -21,7 +21,7 @@ import io
 import logging
 import os
 import threading
-import time
+from concurrent.futures import ThreadPoolExecutor
 
 import psycopg2.extras
 from flask import jsonify, request, Response
@@ -34,12 +34,21 @@ logger = logging.getLogger(__name__)
 _STATUSES = ("new", "confirmed", "answered", "skip")
 
 # Gemini config — same env vars the rest of the platform uses.
+# NOTE: default is gemini-2.5-flash. gemini-2.0-flash was retired by Google
+# (returns 404), which previously made every classification silently fail.
 _GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-_INTENT_MODEL = os.getenv("INTENT_MODEL", "gemini-2.0-flash")
+_INTENT_MODEL = os.getenv("INTENT_MODEL", "gemini-2.5-flash")
+# Fallback if the configured model is unavailable (e.g. retired) — keeps a
+# scan from silently finding zero when a model name goes stale.
+_INTENT_MODEL_FALLBACK = "gemini-2.5-flash"
 
 # Safety cap so one scan can't run Gemini against an unbounded backlog.
 _SCAN_MAX_MESSAGES = int(os.getenv("PODCAST_SCAN_MAX_MESSAGES", "3000"))
 _SCAN_MIN_CHARS = 20
+# How many messages to classify in parallel. Gemini calls are network-bound,
+# so a modest pool cuts a 1,000-message scan from ~20 min to ~2 min with no
+# change to per-message classification quality.
+_SCAN_CONCURRENCY = int(os.getenv("PODCAST_SCAN_CONCURRENCY", "8"))
 
 _PROMPT_TEMPLATE = """You are analyzing fan SMS messages sent to comedian Zarna Garg.
 
@@ -76,19 +85,9 @@ If it is NOT a submission:
 NOT_SUBMISSION"""
 
 
-def _classify_message(client, message_text: str) -> dict | None:
-    """Return {question, fan_name} if the message is a submission, else None."""
-    prompt = _PROMPT_TEMPLATE.format(message=message_text.replace('"', '\\"'))
-    try:
-        response = client.models.generate_content(model=_INTENT_MODEL, contents=prompt)
-        raw = (response.text or "").strip()
-    except Exception:
-        logger.exception("podcast scan: Gemini classify failed")
+def _parse_classification(raw: str) -> dict | None:
+    if not raw or not raw.startswith("SUBMISSION"):
         return None
-
-    if not raw.startswith("SUBMISSION"):
-        return None
-
     question, fan_name = "", ""
     for line in raw.splitlines():
         if line.startswith("QUESTION:"):
@@ -102,8 +101,30 @@ def _classify_message(client, message_text: str) -> dict | None:
     return {"question": question, "fan_name": fan_name}
 
 
+def _classify_message(client, message_text: str) -> dict | None:
+    """Return {question, fan_name} if the message is a submission, else None."""
+    prompt = _PROMPT_TEMPLATE.format(message=message_text.replace('"', '\\"'))
+    for model in (_INTENT_MODEL, _INTENT_MODEL_FALLBACK):
+        try:
+            response = client.models.generate_content(model=model, contents=prompt)
+            return _parse_classification((response.text or "").strip())
+        except Exception as e:
+            # If the primary model is unavailable (e.g. retired → 404), try the
+            # fallback once. Any other error is logged and treated as "no match".
+            if model != _INTENT_MODEL_FALLBACK and "404" in str(e):
+                logger.warning("podcast scan: model %s unavailable, falling back", model)
+                continue
+            logger.exception("podcast scan: Gemini classify failed (model=%s)", model)
+            return None
+    return None
+
+
 def _run_scan(campaign_id: int, slug: str, since_date):
-    """Background worker: scan messages since since_date and file submissions."""
+    """Background worker: scan messages since since_date and file submissions.
+
+    Classification is done concurrently (network-bound Gemini calls); DB inserts
+    are performed serially on a single connection as results arrive.
+    """
     found = 0
     try:
         from google import genai
@@ -131,32 +152,55 @@ def _run_scan(campaign_id: int, slug: str, since_date):
             rows = cur.fetchall()
         conn.close()
 
-        for row in rows:
-            result = _classify_message(client, row["text"].strip())
-            if result:
-                found += 1
-                try:
-                    c2 = get_conn()
-                    with c2, c2.cursor() as cur2:
-                        cur2.execute(
-                            """
-                            INSERT INTO podcast_submissions
-                                (phone_number, message_id, campaign_id, question, fan_name, creator_slug)
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (phone_number, message_id) DO NOTHING
-                            """,
-                            (row["phone_number"], row["id"], campaign_id,
-                             result["question"], result["fan_name"], slug),
-                        )
-                    c2.close()
-                except Exception:
-                    logger.exception("podcast scan: insert failed for message %s", row["id"])
-            time.sleep(0.2)  # be gentle on Gemini rate limits
+        def _classify_row(row):
+            return row, _classify_message(client, (row["text"] or "").strip())
+
+        insert_conn = get_conn()
+        processed = 0
+        try:
+            with ThreadPoolExecutor(max_workers=_SCAN_CONCURRENCY) as pool:
+                for row, result in pool.map(_classify_row, rows):
+                    processed += 1
+                    if result:
+                        found += 1
+                        try:
+                            with insert_conn, insert_conn.cursor() as cur2:
+                                cur2.execute(
+                                    """
+                                    INSERT INTO podcast_submissions
+                                        (phone_number, message_id, campaign_id, question, fan_name, creator_slug)
+                                    VALUES (%s, %s, %s, %s, %s, %s)
+                                    ON CONFLICT (phone_number, message_id) DO NOTHING
+                                    """,
+                                    (row["phone_number"], row["id"], campaign_id,
+                                     result["question"], result["fan_name"], slug),
+                                )
+                        except Exception:
+                            logger.exception("podcast scan: insert failed for message %s", row["id"])
+                    # Heartbeat every 25 messages so the dashboard shows progress.
+                    if processed % 25 == 0:
+                        _update_scan_progress(campaign_id, slug, found)
+        finally:
+            insert_conn.close()
 
         _finish_scan(campaign_id, slug, status="done", found=found, error=None)
     except Exception as e:
         logger.exception("podcast scan: run failed for campaign %s", campaign_id)
         _finish_scan(campaign_id, slug, status="error", found=found, error=str(e)[:400])
+
+
+def _update_scan_progress(campaign_id: int, slug: str, found: int):
+    try:
+        conn = get_conn()
+        with conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE podcast_campaigns SET scan_found = %s "
+                "WHERE id = %s AND creator_slug = %s AND scan_status = 'running'",
+                (found, campaign_id, slug),
+            )
+        conn.close()
+    except Exception:
+        logger.exception("podcast scan: heartbeat update failed for campaign %s", campaign_id)
 
 
 def _finish_scan(campaign_id: int, slug: str, status: str, found: int, error):
