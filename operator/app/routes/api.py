@@ -614,28 +614,59 @@ def inbox():
     Paginated list of recent conversations (25 per page), newest first.
     Each row = one fan thread: last message, timestamp, message count, fan tier.
     Phone numbers are masked to last-4 only.
-    Query params: ?page=1
+    Query params: ?page=1&q=keyword&phone=partial_number
+    - q: case-insensitive keyword search across all messages in matching threads
+    - phone: partial phone number filter (matches last-4 digits or any substring)
     """
     _require_performer_account()
     _slug = _slug_or_abort()
     page = max(1, int(request.args.get("page", 1)))
     per_page = 25
     offset = (page - 1) * per_page
+    q = request.args.get("q", "").strip()
+    phone_filter = request.args.get("phone", "").strip()
+
+    # Build dynamic WHERE fragments applied to both the count and main queries.
+    # Base condition is always present; optional filters are appended.
+    extra_where: list[str] = []
+    extra_params: list = []
+
+    if phone_filter:
+        extra_where.append("m.phone_number LIKE %s")
+        extra_params.append(f"%{phone_filter}%")
+
+    if q:
+        # Fans whose thread contains at least one message matching the keyword
+        extra_where.append(
+            "EXISTS ("
+            "  SELECT 1 FROM messages mq"
+            "  WHERE mq.phone_number = m.phone_number"
+            "    AND mq.creator_slug = m.creator_slug"
+            "    AND mq.text ILIKE %s"
+            ")"
+        )
+        extra_params.append(f"%{q}%")
+
+    extra_sql = (" AND " + " AND ".join(extra_where)) if extra_where else ""
 
     try:
         conn = get_conn()
         import psycopg2.extras
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            # Total conversation count for pagination
-            cur.execute("""
-                SELECT COUNT(DISTINCT phone_number) AS total
-                FROM messages
-                WHERE role = 'user' AND creator_slug = %s
-            """, (_slug,))
+            # Total conversation count for pagination (respects active filters)
+            cur.execute(
+                f"""
+                SELECT COUNT(DISTINCT m.phone_number) AS total
+                FROM messages m
+                WHERE m.creator_slug = %s{extra_sql}
+                """,
+                [_slug] + extra_params,
+            )
             total = cur.fetchone()["total"]
 
             # One row per fan: most recent message, message counts, fan info
-            cur.execute("""
+            cur.execute(
+                f"""
                 SELECT
                     m.phone_number,
                     RIGHT(m.phone_number, 4) AS phone_last4,
@@ -660,11 +691,13 @@ def inbox():
                     LEFT(c.fan_memory, 200) AS fan_memory_preview
                 FROM messages m
                 LEFT JOIN contacts c ON c.phone_number = m.phone_number AND c.creator_slug = m.creator_slug
-                WHERE m.creator_slug = %s
+                WHERE m.creator_slug = %s{extra_sql}
                 GROUP BY m.phone_number, m.creator_slug, c.fan_tier, c.fan_tags, c.fan_location, c.fan_name, c.fan_memory
                 ORDER BY last_message_at DESC
                 LIMIT %s OFFSET %s
-            """, (_slug, per_page, offset))
+                """,
+                [_slug] + extra_params + [per_page, offset],
+            )
             rows = cur.fetchall()
         conn.close()
     except Exception:
