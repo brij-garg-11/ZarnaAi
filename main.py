@@ -272,7 +272,6 @@ app.register_blueprint(smb_bp)
 app.register_blueprint(portal_bp)
 app.register_blueprint(verify_bp)
 
-
 brain     = create_brain()
 slicktext = create_slicktext_adapter()
 twilio    = create_twilio_adapter()
