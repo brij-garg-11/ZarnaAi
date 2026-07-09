@@ -45,6 +45,21 @@ _SHOW_KEYWORDS = {
     # but the extra "back" breaks the "coming to" substring, so list it too.
     "coming back to", "come back to",
 }
+# Ticket/date disputes — "u sure? the website doesnt show august 6", "there's
+# nothing on 12/31?!". A date PLUS a dispute/lookup word must reach the SHOW
+# prompt, where the calendar directive reaffirms real shows; left as QUESTION
+# the LLM freestyles and can concede a real show doesn't exist.
+_SHOW_DATE_RE = re.compile(
+    r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+    r"aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*"
+    r"\d{1,2}\b|\b\d{1,2}/\d{1,2}\b",
+    re.IGNORECASE,
+)
+_SHOW_DISPUTE_RE = re.compile(
+    r"(website|ticketmaster|live ?nation|box office|tickets?|sold out|listed|"
+    r"doesn'?t show|not showing|can'?t find|don'?t see|nothing on|nothing for)",
+    re.IGNORECASE,
+)
 # Fan statements about already having tickets — must NOT trigger a SHOW sell reply.
 # "I already have my tickets!" should stay PERSONAL/FEEDBACK, not get a ticket link.
 _SHOW_POSSESSION_PHRASES = (
@@ -230,6 +245,12 @@ _AI_QUESTION_PHRASES = (
     "what ai", "which ai", "what model", "what llm",
     "powered by", "chatgpt", "chat gpt", "openai", "claude", "gemini",
     "nice job ai", "good job ai", "wow ai", "hey ai",
+    # Identity questions — must hit the QUESTION prompt so the hard AI-identity
+    # guardrail answers honestly ("This is Zarna's AI"), never "It's Zarna texting you!"
+    "who is this", "who's this", "whos this", "who dis",
+    "who are you", "who am i talking to", "who am i texting",
+    "who is texting", "who's texting", "is this a real person",
+    "are you a real person", "is a real person",
 )
 
 # ── Shalabh / name references → PERSONAL ─────────────────────────────────────
@@ -381,6 +402,11 @@ def _fast_classify(message: str) -> Intent | None:
         return Intent.QUESTION
 
     # Structured intents
+    # Date disputes ("the website doesnt show august 6", "nothing on 12/31?!")
+    # must reach the SHOW prompt so the calendar directive reaffirms real shows.
+    if _SHOW_DATE_RE.search(lower) and _SHOW_DISPUTE_RE.search(lower):
+        if not any(p in lower for p in _SHOW_POSSESSION_PHRASES):
+            return Intent.SHOW
     # SHOW: guard against fan *statements* about already having tickets.
     # "I already have my tickets for Saturday!" must return FEEDBACK (fan sharing),
     # not SHOW (which would send a redundant ticket link). Force FEEDBACK so the

@@ -210,6 +210,7 @@ class TestBuildDirective:
         assert "Austin" in d.instruction and "Chicago" in d.instruction
 
     def test_recent_past_match_says_just_there(self, monkeypatch):
+        monkeypatch.setenv("SHOW_CALENDAR_BANDSINTOWN", "1")
         recent = (datetime.now(timezone.utc).date() - timedelta(days=10)).isoformat()
 
         def fake_fetch(artist, past=False):
@@ -248,7 +249,24 @@ class TestBuildDirective:
 # ---------------------------------------------------------------------------
 
 class TestPriorityAndCache:
-    def test_bandsintown_preferred_over_config(self, monkeypatch):
+    def test_config_preferred_by_default_bandsintown_disabled(self, monkeypatch):
+        # Bandsintown is OFF by default: the config upcoming_shows list is the
+        # source of truth (kept in sync with the official tickets page), so even
+        # a live-looking feed must be ignored without the env flag.
+        def fake_fetch(artist, past=False):
+            raise AssertionError("Bandsintown must not be fetched when disabled")
+
+        monkeypatch.delenv("SHOW_CALENDAR_BANDSINTOWN", raising=False)
+        monkeypatch.setattr(sc, "_fetch_bandsintown", fake_fetch)
+        label = _label(datetime.now(timezone.utc).date() + timedelta(days=20))
+        cfg = _cfg(slug="prio-off", artist="zarna garg",
+                   shows=[{"city": "Austin", "venue": "Cap City", "date": label}])
+        cal = sc.get_calendar(cfg)
+        assert [s.city for s in cal.upcoming] == ["Austin"]
+
+    def test_bandsintown_preferred_when_flag_enabled(self, monkeypatch):
+        monkeypatch.setenv("SHOW_CALENDAR_BANDSINTOWN", "1")
+
         def fake_fetch(artist, past=False):
             if past:
                 return []
@@ -271,6 +289,7 @@ class TestPriorityAndCache:
         assert [s.city for s in cal.upcoming] == ["Austin"]
 
     def test_calendar_is_cached(self, monkeypatch):
+        monkeypatch.setenv("SHOW_CALENDAR_BANDSINTOWN", "1")
         calls = {"n": 0}
 
         def fake_fetch(artist, past=False):
@@ -285,6 +304,7 @@ class TestPriorityAndCache:
         assert calls["n"] == first  # second call served from cache
 
     def test_clear_cache_forces_refetch(self, monkeypatch):
+        monkeypatch.setenv("SHOW_CALENDAR_BANDSINTOWN", "1")
         calls = {"n": 0}
 
         def fake_fetch(artist, past=False):
@@ -318,7 +338,8 @@ class TestGeneratorIntegration:
     def test_without_directive_uses_generic_link(self):
         prompt = self._prompt()
         assert "https://example.com/tickets/" in prompt
-        assert "Show guidance" not in prompt
+        # No directive block (the guardrails legitimately mention "Show guidance").
+        assert "Show guidance (follow this precisely)" not in prompt
 
     def test_with_directive_injects_instruction_and_show_link(self):
         d = sc.ShowDirective(
@@ -532,6 +553,126 @@ class TestConfigCalendar:
         assert d.ticket_url == "https://generic/tickets"
 
 
+class TestDateMatching:
+    """Fan-typed dates must resolve to the real show — never a denial."""
+
+    def _cfg_with_dated_shows(self):
+        today = datetime.now(timezone.utc).date()
+        d1 = today + timedelta(days=30)
+        d2 = today + timedelta(days=60)
+        self.d1, self.d2 = d1, d2
+        return _cfg(slug="dated", shows=[
+            {"city": "Portland", "state": "ME", "venue": "State Theatre", "date": _label(d1)},
+            {"city": "Boston", "state": "MA", "venue": "Wilbur", "date": _label(d2)},
+        ], tickets="https://generic/tickets")
+
+    def test_month_day_resolves_to_show(self):
+        cfg = self._cfg_with_dated_shows()
+        msg = f"I don't see tickets for {self.d1.strftime('%b')}{self.d1.day} {self.d1.year}"
+        d = sc.build_show_directive(msg, cfg)
+        assert d is not None
+        assert "Portland" in d.instruction
+        assert "never deny this show exists" in d.instruction
+
+    def test_numeric_date_resolves_to_show(self):
+        cfg = self._cfg_with_dated_shows()
+        d = sc.build_show_directive(f"is there a show on {self.d2.month}/{self.d2.day}?", cfg)
+        assert d is not None
+        assert "Boston" in d.instruction
+
+    def test_date_with_no_show_gets_honest_no(self):
+        cfg = self._cfg_with_dated_shows()
+        # Pick a date 10 days out — guaranteed not to collide with d1/d2.
+        miss = datetime.now(timezone.utc).date() + timedelta(days=10)
+        d = sc.build_show_directive(f"anything on {miss.strftime('%b')} {miss.day}?", cfg)
+        assert d is not None
+        assert "NO show on that exact date" in d.instruction
+        assert "Do not invent any other date" in d.instruction
+
+    def test_no_date_no_city_falls_through_to_generic(self):
+        cfg = self._cfg_with_dated_shows()
+        d = sc.build_show_directive("where can I buy tickets?", cfg)
+        assert d is not None
+        assert "NEXT show" in d.instruction
+
+
+class TestSameCityDisambiguation:
+    """Portland OR (just passed) vs Portland ME (upcoming) must never mix."""
+
+    def _cfg_two_portlands(self):
+        today = datetime.now(timezone.utc).date()
+        past = today - timedelta(days=5)
+        future = today + timedelta(days=90)
+        self.future_label = _label(future)
+        return _cfg(slug="portlands", shows=[
+            {"city": "Portland", "state": "OR", "venue": "Helium", "date": _label(past)},
+            {"city": "Portland", "state": "ME", "venue": "State Theatre", "date": _label(future)},
+        ], tickets="https://generic/tickets")
+
+    def test_bare_portland_gets_upcoming_show(self):
+        d = sc.build_show_directive("are you coming to portland?", self._cfg_two_portlands())
+        assert d is not None
+        assert "State Theatre" in d.instruction
+        assert self.future_label in d.instruction
+
+    def test_portland_maine_gets_upcoming_show(self):
+        d = sc.build_show_directive("coming to Portland Maine?", self._cfg_two_portlands())
+        assert "State Theatre" in d.instruction
+
+    def test_portland_oregon_gets_just_there(self):
+        d = sc.build_show_directive("coming back to portland oregon?", self._cfg_two_portlands())
+        assert d is not None
+        assert "JUST there" in d.instruction
+        assert "Helium" in d.instruction
+
+    def test_upcoming_city_and_state_disambiguates(self):
+        today = datetime.now(timezone.utc).date()
+        cfg = _cfg(slug="twoup", shows=[
+            {"city": "Portland", "state": "OR", "venue": "Helium", "date": _label(today + timedelta(days=20))},
+            {"city": "Portland", "state": "ME", "venue": "State Theatre", "date": _label(today + timedelta(days=90))},
+        ])
+        d = sc.build_show_directive("any shows in portland maine?", cfg)
+        assert "State Theatre" in d.instruction
+        d = sc.build_show_directive("any shows in portland oregon?", cfg)
+        assert "Helium" in d.instruction
+
+
+class TestAmbiguousStateCodes:
+    """2-letter codes that are English words (ME, OR, IN, OK…) must only match
+    when the fan typed them in caps — 'any shows near me?' must NOT sell Maine."""
+
+    def _cfg_maine(self):
+        today = datetime.now(timezone.utc).date()
+        self.label = _label(today + timedelta(days=60))
+        return _cfg(slug="maine", shows=[
+            {"city": "Portland", "state": "ME", "venue": "State Theatre", "date": self.label},
+        ], tickets="https://generic/tickets")
+
+    def test_near_me_does_not_match_maine(self):
+        d = sc.build_show_directive("any shows near me?", self._cfg_maine())
+        assert d is not None
+        # Falls to the generic fallback, never claims to know the fan is in ME.
+        assert "State Theatre in Portland" not in d.instruction.split("NEXT show")[0]
+        assert "NEXT show" in d.instruction
+
+    def test_uppercase_code_still_matches(self):
+        d = sc.build_show_directive("are you coming to Portland ME?", self._cfg_maine())
+        assert "State Theatre" in d.instruction
+
+    def test_or_conjunction_does_not_match_oregon(self):
+        today = datetime.now(timezone.utc).date()
+        cfg = _cfg(slug="oregon", shows=[
+            {"city": "Bend", "state": "OR", "venue": "Tower", "date": _label(today + timedelta(days=30))},
+        ])
+        d = sc.build_show_directive("boston or chicago please?", cfg)
+        assert d is not None
+        assert "The fan asked about Bend" not in d.instruction
+
+    def test_full_state_name_still_matches(self):
+        d = sc.build_show_directive("anything in maine?", self._cfg_maine())
+        assert "State Theatre" in d.instruction
+
+
 class TestNextShowDirective:
     def test_no_city_names_the_soonest_show(self):
         today = datetime.now(timezone.utc).date()
@@ -584,6 +725,33 @@ class TestShowIntentRouting:
         from app.brain.intent import _fast_classify
         assert _fast_classify("are you coming back to Lexington?") == Intent.SHOW
         assert _fast_classify("when will you come back to philly") == Intent.SHOW
+
+
+class TestDateDisputeRouting:
+    """A fan disputing a date the bot just gave ("the website doesnt show august 6")
+    must route to SHOW so the calendar directive reaffirms the real show — left as
+    QUESTION the LLM freestyles and can concede a real show doesn't exist."""
+
+    def test_website_dispute_is_show(self):
+        from app.brain.intent import _fast_classify
+        assert _fast_classify("u sure? the website doesnt show august 6") == Intent.SHOW
+
+    def test_numeric_date_dispute_is_show(self):
+        from app.brain.intent import _fast_classify
+        assert _fast_classify("I looked and there's nothing on 12/31?!") == Intent.SHOW
+
+    def test_cant_find_tickets_for_date_is_show(self):
+        from app.brain.intent import _fast_classify
+        assert _fast_classify("I can't find tickets for march 3?") == Intent.SHOW
+
+    def test_date_without_dispute_word_not_forced(self):
+        # "my birthday is august 6" — date but no dispute/lookup word.
+        from app.brain.intent import _fast_classify
+        assert _fast_classify("my birthday is august 6") is not Intent.SHOW
+
+    def test_possession_still_wins(self):
+        from app.brain.intent import _fast_classify
+        assert _fast_classify("I already have my tickets for dec 31!") == Intent.FEEDBACK
 
 
 class TestPraiseDoesNotMaskRequest:

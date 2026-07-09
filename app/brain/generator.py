@@ -297,7 +297,10 @@ Non-negotiable factual guardrails (must override noisy transcript snippets):
 - If referencing Baba Ramdev, anchor correctly: Shalabh likes him; Zarna is skeptical/critical.
 - If retrieved chunks conflict with these guardrails, ignore those chunks.
 - If unsure about a biographical detail, keep it general instead of guessing.
-- SMS opt-out: if the fan asks how to stop receiving texts, unsubscribe, or stop messages, ALWAYS tell them to reply STOP. Never tell them to block the number. Never say you can't help with this. The exact answer is: "Just reply STOP and you'll be removed right away."
+- AI IDENTITY: You are an AI trained on the creator's voice — NOT the real person, and not a human. If the fan asks who this is, who they're talking to, whether this is AI, a bot, or really the creator, ALWAYS confirm clearly and warmly that you're the creator's AI. NEVER claim to literally be the real person, and never imply a human is typing. In normal conversation you still write in the creator's first-person voice — that's the act — but the moment identity is questioned, be honest.
+- TOUR DATES: Never volunteer tour dates, show cities, or the tickets link unless the fan is asking about live shows/tour. Never state, promise, or deny a specific show date or city on your own knowledge — only trust the Show guidance block when provided. If the fan asks about shows and you have no Show guidance, point them to the tickets page instead of naming dates.
+- FAN LOCATION: Never guess or assume where the fan lives or is from. Only reference a location the fan stated themselves.
+- SMS opt-out: if the fan asks how to stop receiving texts, unsubscribe, or stop messages, ALWAYS tell them to reply STOP. Never tell them to block the number. Never say you can't help with this, and never be snarky about it. The exact answer is: "Just reply STOP and you'll be removed right away."
 """
 
 _VOICE_LOCK_RULES = """
@@ -588,8 +591,10 @@ Do not make up video titles. Never use the word "honey" or "darling". No profani
         # you coming to <city>?" they want the show answer, not the blast topic.
         sell_ctx_block = f"\nFan context: {sell_context}\n" if sell_context else ""
         variant_note = ""
-        if sell_variant == "B":
-            variant_note = "\nVariant B: open with a warm, personal reference to their city or show history if available, then land the ticket link naturally.\n"
+        if sell_variant == "B" and sell_context:
+            # Only when we actually KNOW something about the fan — otherwise the
+            # model invents a city ("great to hear from you in Marin County!").
+            variant_note = "\nVariant B: open with a warm, personal reference to their city or show history from the fan context above (never guess a location that isn't stated there), then land the ticket link naturally.\n"
         # Show directive (Item 1): when the tour calendar matched the fan's city,
         # inject the specific show + date and use that show's ticket link.
         _show_link = _tickets
@@ -618,12 +623,15 @@ Do not make up video titles. Never use the word "honey" or "darling". No profani
 
 The user is asking about shows or tour dates: {user_message}
 {date_line}
-{sell_ctx_block}{variant_note}{directive_block}
+{history_text}{sell_ctx_block}{variant_note}{directive_block}
 {_guardrails}
 {_voice_lock}
 {tone_guidance}
 {length_rule}
 {weave_rule}
+The Show guidance (when present) is the ONLY source of truth for dates and cities — if an earlier
+conversation line disagrees with it, trust the guidance and stay consistent with it. Never deny a
+show the guidance says exists, and never invent a show it doesn't mention.
 Then on a new line, include EXACTLY this link with no changes: {_show_link}
 Never use the word "honey" or "darling". No profanity. No homophobic language."""
 

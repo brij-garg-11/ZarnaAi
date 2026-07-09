@@ -48,7 +48,9 @@ def test_blast_context_bypasses_link_intent(intent):
 
 def test_show_intent_answers_during_blast_context():
     """SHOW must answer with the tour/ticket path even when a blast session is active,
-    and the blast framing must NOT be injected into the show reply."""
+    and the blast framing must NOT be injected into the show reply. Conversation
+    history IS injected (as background context) so the bot never contradicts a show
+    it just recommended — e.g. fan disputes "I don't see tickets for dec 4"."""
     prompt = _build_prompt(
         intent=Intent.SHOW,
         user_message="when are you coming to Cincinnati?",
@@ -59,7 +61,7 @@ def test_show_intent_answers_during_blast_context():
     assert "shows or tour dates" in prompt          # SHOW path used, not GENERAL
     assert "zarnagarg.com/tickets" in prompt          # ticket link present
     assert "Webby Award" not in prompt                # blast framing NOT injected
-    assert "I'm watching you" not in prompt           # history NOT injected into SHOW
+    assert "I'm watching you" in prompt               # history present for continuity
 
 
 @pytest.mark.parametrize("intent", LINK_INTENTS)

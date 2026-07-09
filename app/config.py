@@ -2,9 +2,11 @@ import os
 
 # --- Gemini ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GENERATION_MODEL = os.getenv("GENERATION_MODEL", "gemini-2.5-flash")
-INTENT_MODEL     = os.getenv("INTENT_MODEL", "gemini-2.5-flash")  # older flash versions deprecated
-ROUTER_MODEL     = os.getenv("ROUTER_MODEL", "gemini-2.5-flash")  # complexity routing (fast/cheap)
+# gemini-2.5-flash was retired by Google (API returns 404 "no longer available"
+# as of Jul 2026) — the -latest alias tracks the current stable Flash model.
+GENERATION_MODEL = os.getenv("GENERATION_MODEL", "gemini-flash-latest")
+INTENT_MODEL     = os.getenv("INTENT_MODEL", "gemini-flash-latest")
+ROUTER_MODEL     = os.getenv("ROUTER_MODEL", "gemini-flash-latest")  # complexity routing (fast/cheap)
 EMBEDDING_MODEL  = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001")
 
 # --- Multi-model replies (optional; falls back to Gemini if keys missing) ---

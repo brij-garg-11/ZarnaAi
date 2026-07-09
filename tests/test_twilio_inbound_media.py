@@ -140,10 +140,15 @@ def test_rate_limiter_is_per_phone():
 
 
 def test_duplicate_message_sid_is_deduped():
-    """Twilio retries deliver the same MessageSid — we process it once."""
+    """Twilio retries deliver the same MessageSid — we process it once.
+
+    Dedup logic lives in app/inbound_dedup.py (per-worker LRU + shared Postgres
+    claim table); main._already_processed is an alias to it.
+    """
     main = _main()
+    import app.inbound_dedup as dedup
     sid = "SMtest-dedup-0001"
-    with main._seen_lock:
-        main._seen_message_ids.pop(sid, None)
+    with dedup._seen_lock:
+        dedup._seen_message_ids.pop(sid, None)
     assert main._already_processed(sid) is False
     assert main._already_processed(sid) is True

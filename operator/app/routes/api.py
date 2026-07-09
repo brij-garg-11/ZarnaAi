@@ -6125,3 +6125,8 @@ def api_admin_list_alerts(slug_param: str):
 from .podcast import register_podcast_api_routes  # noqa: E402
 
 register_podcast_api_routes(api_bp, _slug_or_abort, _require_performer_account)
+
+# ── Safety review (crisis flags from the main app's crisis gate) ──────────────
+from .safety import register_safety_api_routes  # noqa: E402
+
+register_safety_api_routes(api_bp, _slug_or_abort, _require_performer_account)

@@ -7,13 +7,17 @@ a warm "I'd love to see you there!" — not a bare generic URL. If Zarna was jus
 the fan's city, the bot should say "we were just there!" instead of recommending a
 show whose date has already passed.
 
-Data source priority (first that yields shows wins):
-  1. Bandsintown public REST API — when the creator config sets ``bandsintown_artist``.
-     No API key required; only an app_id string (BANDSINTOWN_APP_ID env, with a default).
-  2. ``upcoming_shows`` array in the creator config — manual fallback that the
-     operator curates by hand.
-  3. Nothing — callers fall back to the generic ``links.tickets`` URL and the
+Data source:
+  1. ``upcoming_shows`` array in the creator config — the operator-curated
+     source of truth, kept in sync with the creator's official tickets page.
+  2. Nothing — callers fall back to the generic ``links.tickets`` URL and the
      existing generic SHOW prompt, so behaviour is unchanged.
+
+  The Bandsintown REST API integration still exists but is DISABLED by default:
+  its feed disagreed with the official site (missing confirmed shows like
+  Dublin Aug 5 2026 and Portland ME Dec 4 2026) and its public API rejects our
+  app_id, so replies built from it contradicted the tickets page. Set
+  SHOW_CALENDAR_BANDSINTOWN=1 to re-enable it as the preferred source.
 
 Results are cached in-process per creator slug for 4 hours, mirroring the SMB
 calendar cache in ``app/smb/knowledge.py``. Network failures degrade gracefully:
@@ -90,8 +94,9 @@ _REGION_GROUPS = {
     "europe": {"uk", "ireland", "germany", "switzerland", "sweden", "france",
                "spain", "italy", "netherlands", "belgium", "norway", "denmark",
                "austria", "poland", "portugal"},
-    "asia": {"singapore", "india", "japan", "china", "uae", "indonesia"},
+    "asia": {"singapore", "india", "japan", "china", "hong kong", "uae", "indonesia"},
     "scandinavia": {"sweden", "norway", "denmark", "finland"},
+    "australia": {"australia"},
 }
 
 # Common nicknames fans type instead of the full city name in the schedule.
@@ -306,10 +311,17 @@ def _shows_from_config(creator_config) -> List[Show]:
 # Calendar assembly (cached)
 # ---------------------------------------------------------------------------
 
+def _bandsintown_enabled() -> bool:
+    """Bandsintown is opt-in: the config ``upcoming_shows`` list is the source of
+    truth (kept in sync with the official tickets page). See module docstring."""
+    return os.getenv("SHOW_CALENDAR_BANDSINTOWN", "0").strip().lower() in ("1", "true", "on", "yes")
+
+
 def _build_calendar(creator_config) -> ShowCalendar:
-    """Assemble a ShowCalendar from Bandsintown (preferred) or the config fallback."""
+    """Assemble a ShowCalendar from the config ``upcoming_shows`` source of truth
+    (or Bandsintown, only when explicitly re-enabled via env flag)."""
     artist = (getattr(creator_config, "bandsintown_artist", "") or "").strip()
-    if artist:
+    if artist and _bandsintown_enabled():
         upcoming = _parse_bandsintown(_fetch_bandsintown(artist, past=False))
         recent_past = _parse_bandsintown(_fetch_bandsintown(artist, past=True))
         if upcoming or recent_past:
@@ -387,35 +399,62 @@ def clear_cache() -> None:
 # City matching + directive building
 # ---------------------------------------------------------------------------
 
-def _match_city(message: str, shows: List[Show]) -> Optional[Show]:
-    """Return the first show whose city/region appears in the fan's message.
+def _city_in_text(show: Show, text: str) -> bool:
+    """True if the show's city (or a known nickname of it) appears in the text."""
+    city = show.city.lower()
+    if city and city in text:
+        return True
+    for alias in _CITY_ALIASES.get(city, ()):
+        # Short nicknames (la, sf, dc) are noisy as substrings — whole-word only.
+        if len(alias) <= 3:
+            if re.search(rf"\b{re.escape(alias)}\b", text):
+                return True
+        elif alias in text:
+            return True
+    return False
 
-    City is matched as a substring. Region (state) is a weaker fallback: we match
-    both the full state name and the 2-letter code, so "Kentucky", "KY", and a
-    config region of either form all line up (the fan rarely types the code).
+
+def _match_city(message: str, shows: List[Show]) -> Optional[Show]:
+    """Return the show whose city/region appears in the fan's message.
+
+    City is matched as a substring. When several shows share the city name
+    (e.g. Portland OR vs Portland ME), a state/region named in the message
+    disambiguates; otherwise the first (soonest, list is date-sorted) wins.
+    Region (state) alone is a weaker fallback: we match both the full state
+    name and the 2-letter code, so "Kentucky", "KY", and a config region of
+    either form all line up (the fan rarely types the code).
     """
     text = (message or "").lower()
     if not text:
         return None
-    for show in shows:
-        city = show.city.lower()
-        if city and city in text:
-            return show
-        for alias in _CITY_ALIASES.get(city, ()):
-            # Short nicknames (la, sf, dc) are noisy as substrings — whole-word only.
-            if len(alias) <= 3:
-                if re.search(rf"\b{re.escape(alias)}\b", text):
-                    return show
-            elif alias in text:
+    city_matches = [s for s in shows if _city_in_text(s, text)]
+    if city_matches:
+        # Same-name cities: a state named in the message picks the right one.
+        for show in city_matches:
+            if _region_in_text(show.region, text, raw_message=message):
                 return show
+        return city_matches[0]
     for show in shows:
-        if _region_in_text(show.region, text):
+        if _region_in_text(show.region, text, raw_message=message):
             return show
     return None
 
 
-def _region_in_text(region: str, text: str) -> bool:
-    """True if a show's region matches the message, by full state name or code."""
+# 2-letter state codes that are also everyday English words. Matching these as
+# bare lowercase words is how "any shows near me?" once sold the Portland, ME
+# show — the bot must never guess the fan's state from ordinary conversation.
+_AMBIGUOUS_STATE_WORDS = frozenset({
+    "me", "or", "in", "ok", "hi", "oh", "id", "ma", "pa", "al", "la", "de", "co", "mo",
+})
+
+
+def _region_in_text(region: str, text: str, raw_message: str = "") -> bool:
+    """True if a show's region matches the message, by full state name or code.
+
+    Codes that double as English words (ME, OR, IN, OK, …) only count when the
+    fan typed them in UPPERCASE in the original message ("Portland ME?"), so a
+    lowercase "near me" or "or" never picks a state.
+    """
     region = (region or "").strip()
     if not region:
         return False
@@ -426,11 +465,70 @@ def _region_in_text(region: str, text: str) -> bool:
     for cand in candidates:
         if len(cand) <= 2:
             # 2-letter codes are noisy as substrings — require a whole-word match.
-            if re.search(rf"\b{re.escape(cand)}\b", text):
-                return True
+            if not re.search(rf"\b{re.escape(cand)}\b", text):
+                continue
+            if cand in _AMBIGUOUS_STATE_WORDS:
+                # Only trust it if the fan actually typed the CODE in caps.
+                if re.search(rf"\b{cand.upper()}\b", raw_message or ""):
+                    return True
+                continue
+            return True
         elif cand in text:
             return True
     return False
+
+
+# Fan-typed dates: "Dec 4", "December 4th", "dec4 2026", "12/4" — used to match a
+# question about a specific date against the tour calendar so the bot never denies
+# a show it actually has (e.g. "I don't see tickets for dec 4?!").
+_MESSAGE_DATE_RE = re.compile(
+    r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+    r"aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*"
+    r"(\d{1,2})(?:st|nd|rd|th)?\b",
+    re.IGNORECASE,
+)
+_MESSAGE_DATE_NUMERIC_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b")
+
+
+def _dates_in_message(message: str) -> List[tuple[int, int]]:
+    """Extract (month, day) pairs the fan typed, e.g. 'dec 4' -> [(12, 4)]."""
+    text = (message or "").lower()
+    found: List[tuple[int, int]] = []
+    for m in _MESSAGE_DATE_RE.finditer(text):
+        month = _MONTHS.get(m.group(1)[:3])
+        try:
+            day = int(m.group(2))
+        except ValueError:
+            continue
+        if month and 1 <= day <= 31:
+            found.append((month, day))
+    for m in _MESSAGE_DATE_NUMERIC_RE.finditer(text):
+        try:
+            month, day = int(m.group(1)), int(m.group(2))
+        except ValueError:
+            continue
+        if 1 <= month <= 12 and 1 <= day <= 31:
+            found.append((month, day))
+    return found
+
+
+def _match_date(message: str, shows: List[Show]) -> Optional[Show]:
+    """Return the show whose date range covers a date the fan typed, if any."""
+    wanted = _dates_in_message(message)
+    if not wanted:
+        return None
+    for show in shows:
+        start, end = _parse_label_dates(show.date_label)
+        if start is None or end is None:
+            continue
+        for month, day in wanted:
+            try:
+                asked = date(start.year, month, day)
+            except ValueError:
+                continue
+            if start <= asked <= end:
+                return show
+    return None
 
 
 def _match_region(message: str, shows: List[Show]) -> tuple[Optional[str], List[Show]]:
@@ -481,25 +579,67 @@ def build_show_directive(message: str, creator_config) -> Optional[ShowDirective
         return None
 
     generic = _generic_tickets(creator_config)
+    text_lower = (message or "").lower()
+
+    # Continent / country-group questions ("any shows in Europe?", "Australia
+    # dates?") list ALL matching shows — but only when the fan didn't name a
+    # specific city (a named city always wins below).
+    if not any(_city_in_text(s, text_lower) for s in list(cal.upcoming) + list(cal.recent_past)):
+        region_key, region_shows = _match_region(message, cal.upcoming)
+        if region_shows:
+            listed = "; ".join(
+                f"{s.venue or s.city} in {s.city} on {s.date_label}" for s in region_shows[:4]
+            )
+            more = " (and more)" if len(region_shows) > 4 else ""
+            instruction = (
+                f"The fan asked about {region_key.title()}. Zarna HAS upcoming shows in {region_key.title()}: "
+                f"{listed}{more}. OPEN with the clear verdict up front — yes, you ARE coming to {region_key.title()} — "
+                f"then name those shows with their dates. END with a warm 'I'd love to see you there!'"
+            )
+            return ShowDirective(instruction=instruction, ticket_url=generic)
 
     # Message shape is always: a clear verdict FIRST (are we coming / not coming /
     # were just there), then the warm "I'd love to see you there!" close LAST.
     upcoming_match = _match_city(message, cal.upcoming)
+    past_match = _match_city(message, cal.recent_past)
+
+    # Same city name on both lists (e.g. Portland OR just happened, Portland ME is
+    # upcoming): if the fan explicitly named the PAST show's state and not the
+    # upcoming one's, they mean the past show — don't sell them the other city.
+    if (
+        upcoming_match is not None
+        and past_match is not None
+        and upcoming_match.city.lower() == past_match.city.lower()
+        and _region_in_text(past_match.region, text_lower, raw_message=message)
+        and not _region_in_text(upcoming_match.region, text_lower, raw_message=message)
+    ):
+        upcoming_match = None
+
+    # No city named? A date the fan typed ("dec 4", "12/4") can still identify the
+    # show — critical so the bot never denies a show it actually has on that date.
+    date_asked = False
+    if upcoming_match is None and past_match is None:
+        date_asked = bool(_dates_in_message(message))
+        upcoming_match = _match_date(message, cal.upcoming)
+
     if upcoming_match:
         when = upcoming_match.date_label or "the upcoming date"
         venue = upcoming_match.venue or "the venue"
+        region = f", {upcoming_match.region}" if upcoming_match.region else ""
         instruction = (
-            f"The fan asked about {upcoming_match.city}. Zarna HAS an upcoming show there: "
-            f"{venue} in {upcoming_match.city} on {when}. "
+            f"The fan asked about {upcoming_match.city}{region} (or that show's date). "
+            f"Zarna HAS an upcoming show there: "
+            f"{venue} in {upcoming_match.city}{region} on {when}. "
             f"OPEN the reply with the clear verdict up front — that you ARE coming to "
             f"{upcoming_match.city}, naming the venue and the exact date in the first sentence. "
+            f"If the fan says they can't find tickets, reassure them this show is real and "
+            f"on sale at the link below — never deny this show exists. "
             f"END with a warm invitation like 'I'd love to see you there!' "
             f"Keep it to 1-2 short sentences."
         )
         return ShowDirective(instruction=instruction,
                              ticket_url=upcoming_match.ticket_url or generic)
 
-    past_match = _match_city(message, cal.recent_past)
     if past_match:
         venue = past_match.venue or "town"
         when = past_match.date_label or "recently"
@@ -513,16 +653,18 @@ def build_show_directive(message: str, creator_config) -> Optional[ShowDirective
         )
         return ShowDirective(instruction=instruction, ticket_url=generic)
 
-    region_key, region_shows = _match_region(message, cal.upcoming)
-    if region_shows:
-        listed = "; ".join(
-            f"{s.venue or s.city} in {s.city} on {s.date_label}" for s in region_shows[:4]
-        )
-        more = " (and more)" if len(region_shows) > 4 else ""
+    # Fan named a specific date but no show covers it: say so honestly, then point
+    # to the next show — never leave the LLM to guess (that's how denials of real
+    # shows happened before).
+    if date_asked and cal.upcoming:
+        nxt = cal.upcoming[0]
+        nxt_when = nxt.date_label or "soon"
+        nxt_where = nxt.city or "the next city"
         instruction = (
-            f"The fan asked about {region_key.title()}. Zarna HAS upcoming shows in {region_key.title()}: "
-            f"{listed}{more}. OPEN with the clear verdict up front — yes, you ARE coming to {region_key.title()} — "
-            f"then name those shows with their dates. END with a warm 'I'd love to see you there!'"
+            f"The fan asked about a specific date, and Zarna has NO show on that exact date. "
+            f"OPEN by saying plainly you don't have a show that day. THEN point them to your "
+            f"NEXT show: {nxt.venue or nxt_where} in {nxt_where} on {nxt_when}, and tell them "
+            f"the full schedule is at the tickets page. END warmly. Do not invent any other date."
         )
         return ShowDirective(instruction=instruction, ticket_url=generic)
 
@@ -535,13 +677,16 @@ def build_show_directive(message: str, creator_config) -> Optional[ShowDirective
         where = nxt.city or "the next city"
         venue_part = f"{nxt.venue} in " if nxt.venue else ""
         instruction = (
-            f"OPEN with the clear verdict up front: if the fan named a specific city, say plainly "
-            f"in the first sentence whether you're coming there — and since that city is NOT in the "
-            f"list below, tell them you don't have it booked yet. "
+            f"OPEN with the clear verdict up front: if the fan clearly named a specific city, say "
+            f"plainly in the first sentence whether you're coming there — and since that city is NOT "
+            f"in the list below, tell them you don't have it booked yet. If you can't tell which city "
+            f"or date they mean, do NOT deny any show — just point them to the tickets page for the "
+            f"full schedule. "
             f"THEN point them to your NEXT show: {venue_part}{where} on {when}, named explicitly with "
             f"its date. There are more upcoming dates ({summary}) — you may mention one or two. "
             f"END with a warm 'I'd love to see you there!' Never claim a show in a city that isn't "
-            f"in this list."
+            f"in this list, and never state that a specific city or date has no show unless the fan "
+            f"clearly named it and it's absent from this list."
         )
         return ShowDirective(instruction=instruction, ticket_url=generic)
 
