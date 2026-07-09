@@ -59,15 +59,44 @@ _volume_lock = threading.Lock()
 _last_alert_at = 0.0
 
 
-def _to_e164_us(raw: str) -> Optional[str]:
-    """Normalize a user-typed US number to E.164 (+1XXXXXXXXXX), else None.
+def _to_e164(raw: str) -> Optional[str]:
+    """Normalize a user-typed phone number to E.164, or None if implausible.
 
-    Handles the formats a bracelet-page visitor actually types — "(646) 640-6086",
-    "646-640-6086", "6466406086", "16466406086", "+16466406086" — all of which
-    must match the E.164 value stored in live_show_signups.
+    Works for SMS *and* WhatsApp, US *and* international, because it canonicalizes
+    to the exact E.164 form Twilio stores in live_show_signups (WhatsApp inbound
+    has its "whatsapp:" prefix stripped before storage, so both channels land as
+    a plain "+<countrycode><number>").
+
+    Three input shapes are accepted:
+      * Already international — a leading "+" (e.g. "+44 20 7946 0958"). The
+        country code the caller supplied is trusted; we only require a plausible
+        E.164 length (8–15 digits, per ITU-T E.164).
+      * "00" international access prefix (e.g. "0044 20 7946 0958") — the "00" is
+        dropped and the rest treated as an international number.
+      * Bare US/Canada (NANP) convenience — a 10-digit number, or 11 digits
+        starting with "1", gets a "+1" prefix. This is a fallback for callers
+        that don't send a country code; the VIP page's country picker always
+        sends a full "+" number, so international fans never hit this branch.
+
+    Over-permissive on purpose: a wrong-but-plausible number simply fails to
+    match a real signup and returns {"subscribed": false} — never a false yes.
     """
     raw = (raw or "").strip()
+    if not raw:
+        return None
+
+    compact = raw.replace(" ", "")
     digits = _DIGITS.sub("", raw)
+    if not digits:
+        return None
+
+    if compact.startswith("+"):
+        return "+" + digits if 8 <= len(digits) <= 15 else None
+
+    if compact.startswith("00"):
+        digits = digits[2:]
+        return "+" + digits if 8 <= len(digits) <= 15 else None
+
     if len(digits) == 10:
         return f"+1{digits}"
     if len(digits) == 11 and digits.startswith("1"):
@@ -122,7 +151,8 @@ def verify_signup():
 
     The phone is sent in the POST body (JSON {"phone": "..."} or form field),
     NOT the URL — keeping the fan's number out of access logs, proxies, and
-    browser history. Any common US format is accepted and normalized here.
+    browser history. Any common US or international format is accepted and
+    normalized to E.164 here (works for both SMS and WhatsApp signups).
 
     Responses:
         200 {"subscribed": true|false}
@@ -148,7 +178,7 @@ def verify_signup():
     if not raw_phone:
         return jsonify({"error": "phone is required"}), 400
 
-    phone = _to_e164_us(raw_phone)
+    phone = _to_e164(raw_phone)
     if not phone:
         return jsonify({"error": "invalid phone"}), 400
 
