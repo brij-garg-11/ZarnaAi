@@ -85,12 +85,32 @@
     s.onerror = function () { wireSms(null); };  // degrade gracefully to manual entry
     document.head.appendChild(s);
   }
-  // Make the picker span the field width (iti wraps the input in .iti).
+  // intl-tel-input wraps #zg-phone in a <div class="iti">. Make that wrapper a
+  // proper flex child so the input grows and the "Sign up" button keeps its
+  // size on one row; and lift the body-appended dropdown above the step cards.
   function injectStyle() {
     if (byId('zg-iti-style')) return;
     var st = document.createElement('style');
     st.id = 'zg-iti-style';
-    st.textContent = '.zg-vip .iti{width:100%}';
+    st.textContent =
+      // Make the wrapper a proper flex child so the input grows + button fits.
+      '.zg-vip .zg-field .iti{flex:1 1 auto;min-width:0;}' +
+      '.zg-vip .zg-field .iti input{width:100%;}' +
+      // Float the body-appended dropdown above the step cards.
+      '.iti--container{z-index:99999;}' +
+      // The Movedo theme paints EVERY <button> pink (background-color:#ef4984);
+      // intl-tel-input's flag selector + search-clear are <button>s, so undo it.
+      '.zg-vip .iti__selected-country{background:transparent!important;color:inherit!important;' +
+        'min-width:0!important;width:auto!important;height:100%!important;padding:0 8px!important;' +
+        'border:0!important;box-shadow:none!important;}' +
+      '.zg-vip .iti__selected-country:hover,.zg-vip .iti__selected-country:focus{' +
+        'background:rgba(0,0,0,.05)!important;color:inherit!important;}' +
+      '.iti--container .iti__search-clear{background:transparent!important;color:inherit!important;' +
+        'min-width:0!important;padding:0!important;border:0!important;box-shadow:none!important;}' +
+      // Search box ships with no vertical padding (looks squashed) — give it height.
+      '.iti--container .iti__search-input{height:auto!important;min-height:0!important;' +
+        'line-height:1.4!important;padding:10px 30px 10px 32px!important;font-size:15px!important;' +
+        'box-sizing:border-box!important;}';
     document.head.appendChild(st);
   }
 
@@ -104,6 +124,7 @@
         iti = window.intlTelInput(phoneInput, {
           initialCountry: 'us',
           countrySearch: true,                 // searchable dropdown (v25 default)
+          dropdownContainer: document.body,     // v25.14.1 option name; floats the dropdown above the step cards (fixed-position, z-index 1060+)
           loadUtils: function () { return import(CFG.iti.utils); }
         });
       } catch (e) { iti = null; }
