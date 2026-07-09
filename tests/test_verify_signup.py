@@ -18,6 +18,7 @@ from app import verify
 @pytest.mark.parametrize(
     "raw,expected",
     [
+        # US / Canada bare-number convenience (no country code supplied)
         ("6466406086", "+16466406086"),
         ("(646) 640-6086", "+16466406086"),
         ("646-640-6086", "+16466406086"),
@@ -25,15 +26,29 @@ from app import verify
         ("16466406086", "+16466406086"),
         ("+1 (646) 640-6086", "+16466406086"),
         ("  6466406086  ", "+16466406086"),
+        # International — leading "+" (what the VIP country picker always sends)
+        ("+44 20 7946 0958", "+442079460958"),
+        ("+91 98765 43210", "+919876543210"),
+        ("+61 2 1234 5678", "+61212345678"),
+        # International — "00" access prefix
+        ("0044 20 7946 0958", "+442079460958"),
     ],
 )
-def test_to_e164_us_valid(raw, expected):
-    assert verify._to_e164_us(raw) == expected
+def test_to_e164_valid(raw, expected):
+    assert verify._to_e164(raw) == expected
 
 
-@pytest.mark.parametrize("raw", ["", "   ", "abc", "12345", "011234567890", "+44 20 7946 0958"])
-def test_to_e164_us_invalid(raw):
-    assert verify._to_e164_us(raw) is None
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "", "   ", "abc", "12345",
+        "011234567890",   # bare 12 digits, no + / 00 → not a NANP number
+        "+123",           # too short to be a real E.164 number
+        "+1234567890123456",  # 16 digits → longer than E.164 allows
+    ],
+)
+def test_to_e164_invalid(raw):
+    assert verify._to_e164(raw) is None
 
 
 # --------------------------------------------------------------------------- #
