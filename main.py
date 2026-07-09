@@ -33,6 +33,7 @@ from app.analytics.blueprint import analytics_bp
 from app.live_shows.blueprint import live_shows_bp
 from app.smb.blueprint import smb_bp
 from app.smb.portal import portal_bp
+from app.verify import verify_bp
 # Note: the canonical interactive client portal lives in
 # operator/app/routes/smb_portal.py and runs on the operator service.
 # A second unregistered copy used to live at app/smb/portal_interactive.py;
@@ -269,6 +270,8 @@ app.register_blueprint(analytics_bp)
 app.register_blueprint(live_shows_bp)
 app.register_blueprint(smb_bp)
 app.register_blueprint(portal_bp)
+app.register_blueprint(verify_bp)
+
 
 brain     = create_brain()
 slicktext = create_slicktext_adapter()
