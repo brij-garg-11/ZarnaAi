@@ -69,24 +69,19 @@ def test_main_py_documents_canonical_portal_location():
 # ---------------------------------------------------------------------------
 
 def test_dedup_comment_matches_actual_buffer_size():
-    """main.py dedup comment must say '1000' to match _MAX_SEEN, not the stale '200'."""
-    src = _read("main.py")
+    """Dedup lives in app/inbound_dedup.py now — _MAX_SEEN must still be 1000,
+    and main.py must delegate to the shared module (cross-worker dedup)."""
+    src = _read("app/inbound_dedup.py")
 
-    # _MAX_SEEN should be 1000 (current value)
     match = re.search(r"_MAX_SEEN\s*=\s*(\d+)", src)
-    assert match, "_MAX_SEEN constant not found"
+    assert match, "_MAX_SEEN constant not found in app/inbound_dedup.py"
     actual = int(match.group(1))
     assert actual == 1000, f"_MAX_SEEN expected 1000, got {actual}"
 
-    # The header comment block must reference the same number, not '200'
-    idx = src.find("Deduplication:")
-    assert idx != -1, "Deduplication comment header not found"
-    header = src[idx: idx + 300]
-    assert "1000" in header, (
-        f"Deduplication header comment must mention {actual} message IDs (was the stale '200')"
-    )
-    assert "200 message IDs" not in header, (
-        "Deduplication header still references stale '200' — should be '1000'"
+    main_src = _read("main.py")
+    assert "from app.inbound_dedup import already_processed as _already_processed" in main_src, (
+        "main.py must delegate dedup to app.inbound_dedup so both webhook handlers "
+        "share the cross-worker Postgres claim table"
     )
 
 

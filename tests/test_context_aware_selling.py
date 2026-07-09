@@ -249,8 +249,20 @@ class TestPromptContainsSellLinks:
         assert MERCH_LINK in prompt
 
     def test_show_variant_b_note_in_prompt(self):
-        prompt = self._make_prompt(Intent.SHOW, sell_variant="B")
+        # Variant B references the fan's city/show history, so it's only injected
+        # when sell_context actually exists — otherwise the model invents a
+        # location ("great to hear from you in Marin County!").
+        prompt = self._make_prompt(
+            Intent.SHOW, sell_context="Fan is from Chicago.", sell_variant="B",
+        )
         assert "Variant B" in prompt, "Variant B note missing from SHOW prompt"
+
+    def test_show_variant_b_suppressed_without_context(self):
+        prompt = self._make_prompt(Intent.SHOW, sell_variant="B")
+        assert "Variant B" not in prompt, (
+            "Variant B note must be suppressed when there is no fan context — "
+            "it makes the model guess the fan's city"
+        )
 
     def test_merch_variant_b_note_in_prompt(self):
         prompt = self._make_prompt(Intent.MERCH, sell_variant="B")

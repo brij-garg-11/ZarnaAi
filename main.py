@@ -4,7 +4,6 @@ import logging
 import os
 import threading
 import time
-from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 load_dotenv()
@@ -290,26 +289,13 @@ if running_in_production() and not os.getenv("TWILIO_AUTH_TOKEN"):
     )
 
 # ---------------------------------------------------------------------------
-# Deduplication: last 1000 message IDs (SlickText + Twilio).
-# Per-process LRU — multi-worker deploys still risk processing the same
-# message twice across workers; tracked in the audit (H4).
+# Deduplication (SlickText + Twilio): per-worker LRU fast path + shared
+# Postgres claim table so the SAME message retried onto TWO gunicorn workers
+# can no longer produce two AI replies (closes audit item H4).
+# Logic lives in app/inbound_dedup.py; fail-open if the DB is unreachable.
 # ---------------------------------------------------------------------------
 
-_seen_message_ids: OrderedDict = OrderedDict()
-_seen_lock = threading.Lock()
-_MAX_SEEN = 1000
-
-
-def _already_processed(message_id: str) -> bool:
-    if not message_id:
-        return False
-    with _seen_lock:
-        if message_id in _seen_message_ids:
-            return True
-        _seen_message_ids[message_id] = True
-        if len(_seen_message_ids) > _MAX_SEEN:
-            _seen_message_ids.popitem(last=False)
-    return False
+from app.inbound_dedup import already_processed as _already_processed
 
 
 # ---------------------------------------------------------------------------

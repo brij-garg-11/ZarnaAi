@@ -28,7 +28,10 @@ ToneMode = Literal[
 
 _VULNERABLE_RE = re.compile(
     r"\b(sad|anxious|anxiety|depress|grief|grieving|panic|hurt|heartbroken|"
-    r"loss|cancer|illness|scared|not okay|overwhelmed|lonely)\b",
+    r"loss|cancer|illness|scared|not okay|overwhelmed|lonely|"
+    r"hopeless|worthless|miserable|devastated|struggling|crying|"
+    r"passed away|funeral|rough (day|week|month|year|time)|"
+    r"hard (day|week|month|year|time)|divorce)\b",
     re.IGNORECASE,
 )
 _CELEBRATORY_RE = re.compile(

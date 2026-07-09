@@ -101,6 +101,24 @@ class ZarnaBrain:
         # 2. Persist the user's message
         self.storage.save_message(phone_number, "user", message_text)
 
+        # 2a. CRISIS GATE — suicidal/self-harm signals get a fixed, deterministic
+        #     988 response. No LLM involved: the right reply here can never be
+        #     left to whatever the model generates that day. The message is
+        #     flagged to safety_flags for operator review on zar.bot.
+        from app.brain.crisis import CRISIS_RESPONSE, check_crisis, record_safety_flag
+        crisis = check_crisis(message_text)
+        if crisis is not None:
+            _logger.info(
+                "[ZARNA] crisis gate fired phone=...%s pattern=%s",
+                phone_number[-4:] if phone_number else "?", crisis.label,
+            )
+            _executor.submit(
+                record_safety_flag,
+                phone_number, message_text, crisis.label, self.slug, CRISIS_RESPONSE,
+            )
+            self.storage.save_message(phone_number, "assistant", CRISIS_RESPONSE)
+            return CRISIS_RESPONSE
+
         # 2b. Conversation closers (lol, thanks, ok) — no reply expected
         if is_conversation_ender(message_text):
             return ""
