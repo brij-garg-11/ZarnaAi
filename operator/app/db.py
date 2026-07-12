@@ -664,6 +664,38 @@ def init_db():
         "ALTER TABLE podcast_campaigns ADD COLUMN IF NOT EXISTS scan_found  INT NOT NULL DEFAULT 0",
         "ALTER TABLE podcast_campaigns ADD COLUMN IF NOT EXISTS scan_error  TEXT",
         "ALTER TABLE podcast_campaigns ADD COLUMN IF NOT EXISTS scanned_at  TIMESTAMPTZ",
+        # Newsletter CTA responses — one campaign per newsletter issue; the
+        # campaign stores the CTA question so the AI scan can isolate replies.
+        # Mirrors the podcast tables (also created by the main app migrations).
+        """
+        CREATE TABLE IF NOT EXISTS newsletter_campaigns (
+            id              SERIAL PRIMARY KEY,
+            label           TEXT NOT NULL,
+            newsletter_date DATE,
+            question        TEXT NOT NULL DEFAULT '',
+            scan_status     TEXT NOT NULL DEFAULT 'idle',
+            scan_found      INT NOT NULL DEFAULT 0,
+            scan_error      TEXT,
+            scanned_at      TIMESTAMPTZ,
+            creator_slug    TEXT NOT NULL DEFAULT 'zarna',
+            created_at      TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS newsletter_submissions (
+            id            BIGSERIAL PRIMARY KEY,
+            phone_number  TEXT NOT NULL,
+            message_id    BIGINT,
+            campaign_id   INT REFERENCES newsletter_campaigns(id) ON DELETE SET NULL,
+            response      TEXT NOT NULL DEFAULT '',
+            status        TEXT NOT NULL DEFAULT 'new',
+            creator_slug  TEXT NOT NULL DEFAULT 'zarna',
+            created_at    TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE (phone_number, message_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_newsletter_submissions_campaign ON newsletter_submissions (campaign_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_newsletter_submissions_phone ON newsletter_submissions (phone_number)",
     ]
 
     conn = get_conn()

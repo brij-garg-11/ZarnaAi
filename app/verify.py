@@ -56,7 +56,10 @@ except ValueError:
     _VOLUME_ALERT_PER_MIN = 300
 _volume_hits: list = []
 _volume_lock = threading.Lock()
-_last_alert_at = 0.0
+# -inf so the first alert is never throttled: time.monotonic() is time since
+# boot, which can be < _VOLUME_WINDOW on a freshly booted host (e.g. CI runners,
+# new containers), and 0.0 would wrongly suppress the first warning there.
+_last_alert_at = float("-inf")
 
 
 def _to_e164(raw: str) -> Optional[str]:
