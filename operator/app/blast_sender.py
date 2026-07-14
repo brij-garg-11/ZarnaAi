@@ -160,10 +160,6 @@ def execute_blast(draft_id: int):
             _combined += f"\n\nAdditional context from the operator: {_extra_note}"
         _create_blast_context_session(draft_id, _combined, creator_slug=blast_owner_slug)
 
-    sent = 0
-    failed = 0
-    sent_phones: list[str] = []
-
     # Build base URL for personalized per-fan tracked links
     main_base_for_token = ""
     if tracked_link_slug:
@@ -172,92 +168,113 @@ def execute_blast(draft_id: int):
             railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
             main_base_for_token = f"https://{railway_domain}" if railway_domain else ""
 
-    for i, phone in enumerate(phones):
-        try:
-            # Build a per-fan body: apply {{name}} / {{location}} merge tags,
-            # then append a personalized tracked URL if one exists.
-            fan_info = fan_data.get(phone, {}) if needs_merge else {}
+    def _build_fan_body(phone: str) -> str:
+        """Per-fan body: {{name}} / {{location}} merge tags + personalized tracked URL."""
+        if needs_merge:
+            fan_info = fan_data.get(phone, {})
             fan_name = fan_info.get("fan_name", "") or "friend"
             fan_location = fan_info.get("fan_location", "")
+            fan_body_base = body.replace("{{name}}", fan_name).replace("{{location}}", fan_location)
+        else:
+            fan_body_base = body
 
-            if needs_merge:
-                fan_body_base = body.replace("{{name}}", fan_name).replace("{{location}}", fan_location)
-            else:
-                fan_body_base = body
+        if tracked_link_slug and main_base_for_token:
+            from base64 import urlsafe_b64encode
+            fan_token = urlsafe_b64encode(phone.encode()).decode()
+            return f"{fan_body_base}\n{main_base_for_token}/t/{tracked_link_slug}?f={fan_token}"
+        return fan_body_base if needs_merge else send_body
 
-            if tracked_link_slug and main_base_for_token:
-                from base64 import urlsafe_b64encode
-                fan_token = urlsafe_b64encode(phone.encode()).decode()
-                fan_tracked_url = f"{main_base_for_token}/t/{tracked_link_slug}?f={fan_token}"
-                fan_body = f"{fan_body_base}\n{fan_tracked_url}"
-            else:
-                fan_body = fan_body_base if needs_merge else send_body
-
-            ok = _send_one(phone, fan_body, channel, media_url=media_url)
-            logger.info("  send to ...%s via %s: %s", phone[-4:], channel, "OK" if ok else "FAIL")
-            if ok:
-                sent += 1
-                sent_phones.append(phone)
-                # Charge credits to the blast owner (per recipient, per segment).
-                # MMS gets a flat 3-credit charge handled by count_segments.
-                if blast_owner_user_id:
-                    try:
-                        segments = count_segments(fan_body, has_media=bool(media_url))
-                        consume_credit(
-                            user_id=blast_owner_user_id,
-                            slug=blast_owner_slug,
-                            kind=KIND_BLAST_SENT,
-                            credits=segments,
-                            source_id=f"blast:{draft_id}",
-                        )
-                    except Exception:
-                        logger.warning("consume_credit failed for blast %s recipient", draft_id, exc_info=True)
-                # Save a messages row for every recipient so the outbound blast
-                # shows up in the operator inbox thread (previously only saved
-                # when a tracked link was present, which left plain blasts
-                # invisible in the inbox — fans' replies appeared with no
-                # preceding message). has_link drives link_clicked_1h tracking.
-                _save_blast_message(
-                    phone, fan_body, blast_owner_slug or "",
-                    has_link=bool(tracked_link_slug),
-                )
-            else:
-                failed += 1
-        except Exception as e:
-            logger.warning("  send error for ...%s: %s", phone[-4:], e)
-            failed += 1
-        time.sleep(0.05)
-        # Write progress every 50 sends so the UI can poll live counts
-        if (i + 1) % 50 == 0:
-            mark_blast_progress(draft_id, sent, failed)
-            # Check for cancellation — operator may have cancelled mid-send
+    def _after_success(phone: str, fan_body: str) -> None:
+        """Post-send bookkeeping: credits + inbox message row. Thread-safe
+        (each call opens its own DB connection)."""
+        # Charge credits to the blast owner (per recipient, per segment).
+        # MMS gets a flat 3-credit charge handled by count_segments.
+        if blast_owner_user_id:
             try:
-                current = get_blast_draft(draft_id)
-                if current and current.get("status") == "cancelled":
-                    logger.warning("=== BLAST %s CANCELLED mid-send at %s/%s — stopping ===",
-                                   draft_id, sent, total)
+                segments = count_segments(fan_body, has_media=bool(media_url))
+                consume_credit(
+                    user_id=blast_owner_user_id,
+                    slug=blast_owner_slug,
+                    kind=KIND_BLAST_SENT,
+                    credits=segments,
+                    source_id=f"blast:{draft_id}",
+                )
+            except Exception:
+                logger.warning("consume_credit failed for blast %s recipient", draft_id, exc_info=True)
+        # Save a messages row for every recipient so the outbound blast
+        # shows up in the operator inbox thread. has_link drives
+        # link_clicked_1h tracking.
+        _save_blast_message(
+            phone, fan_body, blast_owner_slug or "",
+            has_link=bool(tracked_link_slug),
+        )
+
+    def _should_stop(sent: int, failed: int) -> bool:
+        """Checkpoint every ~50 sends: cancellation + credit quota."""
+        try:
+            current = get_blast_draft(draft_id)
+            if current and current.get("status") == "cancelled":
+                logger.warning("=== BLAST %s CANCELLED mid-send at %s/%s — stopping ===",
+                               draft_id, sent, total)
+                return True
+        except Exception as _ce:
+            logger.warning("Cancellation check failed (non-fatal): %s", _ce)
+        # Credit check: if the blast owner has blown through their quota
+        # (trial = 0 remaining, paid = past soft-grace ceiling), stop here
+        # rather than continuing to rack up overage.
+        if blast_owner_user_id:
+            try:
+                allowed, qstatus = check_send_quota(
+                    user_id=blast_owner_user_id, requested=1,
+                )
+                if not allowed:
+                    logger.warning(
+                        "=== BLAST %s STOPPED: credit limit hit at %s/%s (trial=%s) ===",
+                        draft_id, sent, total, qstatus.get("is_trial"),
+                    )
+                    return True
+            except Exception:
+                logger.warning("mid-send credit check failed (non-fatal)", exc_info=True)
+        return False
+
+    # Twilio supports concurrent high-throughput sending (account is
+    # provisioned for 25 MPS) — run a rate-limited thread pool. SlickText's
+    # per-number API has tight rate limits, so it keeps the sequential loop.
+    if channel != "slicktext":
+        sent, failed, sent_phones = _run_concurrent_twilio_blast(
+            draft_id=draft_id,
+            phones=phones,
+            build_fan_body=_build_fan_body,
+            media_url=media_url,
+            after_success=_after_success,
+            should_stop=_should_stop,
+            mark_progress=mark_blast_progress,
+        )
+    else:
+        sent = 0
+        failed = 0
+        sent_phones = []
+        for i, phone in enumerate(phones):
+            try:
+                fan_body = _build_fan_body(phone)
+                ok = _send_one(phone, fan_body, channel, media_url=media_url)
+                logger.info("  send to ...%s via %s: %s", phone[-4:], channel, "OK" if ok else "FAIL")
+                if ok:
+                    sent += 1
+                    sent_phones.append(phone)
+                    _after_success(phone, fan_body)
+                else:
+                    failed += 1
+            except Exception as e:
+                logger.warning("  send error for ...%s: %s", phone[-4:], e)
+                failed += 1
+            time.sleep(0.05)
+            # Write progress every 50 sends so the UI can poll live counts
+            if (i + 1) % 50 == 0:
+                mark_blast_progress(draft_id, sent, failed)
+                if _should_stop(sent, failed):
                     mark_blast_sent(draft_id, sent, failed, total)
                     return
-            except Exception as _ce:
-                logger.warning("Cancellation check failed (non-fatal): %s", _ce)
-
-            # Credit check: if the blast owner has blown through their quota
-            # (trial = 0 remaining, paid = past soft-grace ceiling), stop here
-            # rather than continuing to rack up overage.
-            if blast_owner_user_id:
-                try:
-                    allowed, qstatus = check_send_quota(
-                        user_id=blast_owner_user_id, requested=1,
-                    )
-                    if not allowed:
-                        logger.warning(
-                            "=== BLAST %s STOPPED: credit limit hit at %s/%s (trial=%s) ===",
-                            draft_id, sent, total, qstatus.get("is_trial"),
-                        )
-                        mark_blast_sent(draft_id, sent, failed, total)
-                        return
-                except Exception:
-                    logger.warning("mid-send credit check failed (non-fatal)", exc_info=True)
 
     mark_blast_sent(draft_id, sent, failed, total)
     logger.info("=== BLAST %s DONE: %s sent, %s failed of %s ===", draft_id, sent, failed, len(phones))
@@ -299,6 +316,122 @@ def execute_blast(draft_id: int):
             logger.info("  updated sent_to +%d for slug=%r", sent, tracked_link_slug)
         except Exception as e:
             logger.warning("  could not update sent_to: %s", e)
+
+
+def _run_concurrent_twilio_blast(
+    *,
+    draft_id: int,
+    phones: list[str],
+    build_fan_body,
+    media_url: str,
+    after_success,
+    should_stop,
+    mark_progress,
+) -> tuple[int, int, list[str]]:
+    """Concurrent Twilio blast paced to TWILIO_BROADCAST_MPS messages/sec.
+
+    Sends via a thread pool with one Twilio client per worker thread. A
+    shared RateLimiter guarantees the combined send rate never exceeds the
+    account MPS cap. Cancellation and credit-quota checks run every ~50
+    completed sends (same cadence as the old sequential loop); on stop the
+    remaining queue is drained without sending.
+
+    Returns (sent, failed, sent_phones).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from .blast_throughput import RateLimiter, broadcast_mps
+
+    n = len(phones)
+    mps = broadcast_mps()
+    limiter = RateLimiter(mps)
+    stop_event = threading.Event()
+    lock = threading.Lock()
+    state = {"sent": 0, "failed": 0, "done": 0, "sent_phones": []}
+
+    logger.info("  [Twilio] concurrent blast: %d recipients at %d MPS (~%ds expected)",
+                n, mps, n // max(1, mps))
+
+    # One Twilio client per worker thread — no shared HTTP session.
+    _tls = threading.local()
+
+    def _thread_client():
+        client = getattr(_tls, "client", None)
+        if client is None:
+            from twilio.rest import Client
+            account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+            auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+            if not account_sid or not auth_token:
+                return None
+            client = Client(account_sid, auth_token)
+            _tls.client = client
+        return client
+
+    from_number = os.getenv("TWILIO_PHONE_NUMBER", "")
+    messaging_service_sid = os.getenv("TWILIO_MESSAGING_SERVICE_SID", "")
+
+    def _send_with_client(client, phone: str, fan_body: str) -> bool:
+        # Route through the A2P messaging service when available — same
+        # compliance path as conversational replies.
+        if messaging_service_sid:
+            kwargs = dict(body=fan_body, messaging_service_sid=messaging_service_sid, to=phone)
+        else:
+            kwargs = dict(body=fan_body, from_=from_number, to=phone)
+        if media_url:
+            kwargs["media_url"] = [media_url]
+        msg = client.messages.create(**kwargs)
+        return msg.sid is not None
+
+    def worker(phone: str) -> None:
+        if stop_event.is_set():
+            return
+        limiter.acquire()
+        if stop_event.is_set():
+            return
+        ok = False
+        fan_body = ""
+        try:
+            fan_body = build_fan_body(phone)
+            client = _thread_client()
+            if client is None:
+                logger.error("Twilio credentials not configured")
+            else:
+                ok = _send_with_client(client, phone, fan_body)
+        except Exception as e:
+            logger.warning("  send error for ...%s: %s", str(phone)[-4:], e)
+
+        if ok:
+            try:
+                after_success(phone, fan_body)
+            except Exception:
+                logger.warning("post-send bookkeeping failed for ...%s", str(phone)[-4:], exc_info=True)
+
+        run_checkpoint = False
+        with lock:
+            if ok:
+                state["sent"] += 1
+                state["sent_phones"].append(phone)
+            else:
+                state["failed"] += 1
+            state["done"] += 1
+            if state["done"] % 50 == 0 or state["done"] == n:
+                run_checkpoint = True
+            snap = (state["sent"], state["failed"])
+
+        # Progress write + cancellation/credit check outside the lock so the
+        # DB round-trips never serialize the other workers.
+        if run_checkpoint and not stop_event.is_set():
+            try:
+                mark_progress(draft_id, snap[0], snap[1])
+            except Exception:
+                logger.warning("blast progress write failed (non-fatal)", exc_info=True)
+            if should_stop(snap[0], snap[1]):
+                stop_event.set()
+
+    workers = max(1, min(mps, n))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(worker, phones))
+
+    return state["sent"], state["failed"], state["sent_phones"]
 
 
 def execute_blast_async(draft_id: int):
