@@ -6131,6 +6131,11 @@ from .newsletter import register_newsletter_api_routes  # noqa: E402
 
 register_newsletter_api_routes(api_bp, _slug_or_abort, _require_performer_account)
 
+# ── Starred fans ───────────────────────────────────────────────────────────────
+from .starred import register_starred_api_routes  # noqa: E402
+
+register_starred_api_routes(api_bp, _slug_or_abort, _require_performer_account)
+
 # ── Safety review (crisis flags from the main app's crisis gate) ──────────────
 from .safety import register_safety_api_routes  # noqa: E402
 

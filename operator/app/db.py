@@ -696,6 +696,18 @@ def init_db():
         """,
         "CREATE INDEX IF NOT EXISTS idx_newsletter_submissions_campaign ON newsletter_submissions (campaign_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_newsletter_submissions_phone ON newsletter_submissions (phone_number)",
+        # Starred fans — creator bookmarks a fan (star icon in the dashboard
+        # inbox) so they can find them again in the Starred Fans tab.
+        # Mirrors the main app migration (both run CREATE IF NOT EXISTS).
+        """
+        CREATE TABLE IF NOT EXISTS starred_fans (
+            id            BIGSERIAL PRIMARY KEY,
+            phone_number  TEXT NOT NULL,
+            creator_slug  TEXT NOT NULL DEFAULT 'zarna',
+            created_at    TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE (creator_slug, phone_number)
+        )
+        """,
     ]
 
     conn = get_conn()
