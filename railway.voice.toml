@@ -1,0 +1,34 @@
+# Voice service config (inbound phone calls via Twilio ConversationRelay).
+# Deploy this as a SEPARATE Railway service from the main web app. It shares the
+# same Dockerfile/image but starts an ASGI (uvicorn) server instead of gunicorn.
+#
+# Required env vars on this service:
+#   CREATOR_SLUG            -> e.g. "zarna"
+#   DATABASE_URL            -> same DB as the creator's main app
+#   GEMINI_API_KEY          -> reply generation
+#   TWILIO_AUTH_TOKEN       -> voice webhook signature validation
+#   TWILIO_VALIDATE_SIGNATURE = "true"
+#   ELEVENLABS_API_KEY      -> only if you mint short-lived creds; the ElevenLabs
+#                              key for TTS is configured in the Twilio Console
+#   VOICE_WSS_URL           -> optional override, e.g. wss://<voice-host>/voice/relay
+#
+# Twilio number config (on +18556081717): set the Voice "A call comes in" webhook
+# to POST https://<voice-host>/twilio/voice
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "uvicorn app.voice.server:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/health"
+watchPatterns = [
+  "app/brain/**",
+  "app/retrieval/**",
+  "app/voice/**",
+  "creator_config/**",
+  "training_data/**",
+  "voice_main.py",
+  "requirements.txt",
+  "Dockerfile",
+]

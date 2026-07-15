@@ -36,6 +36,27 @@ class CreatorLinks:
 
 
 @dataclass
+class VoiceSettings:
+    """Phone-voice (inbound call) settings — all optional and OFF by default.
+
+    When `enabled` is False (the default for every creator that hasn't opted in),
+    the voice service refuses to answer, so adding this block can never change
+    SMS behaviour. `voice_id` is the ElevenLabs voice clone id used by Twilio
+    ConversationRelay for text-to-speech; it is a non-secret identifier.
+    """
+    enabled: bool = False
+    provider: str = "elevenlabs"
+    voice_id: str = ""
+    greeting: str = ""  # spoken when the call connects — MUST disclose it's an AI
+    style_rules_text: str = ""  # spoken-voice style guidance appended to the prompt
+    language: str = "en-US"
+    # Caller-ID personalization: phone number -> persona note injected into the
+    # prompt when that number calls (e.g. the creator's family members). Numbers
+    # are matched loosely (any formatting, with or without country code).
+    known_callers: dict = field(default_factory=dict)
+
+
+@dataclass
 class CreatorConfig:
     slug: str
     name: str  # display name, e.g. "Zarna Garg"
@@ -83,6 +104,10 @@ class CreatorConfig:
     style_rules_text: str = ""
     tone_examples_text: str = ""
 
+    # Phone-voice (inbound call) settings. Defaults to disabled, so creators
+    # without a "voice" block in their config are never reachable by phone.
+    voice: VoiceSettings = field(default_factory=VoiceSettings)
+
 
 # ---------------------------------------------------------------------------
 # Internal builder
@@ -97,6 +122,19 @@ def _build_from_dict(slug: str, data: dict) -> CreatorConfig:
         youtube=links_raw.get("youtube", ""),
         book_title=links_raw.get("book_title", ""),
         book_phrases=tuple(links_raw.get("book_phrases", [])),
+    )
+    voice_raw = data.get("voice", {}) or {}
+    known_callers_raw = voice_raw.get("known_callers") or {}
+    if not isinstance(known_callers_raw, dict):
+        known_callers_raw = {}
+    voice = VoiceSettings(
+        enabled=bool(voice_raw.get("enabled", False)),
+        provider=str(voice_raw.get("provider", "elevenlabs") or "elevenlabs"),
+        voice_id=str(voice_raw.get("voice_id", "") or ""),
+        greeting=str(voice_raw.get("greeting", "") or ""),
+        style_rules_text=str(voice_raw.get("style_rules_text", "") or ""),
+        language=str(voice_raw.get("language", "en-US") or "en-US"),
+        known_callers={str(k): str(v) for k, v in known_callers_raw.items()},
     )
     return CreatorConfig(
         slug=slug,
@@ -122,6 +160,7 @@ def _build_from_dict(slug: str, data: dict) -> CreatorConfig:
         voice_lock_rules_text=data.get("voice_lock_rules_text", ""),
         style_rules_text=data.get("style_rules_text", ""),
         tone_examples_text=data.get("tone_examples_text", ""),
+        voice=voice,
     )
 
 

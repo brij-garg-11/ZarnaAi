@@ -442,10 +442,20 @@ def _fast_classify(message: str) -> Intent | None:
     return None
 
 
-def classify_intent(message: str, creator_config: "Optional[CreatorConfig]" = None) -> Intent:
+def classify_intent(
+    message: str,
+    creator_config: "Optional[CreatorConfig]" = None,
+    allow_llm: bool = True,
+) -> Intent:
     fast = _fast_classify(message)
     if fast is not None:
         return fast
+
+    # Latency-sensitive callers (e.g. live voice calls) skip the Gemini fallback
+    # to avoid a second round-trip; an unmatched message just routes to GENERAL,
+    # whose conversational prompt handles open-ended speech well.
+    if not allow_llm:
+        return Intent.GENERAL
 
     # Build a creator-aware classification prompt.
     # Falls back to hardcoded Zarna identity when no config is provided.
