@@ -166,6 +166,28 @@ class TestGoldenOutputZarna:
         prompt = _prompt_for_intent(Intent.QUESTION, _zarna_config())
         assert "Baba Ramdev" in prompt, "Zarna's voice-lock rules must include Baba Ramdev"
 
+    def test_zarna_guardrails_forbid_meetups(self):
+        """Meetup requests ('can we meet for a drink?') must hit the in-person
+        guardrail — the bot must never agree to meet fans in person."""
+        prompt = _prompt_for_intent(Intent.GENERAL, _zarna_config())
+        assert "MEETING IN PERSON" in prompt, (
+            "Zarna's guardrails must include the MEETING IN PERSON rule"
+        )
+
+    def test_fallback_guardrails_forbid_meetups(self):
+        """The Python fallback guardrails (used when a creator config has no
+        hard_fact_guardrails_text) must also carry the meetup rule."""
+        prompt = _build_prompt(
+            intent=Intent.GENERAL,
+            user_message="can we meet for a drink?",
+            chunks=[],
+            history=[],
+            creator_config=None,
+        )
+        assert "MEETING IN PERSON" in prompt, (
+            "Fallback guardrails must include the MEETING IN PERSON rule"
+        )
+
 
 # ---------------------------------------------------------------------------
 # 3. Bleed-through — test_creator prompts must NOT contain Zarna-specific strings
