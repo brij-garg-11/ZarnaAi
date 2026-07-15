@@ -461,6 +461,7 @@ def _build_prompt(
     sell_variant: Optional[str] = None,
     creator_config: "Optional[CreatorConfig]" = None,
     show_directive: "Optional[object]" = None,
+    channel: str = "sms",
 ) -> str:
     # Resolve creator-specific values.
     #
@@ -509,6 +510,22 @@ def _build_prompt(
         if creator_config and creator_config.tone_examples_text
         else _TONE_EXAMPLES
     )
+
+    # Voice channel: append spoken-phone style guidance so the reply is written
+    # to be heard, not read. Uses the creator's configured voice style when set,
+    # otherwise a sensible default. SMS (the default) is completely unaffected.
+    if channel == "voice":
+        _voice_style = (
+            creator_config.voice.style_rules_text
+            if creator_config and getattr(creator_config, "voice", None)
+            and creator_config.voice.style_rules_text
+            else _VOICE_STYLE_DIRECTIVE
+        )
+        _style = (
+            f"{_style}\n\nSPOKEN PHONE CALL — this reply will be read aloud by a "
+            f"text-to-speech voice, so these rules OVERRIDE any formatting rule above "
+            f"that conflicts:\n{_voice_style}"
+        )
 
     _LOGGER.debug(
         "generator._build_prompt: creator=%s intent=%s tickets=%r merch=%r book=%r youtube=%r "
@@ -789,6 +806,35 @@ Message: {user_message}
 # ceiling exists purely to guard against pathological runaway output, and it
 # always trims on a clean sentence/word boundary.
 _MAX_CHARS = 1200
+
+# Default spoken-phone style, used when a creator's config has no voice.style_rules_text.
+# Kept generic (no creator-specific references) so it is safe for any creator.
+_VOICE_STYLE_DIRECTIVE = (
+    "Keep it to one or two short, punchy spoken sentences. Use natural contractions "
+    "and a warm, fast, conversational rhythm. Never use asterisks, markdown, emojis, "
+    "or any text formatting. Never read out URLs, links, or 'reply STOP' instructions — "
+    "if a link is needed, say you'll text it over. Just talk, like a real phone call."
+)
+
+# Matches URLs and bare domains we never want a TTS voice to read aloud.
+_URL_RE = re.compile(r"\b(?:https?://|www\.)\S+|\b[a-z0-9][a-z0-9\-]*\.(?:com|org|net|io|us|co)(?:/\S*)?\b", re.IGNORECASE)
+
+
+def _voiceify(text: str) -> str:
+    """Make an LLM reply safe and natural for text-to-speech playback.
+
+    Strips emphasis asterisks/markdown and removes URLs (a TTS engine reading a
+    full link aloud is awful). Collapses the whitespace left behind. This runs
+    ONLY for channel="voice"; SMS replies are untouched.
+    """
+    text = strip_all_emphasis(text or "")
+    text = _URL_RE.sub("", text)
+    # tidy up artifacts left by URL removal (double spaces, space before punctuation,
+    # dangling "here:"/"at" fragments at the end of a sentence)
+    text = re.sub(r"\s+([,.!?])", r"\1", text)
+    text = re.sub(r"\b(?:at|here|link)\s*([,.!?])", r"\1", text, flags=re.IGNORECASE)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return text.strip()
 
 
 def _apply_emphasis_policy(text: str, suppress_all: bool) -> str:
@@ -1111,6 +1157,7 @@ def generate_zarna_reply(
     sell_variant: Optional[str] = None,
     creator_config: "Optional[CreatorConfig]" = None,
     show_directive: "Optional[object]" = None,
+    channel: str = "sms",
 ) -> str:
     """
     Generate reply. For GENERAL/JOKE with multi-model enabled, pass routing_tier
@@ -1146,6 +1193,7 @@ def generate_zarna_reply(
         sell_variant=sell_variant,
         creator_config=creator_config,
         show_directive=show_directive,
+        channel=channel,
     )
 
     raw = _produce_raw_text(intent, prompt, routing_tier)
@@ -1167,6 +1215,13 @@ def generate_zarna_reply(
             )
             return _get_fallback(creator_config)
 
+    # Voice channel: a single spoken reply with no link-on-its-own-line layout,
+    # no asterisks, and no URLs read aloud. Handled before the SMS-specific
+    # structured-intent layout so phone replies are always speech-ready.
+    if channel == "voice":
+        cleaned = _strip_echo_mock(raw, user_message)
+        return _voiceify(_trim_reply(cleaned))
+
     # SHOW, BOOK, PODCAST, CLIP, and MERCH replies include a link on its own line — preserve both lines but still cap
     if intent in (Intent.SHOW, Intent.BOOK, Intent.PODCAST, Intent.CLIP, Intent.MERCH):
         lines = raw.splitlines()
@@ -1177,6 +1232,108 @@ def generate_zarna_reply(
     # Strip echo-mock opener before final trimming so the char limit is applied to clean text
     cleaned = _strip_echo_mock(raw, user_message)
     return _apply_emphasis_policy(_trim_reply(cleaned), emphasis_suppress_all)
+
+
+# ── Voice streaming generation ───────────────────────────────────────────────
+# Used only by the live phone-voice path (ElevenLabs custom-LLM endpoint). Streams
+# Gemini output sentence-by-sentence so text-to-speech can start on the first
+# sentence instead of waiting for the whole reply, and disables Gemini "thinking"
+# to cut time-to-first-token. SMS generation (generate_zarna_reply) is untouched.
+
+# Optional override so voice can run a faster model than SMS without affecting it.
+import os as _os
+_VOICE_GENERATION_MODEL = _os.getenv("VOICE_GENERATION_MODEL", GENERATION_MODEL)
+
+# Sentence boundary: terminal punctuation (optionally closing quote/bracket) + space,
+# or a newline. The trailing partial sentence stays buffered and is flushed at the end.
+_SENTENCE_BOUNDARY_RE = re.compile(r'[.!?]+["\'\)\]]*\s+|\n+')
+
+
+def _voice_stream_config():
+    """GenerateContentConfig that disables Gemini thinking for lowest latency.
+
+    Returns None if the installed google-genai is too old to expose ThinkingConfig,
+    in which case the caller streams without a config (still correct, just slower).
+    """
+    try:
+        from google.genai import types
+
+        return types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_budget=0)
+        )
+    except Exception:
+        return None
+
+
+def _clean_voice_sentence(sentence: str, user_message: str, is_first: bool) -> str:
+    s = (sentence or "").strip()
+    if not s:
+        return ""
+    if is_first:
+        s = _strip_echo_mock(s, user_message)
+    return _voiceify(s)
+
+
+def generate_zarna_reply_stream(
+    intent: Intent,
+    user_message: str,
+    chunks: List[str],
+    history: List[dict] = None,
+    fan_memory: str = "",
+    tone_mode: Optional[str] = None,
+    creator_config: "Optional[CreatorConfig]" = None,
+):
+    """Yield spoken-ready reply sentences for a live voice call.
+
+    Voice-only. Produces the same speech-shaped output as
+    generate_zarna_reply(channel="voice") (echo-mock stripped, _voiceify applied)
+    but emits each sentence as soon as it's ready so the TTS engine can begin
+    speaking while the rest is still generating. Yields nothing on failure so the
+    caller can fall back.
+    """
+    if _CODE_REQUEST_RE.search(user_message or ""):
+        yield _get_code_redirect()
+        return
+
+    prompt = _build_prompt(
+        intent,
+        user_message,
+        chunks,
+        history or [],
+        fan_memory,
+        tone_mode=tone_mode,
+        creator_config=creator_config,
+        channel="voice",
+    )
+
+    config = _voice_stream_config()
+    buffer = ""
+    is_first = True
+    try:
+        kwargs = {"model": _VOICE_GENERATION_MODEL, "contents": prompt}
+        if config is not None:
+            kwargs["config"] = config
+        for chunk in _CLIENT.models.generate_content_stream(**kwargs):
+            piece = getattr(chunk, "text", "") or ""
+            if not piece:
+                continue
+            buffer += piece
+            while True:
+                m = _SENTENCE_BOUNDARY_RE.search(buffer)
+                if not m:
+                    break
+                end = m.end()
+                out = _clean_voice_sentence(buffer[:end], user_message, is_first)
+                buffer = buffer[end:]
+                is_first = False
+                if out:
+                    yield out
+    except Exception:
+        _LOGGER.exception("[ZARNA] voice stream generation failed")
+
+    tail = _clean_voice_sentence(buffer, user_message, is_first)
+    if tail:
+        yield tail
 
 
 def _find_banned_word(text: str, banned: tuple) -> Optional[str]:

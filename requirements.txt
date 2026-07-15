@@ -9,3 +9,7 @@ twilio==9.4.6
 scrapetube==2.5.1
 psycopg2-binary==2.9.10
 Pillow>=11.0.0
+# Voice service (inbound phone calls) — ASGI server + WebSocket + form parsing.
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
