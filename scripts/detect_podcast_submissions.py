@@ -17,6 +17,7 @@ Options:
     --campaign-id   INT   ID of the podcast_campaigns row to attach submissions to (required)
     --since         DATE  Only scan messages on/after this date (YYYY-MM-DD) (required)
     --until         DATE  Only scan messages before this date (YYYY-MM-DD) (optional)
+    --days          INT   Scan window length when --until is omitted (default: 7)
     --dry-run             Print detected submissions without saving to DB
     --limit         INT   Max messages to scan (default: all)
     --verbose             Print AI reasoning for each message
@@ -26,7 +27,7 @@ import argparse
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 # ---------------------------------------------------------------------------
 # Env / deps
@@ -194,7 +195,10 @@ def main():
     parser.add_argument("--since", required=True,
                         help="Start date to scan from (YYYY-MM-DD)")
     parser.add_argument("--until",
-                        help="End date to scan to (YYYY-MM-DD, exclusive)")
+                        help="End date to scan to (YYYY-MM-DD, exclusive). "
+                             "Defaults to --since + --days.")
+    parser.add_argument("--days", type=int, default=7,
+                        help="Scan window length in days when --until is omitted (default: 7)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print results without saving to DB")
     parser.add_argument("--limit", type=int, default=None,
@@ -214,12 +218,15 @@ def main():
         print("Create one in the admin Podcast Q&A tab first.", file=sys.stderr)
         sys.exit(1)
 
+    # Default window: since → since + N days, unless an explicit --until is given.
+    until = args.until or (date.fromisoformat(args.since) + timedelta(days=args.days)).isoformat()
+
     print(f"\nCampaign: [{campaign['id']}] {campaign['label']}")
-    print(f"Scanning messages since: {args.since}" + (f" until {args.until}" if args.until else ""))
+    print(f"Scanning messages since: {args.since} until {until}")
     if args.dry_run:
         print("DRY RUN — no data will be written\n")
 
-    messages = get_messages(conn, args.since, args.until, args.limit)
+    messages = get_messages(conn, args.since, until, args.limit)
     print(f"Found {len(messages)} fan messages to scan\n")
 
     found = 0

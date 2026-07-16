@@ -5,9 +5,10 @@ Fans text in a question (about anything) plus their name for a shout-out on the
 next podcast episode. These endpoints let the creator group submissions into
 per-episode campaigns, review them, confirm the real ones, and export.
 
-The dashboard can also trigger an AI "scan" that reads fan messages since the
-campaign's promoted date, uses Gemini to spot real question submissions, and
-files them into the campaign — all without leaving the frontend.
+The dashboard can also trigger an AI "scan" that reads fan messages in a window
+starting at the campaign's promoted date (default +7 days, overridable), uses
+Gemini to spot real question submissions, and files them into the campaign — all
+without leaving the frontend.
 
 All routes are tenant-scoped via _slug_or_abort() and require an active session.
 The podcast_campaigns / podcast_submissions tables are shared on the same
@@ -22,6 +23,7 @@ import logging
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 
 import psycopg2.extras
 from flask import jsonify, request, Response
@@ -45,6 +47,9 @@ _INTENT_MODEL_FALLBACK = "gemini-2.5-flash"
 # Safety cap so one scan can't run Gemini against an unbounded backlog.
 _SCAN_MAX_MESSAGES = int(os.getenv("PODCAST_SCAN_MAX_MESSAGES", "3000"))
 _SCAN_MIN_CHARS = 20
+# How many days after the promoted date to scan by default. Bounds the window
+# so re-scanning an old campaign doesn't reprocess every message since the promo.
+_SCAN_WINDOW_DAYS = int(os.getenv("PODCAST_SCAN_WINDOW_DAYS", "7"))
 # How many messages to classify in parallel. Gemini calls are network-bound,
 # so a modest pool cuts a 1,000-message scan from ~20 min to ~2 min with no
 # change to per-message classification quality.
@@ -141,8 +146,9 @@ def _classify_message(client, message_text: str, prev_bot_text: str | None = Non
     return None
 
 
-def _run_scan(campaign_id: int, slug: str, since_date):
-    """Background worker: scan messages since since_date and file submissions.
+def _run_scan(campaign_id: int, slug: str, since_date, until_date):
+    """Background worker: scan messages in [since_date, until_date) and file
+    submissions.
 
     Classification is done concurrently (network-bound Gemini calls); DB inserts
     are performed serially on a single connection as results arrive.
@@ -168,6 +174,7 @@ def _run_scan(campaign_id: int, slug: str, since_date):
                     FROM messages m
                     WHERE m.creator_slug = %s
                       AND m.created_at >= %s::timestamptz - interval '3 days'
+                      AND m.created_at < %s::timestamptz
                     WINDOW w AS (PARTITION BY m.phone_number ORDER BY m.created_at)
                 )
                 SELECT ctx.id, ctx.phone_number, ctx.text,
@@ -183,7 +190,7 @@ def _run_scan(campaign_id: int, slug: str, since_date):
                 ORDER BY ctx.created_at ASC
                 LIMIT %s
                 """,
-                (slug, since_date, since_date, _SCAN_MIN_CHARS, _SCAN_MAX_MESSAGES),
+                (slug, since_date, until_date, since_date, _SCAN_MIN_CHARS, _SCAN_MAX_MESSAGES),
             )
             rows = cur.fetchall()
         conn.close()
@@ -444,6 +451,7 @@ def register_podcast_api_routes(api_bp, slug_or_abort, require_performer_account
 
         data = request.get_json(force=True, silent=True) or {}
         since_override = (data.get("since") or "").strip() or None
+        until_override = (data.get("until") or "").strip() or None
         # When reset is set, wipe the un-reviewed submissions first so a re-scan
         # (e.g. after tightening the AI) replaces them cleanly. Confirmed/answered
         # submissions are always preserved so human review is never lost.
@@ -474,6 +482,14 @@ def register_podcast_api_routes(api_bp, slug_or_abort, require_performer_account
                         error="Set a promoted date on this campaign first so we know how far back to scan."
                     ), 400
 
+                # Default window: promoted date → +N days, so re-scanning an old
+                # campaign doesn't reprocess every message since the promo.
+                if until_override:
+                    until_date = until_override
+                else:
+                    from datetime import date as _date
+                    until_date = (_date.fromisoformat(since_date) + timedelta(days=_SCAN_WINDOW_DAYS)).isoformat()
+
                 if reset:
                     cur.execute(
                         "DELETE FROM podcast_submissions "
@@ -494,10 +510,10 @@ def register_podcast_api_routes(api_bp, slug_or_abort, require_performer_account
             return jsonify(error="failed to start scan"), 500
 
         t = threading.Thread(
-            target=_run_scan, args=(campaign_id, slug, since_date), daemon=True
+            target=_run_scan, args=(campaign_id, slug, since_date, until_date), daemon=True
         )
         t.start()
-        return jsonify(success=True, status="running", since=since_date)
+        return jsonify(success=True, status="running", since=since_date, until=until_date)
 
     @api_bp.route("/api/podcast/campaigns/<int:campaign_id>/scan-status")
     @login_required
