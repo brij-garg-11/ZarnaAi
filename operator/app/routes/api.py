@@ -6136,6 +6136,11 @@ from .starred import register_starred_api_routes  # noqa: E402
 
 register_starred_api_routes(api_bp, _slug_or_abort, _require_performer_account)
 
+# ── Giveaway campaigns ──────────────────────────────────────────────────────────
+from .giveaway import register_giveaway_api_routes  # noqa: E402
+
+register_giveaway_api_routes(api_bp, _slug_or_abort, _require_performer_account)
+
 # ── Safety review (crisis flags from the main app's crisis gate) ──────────────
 from .safety import register_safety_api_routes  # noqa: E402
 
