@@ -517,6 +517,36 @@ _PODCAST_MIGRATIONS = (
         UNIQUE (creator_slug, phone_number)
     )
     """,
+    # Giveaway campaigns — each is one weekly drawing with a keyword and an
+    # active window. When a fan texts a message containing the keyword while the
+    # campaign is active, they're recorded once in giveaway_entries (see
+    # app/giveaway/entry.py) and get the confirmation_message as their reply.
+    """
+    CREATE TABLE IF NOT EXISTS giveaway_campaigns (
+        id                   SERIAL PRIMARY KEY,
+        label                TEXT NOT NULL,
+        keyword              TEXT NOT NULL,
+        starts_at            TIMESTAMPTZ,
+        ends_at              TIMESTAMPTZ,
+        confirmation_message TEXT NOT NULL DEFAULT '',
+        creator_slug         TEXT NOT NULL DEFAULT 'zarna',
+        created_at           TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS giveaway_entries (
+        id            BIGSERIAL PRIMARY KEY,
+        campaign_id   INT REFERENCES giveaway_campaigns(id) ON DELETE CASCADE,
+        phone_number  TEXT NOT NULL,
+        message_id    BIGINT,
+        source        TEXT,
+        creator_slug  TEXT NOT NULL DEFAULT 'zarna',
+        entered_at    TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (campaign_id, phone_number)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_giveaway_entries_campaign ON giveaway_entries (campaign_id, entered_at)",
+    "CREATE INDEX IF NOT EXISTS idx_giveaway_campaigns_active ON giveaway_campaigns (creator_slug, starts_at, ends_at)",
 )
 
 
