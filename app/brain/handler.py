@@ -99,7 +99,7 @@ class ZarnaBrain:
         _executor.submit(get_or_create_session, phone_number, "user")
 
         # 2. Persist the user's message
-        self.storage.save_message(phone_number, "user", message_text)
+        user_msg = self.storage.save_message(phone_number, "user", message_text)
 
         # 2a. CRISIS GATE — suicidal/self-harm signals get a fixed, deterministic
         #     988 response. No LLM involved: the right reply here can never be
@@ -119,7 +119,27 @@ class ZarnaBrain:
             self.storage.save_message(phone_number, "assistant", CRISIS_RESPONSE)
             return CRISIS_RESPONSE
 
-        # 2b. Conversation closers (lol, thanks, ok) — no reply expected
+        # 2b. GIVEAWAY GATE — if this text enters the fan into an active giveaway
+        #     campaign (keyword match), record the entry and reply with the fixed
+        #     confirmation instead of an AI reply. Only fires on a brand-new
+        #     entry, so an already-entered fan keeps chatting with the AI. Fully
+        #     guarded: any error here must never block a fan's reply.
+        try:
+            from app.giveaway.entry import try_giveaway_entry
+            giveaway_reply = try_giveaway_entry(
+                phone_number,
+                message_text,
+                message_id=getattr(user_msg, "id", None),
+                slug=self.slug,
+            )
+        except Exception:
+            _logger.warning("[ZARNA] giveaway gate error", exc_info=True)
+            giveaway_reply = None
+        if giveaway_reply:
+            self.storage.save_message(phone_number, "assistant", giveaway_reply)
+            return giveaway_reply
+
+        # 2c. Conversation closers (lol, thanks, ok) — no reply expected
         if is_conversation_ender(message_text):
             return ""
 

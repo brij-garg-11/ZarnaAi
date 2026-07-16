@@ -41,12 +41,14 @@ def _register_submodule_routes():
     from app.admin.shows import register_shows_routes
     from app.admin.podcast import register_podcast_routes
     from app.admin.newsletter import register_newsletter_routes
+    from app.admin.giveaways import register_giveaways_routes
     register_quality_routes(admin_bp)
     register_shows_routes(admin_bp)
     register_action_routes(admin_bp)
     register_smb_routes(admin_bp)
     register_podcast_routes(admin_bp)
     register_newsletter_routes(admin_bp)
+    register_giveaways_routes(admin_bp)
 
 _register_submodule_routes()
 del _register_submodule_routes
@@ -1204,6 +1206,11 @@ def _render_newsletter_tab() -> str:
     return render_newsletter_tab()
 
 
+def _render_giveaways_tab() -> str:
+    from app.admin.giveaways import render_giveaways_tab
+    return render_giveaways_tab()
+
+
 def _render_smb_tab() -> str:
     from app.admin.smb import render_smb_tab
     return render_smb_tab()
@@ -1747,6 +1754,7 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
   <a href="/admin?tab=quality" class="nav-tab {'active' if tab == 'quality' else ''}">🔍 Quality</a>
   <a href="/admin?tab=podcast" class="nav-tab {'active' if tab == 'podcast' else ''}">🎙 Podcast Q&amp;A</a>
   <a href="/admin?tab=newsletter" class="nav-tab {'active' if tab == 'newsletter' else ''}">📰 Newsletter</a>
+  <a href="/admin?tab=giveaways" class="nav-tab {'active' if tab == 'giveaways' else ''}">🎁 Giveaway</a>
   <a href="/admin?tab=smb" class="nav-tab {'active' if tab == 'smb' else ''}">🏪 SMB Clients</a>
   <a href="/admin/smb-shows" class="nav-tab">🎭 Show Attendance</a>
   <a href="/admin/live-shows" class="nav-tab">🎤 Live shows</a>
@@ -1887,6 +1895,10 @@ body {{ background: #0a0f1e; color: #e2e8f0; font-family: -apple-system, BlinkMa
 
   <div class="tab-content {'active' if tab == 'newsletter' else ''}" id="tab-newsletter">
     {_render_newsletter_tab() if tab == 'newsletter' else ''}
+  </div>
+
+  <div class="tab-content {'active' if tab == 'giveaways' else ''}" id="tab-giveaways">
+    {_render_giveaways_tab() if tab == 'giveaways' else ''}
   </div>
 
   <div class="tab-content {'active' if tab == 'smb' else ''}" id="tab-smb">
