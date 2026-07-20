@@ -41,6 +41,7 @@ from app.verify import verify_bp
 from app.live_shows.signup import LiveShowSignupResult, try_live_show_signup
 from app.live_shows.quiz import get_active_quiz_for_fan, record_quiz_response, build_quiz_context
 from app.live_shows.blast_context import get_active_blast_context, build_blast_context_prompt
+from app.live_shows.ai_pause import is_ai_paused
 from app.ops_metrics import ai_reply_enter, ai_reply_leave, bump as ops_bump
 from app.alert_writer import write_alert as _write_alert
 
@@ -1053,6 +1054,28 @@ def twilio_webhook():
             _to_number[-4:] if _to_number else "?",
         )
         return ("", 204)
+
+    # Human takeover gate: if the operator has paused AI for this fan, log the
+    # inbound so it still shows in the dashboard inbox, but do NOT generate an
+    # AI reply. Fails open (is_ai_paused returns False on error) so a DB hiccup
+    # can never take the bot offline for everyone.
+    try:
+        pause_slug = target_slug or os.getenv("ZARNA_CREATOR_SLUG", "zarna")
+        if is_ai_paused(phone_number, pause_slug):
+            try:
+                target_brain.storage.save_message(phone_number, "user", message_text)
+            except Exception:
+                logging.exception(
+                    "AI-paused inbound: failed to log message for ...%s",
+                    phone_number[-4:] if phone_number else "?",
+                )
+            logging.info(
+                "AI paused for ...%s (slug=%s) — inbound logged, no AI reply",
+                phone_number[-4:] if phone_number else "?", pause_slug,
+            )
+            return ("", 204)
+    except Exception:
+        logging.exception("AI-pause check failed — continuing with normal AI reply")
 
     # Check for an active pop quiz for this fan — inject context so AI can react in character.
     quiz_ctx = None
