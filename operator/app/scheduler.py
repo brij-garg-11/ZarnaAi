@@ -176,6 +176,13 @@ def _process_scheduled_blasts():
         for draft in claimed:
             logger.info("Scheduler claimed blast id=%s name=%s — starting send",
                         draft["id"], draft["name"])
-            execute_blast(draft["id"])
+            # Isolate each send: a failure on one claimed blast must not
+            # abort the loop and strand its siblings in 'sending' forever.
+            try:
+                execute_blast(draft["id"])
+            except Exception:
+                logger.exception(
+                    "Scheduler: execute_blast failed for claimed blast id=%s — "
+                    "continuing with remaining blasts", draft["id"])
     except Exception as e:
         logger.exception("Scheduler error: %s", e)

@@ -4,6 +4,7 @@ All phone numbers are masked or only counted.
 """
 
 from __future__ import annotations
+import re
 from collections import Counter
 from .db import get_conn
 import psycopg2.extras
@@ -389,6 +390,13 @@ def count_audience(
                          )""",
                     tuple([*c_slug_params, *bd_slug_params]),
                 )
+            elif audience_type == "phones" and audience_filter:
+                explicit = [p for p in re.split(r"[\s,]+", audience_filter) if p]
+                cur.execute(
+                    "SELECT COUNT(*) FROM (SELECT DISTINCT unnest(%s::text[]) AS p) q "
+                    "WHERE p NOT IN (SELECT phone_number FROM broadcast_optouts)",
+                    (explicit,),
+                )
             else:
                 cur.execute(
                     "SELECT COUNT(DISTINCT phone_number) FROM contacts WHERE TRUE" + slug_sql,
@@ -525,6 +533,16 @@ def get_audience_phones(
                              AND br.sent_at >= NOW() - (""" + _SMART_CADENCE_CASE + """)
                          )""",
                     tuple([*c_slug_params, *bd_slug_params]),
+                )
+            elif audience_type == "phones" and audience_filter:
+                # Explicit recipient list — audience_filter holds E.164 numbers
+                # separated by commas/whitespace. Used for targeted sends and
+                # end-to-end tests. Opt-outs are still stripped by the shared
+                # filter below, so this can never message a fan who opted out.
+                explicit = [p for p in re.split(r"[\s,]+", audience_filter) if p]
+                cur.execute(
+                    "SELECT unnest(%s::text[]) AS phone_number",
+                    (explicit,),
                 )
             else:
                 cur.execute(
