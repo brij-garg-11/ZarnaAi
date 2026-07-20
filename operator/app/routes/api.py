@@ -6165,3 +6165,8 @@ register_giveaway_api_routes(api_bp, _slug_or_abort, _require_performer_account)
 from .safety import register_safety_api_routes  # noqa: E402
 
 register_safety_api_routes(api_bp, _slug_or_abort, _require_performer_account)
+
+# ── Power users (top fans by message volume, links to their threads) ──────────
+from .power_users import register_power_users_api_routes  # noqa: E402
+
+register_power_users_api_routes(api_bp, _slug_or_abort, _require_performer_account)
