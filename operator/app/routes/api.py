@@ -825,6 +825,13 @@ def inbox_thread(phone_last4):
                     "fan_score": fan_row["fan_score"],
                     "joined_at": fan_row["created_at"].isoformat() if fan_row["created_at"] else None,
                 }
+
+            cur.execute(
+                "SELECT 1 FROM ai_paused_fans "
+                "WHERE phone_number = %s AND creator_slug = %s LIMIT 1",
+                (phone, _slug),
+            )
+            ai_paused = cur.fetchone() is not None
         conn.close()
     except Exception:
         logger.exception("api: failed to fetch thread for %s", phone_last4)
@@ -835,6 +842,7 @@ def inbox_thread(phone_last4):
         fan=fan,
         phone_number=phone,
         phone_last4=phone[-4:],
+        ai_paused=ai_paused,
     )
 
 
@@ -950,12 +958,22 @@ def api_inbox_send(phone_last4):
     except Exception as e:
         logger.warning("api_inbox_send: failed to log message (send already happened): %s", e)
 
+    # Auto-pause AI for this fan: an operator manual message means a human has
+    # taken over the conversation, so the bot must not reply on top of them. The
+    # pause holds until the operator hits Resume (no TTL).
+    try:
+        from ..ai_pause import pause_ai
+        pause_ai(phone, inbox_slug or _slug_for_send, paused_by=(user or {}).get("email", ""))
+    except Exception:
+        logger.warning("api_inbox_send: auto-pause failed (send already happened)", exc_info=True)
+
     return jsonify(
         success=True,
         message_id=message_id,
         sent_at=sent_at.isoformat(),
         phone_last4=phone_last4,
         media_url=media_url or None,
+        ai_paused=True,
     )
 
 
@@ -6170,3 +6188,8 @@ register_safety_api_routes(api_bp, _slug_or_abort, _require_performer_account)
 from .power_users import register_power_users_api_routes  # noqa: E402
 
 register_power_users_api_routes(api_bp, _slug_or_abort, _require_performer_account)
+
+# ── Inbox AI pause / resume (human takeover) ─────────────────────────────────
+from .inbox_pause import register_inbox_pause_api_routes  # noqa: E402
+
+register_inbox_pause_api_routes(api_bp, _slug_or_abort, _require_performer_account)

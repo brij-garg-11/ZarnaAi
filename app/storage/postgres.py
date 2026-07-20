@@ -220,6 +220,23 @@ _QUIZ_MIGRATIONS = (
     "CREATE INDEX IF NOT EXISTS idx_blast_context_sessions_slug_active ON blast_context_sessions (creator_slug, expires_at, created_at)",
 )
 
+# Human takeover: while a fan has a row here the inbound webhook logs their
+# message but does NOT generate an AI reply, so the operator can hold a real
+# conversation. Presence of the row = paused; resume by deleting it (no TTL).
+# The operator service owns the write side; the main app only reads it in the
+# webhook, so we create it here too to guarantee the table exists at read time.
+_AI_PAUSE_MIGRATIONS = (
+    """
+    CREATE TABLE IF NOT EXISTS ai_paused_fans (
+        phone_number TEXT NOT NULL,
+        creator_slug TEXT NOT NULL DEFAULT 'zarna',
+        paused_by    TEXT DEFAULT '',
+        created_at   TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (phone_number, creator_slug)
+    )
+    """,
+)
+
 # Idempotent alters + audit log (runs after base live_shows DDL).
 _LIVE_SHOW_ADDITIVE_MIGRATIONS = (
     """
@@ -602,6 +619,8 @@ class PostgresStorage(BaseStorage):
                     for sql in _ENGAGEMENT_ANALYTICS_MIGRATIONS:
                         cur.execute(sql)
                     for sql in _QUIZ_MIGRATIONS:
+                        cur.execute(sql)
+                    for sql in _AI_PAUSE_MIGRATIONS:
                         cur.execute(sql)
                     for sql in _QUALITY_DIGEST_MIGRATIONS:
                         cur.execute(sql)

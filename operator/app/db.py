@@ -50,6 +50,19 @@ def init_db():
             source       TEXT DEFAULT 'stop_reply'
         )
         """,
+        # Human takeover: while a fan has a row here, the main app's inbound
+        # webhook logs their message but skips the AI reply, so the operator can
+        # hold a real conversation. Presence = paused; resume by deleting the row
+        # (no TTL). Scoped by creator_slug so it's tenant-safe.
+        """
+        CREATE TABLE IF NOT EXISTS ai_paused_fans (
+            phone_number TEXT NOT NULL,
+            creator_slug TEXT NOT NULL DEFAULT 'zarna',
+            paused_by    TEXT DEFAULT '',
+            created_at   TIMESTAMPTZ DEFAULT NOW(),
+            PRIMARY KEY (phone_number, creator_slug)
+        )
+        """,
         """
         CREATE TABLE IF NOT EXISTS blast_drafts (
             id                  BIGSERIAL PRIMARY KEY,
