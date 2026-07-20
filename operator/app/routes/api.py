@@ -1813,10 +1813,30 @@ def api_blast_schedule(draft_id):
     if not draft:
         return jsonify(success=False, error="Draft not found."), 404
 
+    # Timezone resolution (mirrors the HTML form path in routes/blast.py):
+    #   1. If the ISO string carries an offset (e.g. ...+05:00 or ...Z), respect
+    #      it and convert to UTC.
+    #   2. Else if the caller passes an IANA `send_at_tz`, localize the naive
+    #      wall-clock value in that zone, then convert to UTC.
+    #   3. Else assume the value is already UTC (backward compatible).
+    # This prevents a local wall-clock time from firing hours early.
+    send_at_tz = (data.get("send_at_tz") or "").strip()
     try:
-        send_at = datetime.fromisoformat(send_at_str).replace(tzinfo=timezone.utc)
+        parsed = datetime.fromisoformat(send_at_str)
     except ValueError:
         return jsonify(success=False, error="Invalid datetime format — use ISO 8601."), 400
+
+    if parsed.tzinfo is not None:
+        send_at = parsed.astimezone(timezone.utc)
+    elif send_at_tz:
+        try:
+            from zoneinfo import ZoneInfo
+            send_at = parsed.replace(tzinfo=ZoneInfo(send_at_tz)).astimezone(timezone.utc)
+        except Exception:
+            logger.warning("api_blast_schedule: unknown timezone %r — assuming UTC", send_at_tz)
+            send_at = parsed.replace(tzinfo=timezone.utc)
+    else:
+        send_at = parsed.replace(tzinfo=timezone.utc)
 
     try:
         schedule_blast(draft_id, send_at)
