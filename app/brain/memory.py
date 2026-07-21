@@ -19,14 +19,102 @@ Privacy guardrails (applied before any storage):
 import json
 import logging
 import re
+from functools import lru_cache
 from typing import Tuple
 
 from google import genai
 
-from app.config import GEMINI_API_KEY, INTENT_MODEL
+from app.config import GEMINI_API_KEY, INTENT_MODEL, CREATOR_SLUG
 
 logger = logging.getLogger(__name__)
 _client = genai.Client(api_key=GEMINI_API_KEY)
+
+# ── Fan-name validation ──────────────────────────────────────────────────────
+# The extractor occasionally mistakes the creator's or family's names (fans open
+# with "Hi Zarna", "tell Shalabh...") or a filler word for the fan's own name.
+# is_valid_fan_name() is the single source of truth used both here (live path)
+# and by scripts/fix_fan_names.py (backfill/cleanup). A name that fails is stored
+# as "" (unknown) rather than a wrong value.
+
+# Generic tokens that are never a fan's first name.
+_NAME_STOPWORDS = frozenset({
+    "fan", "fans", "bot", "zarnabot", "zbot", "friend", "buddy", "guy", "guys",
+    "hi", "hey", "hello", "hiya", "yo", "sup", "hola", "stop", "help", "start",
+    "unsubscribe", "yes", "no", "yeah", "yep", "nope", "ok", "okay", "sure",
+    "thanks", "thank", "ty", "please", "lol", "lmao", "lmfao", "haha", "hahaha",
+    "omg", "love", "like", "you", "your", "me", "my", "here", "there", "who",
+    "what", "why", "how", "when", "where", "mom", "mommy", "mother", "mama",
+    "dad", "daddy", "father", "husband", "wife", "hubby", "auntie", "aunty",
+    "sir", "maam", "madam", "unknown", "none", "null", "na", "nan", "test",
+    "good", "great", "nice", "cool", "fine", "morning", "night", "day",
+})
+
+
+@lru_cache(maxsize=4)
+def _creator_name_blocklist(slug: str) -> frozenset:
+    """Lowercased tokens that must never be stored as a fan's name for this
+    creator: the creator's own name/variants, their spouse, and family members.
+
+    Built from creator_config so it stays correct per-tenant; falls back to
+    Zarna's known names if the config can't be loaded so the live path is never
+    left unguarded."""
+    block: set = set()
+
+    def _add(value: str) -> None:
+        for tok in re.split(r"[\s\-]+", (value or "").lower()):
+            tok = tok.strip(".,!?'\"")
+            if tok.isalpha() and len(tok) >= 2:
+                block.add(tok)
+
+    try:
+        from app.brain.creator_config import load_creator
+        cfg = load_creator(slug)
+    except Exception:  # config load must never break extraction
+        cfg = None
+
+    if cfg is not None:
+        _add(cfg.name)
+        for v in cfg.name_variants:
+            _add(v)
+        for v in cfg.shalabh_names:
+            _add(v)
+        for v in cfg.family_roast_names:
+            _add(v)
+
+    # Hard fallback: Zarna-universe names (also covers the case where config is
+    # missing). Children aren't exposed on CreatorConfig, so list them here.
+    block |= {
+        "zarna", "zara", "garg", "shalabh", "shalab",
+        "zoya", "brij", "veer", "ramdev",
+    }
+    return frozenset(block)
+
+
+def is_valid_fan_name(name: str, slug: str = CREATOR_SLUG) -> bool:
+    """True if `name` looks like a real fan first name we should store.
+
+    Rejects empties, non-alphabetic tokens, absurd lengths, filler words, and
+    the creator's/family's names (the common misfires)."""
+    if not name:
+        return False
+    n = name.strip().strip(".,!?'\"").strip()
+    if not n:
+        return False
+    # Allow internal hyphens/apostrophes (e.g. "Mary-Jane", "O'Brien") but the
+    # rest must be alphabetic (unicode letters incl. accents are fine).
+    core = n.replace("-", "").replace("'", "").replace(" ", "")
+    if not core.isalpha():
+        return False
+    if not (2 <= len(core) <= 20):
+        return False
+    lowered = n.lower()
+    first_tok = lowered.split()[0]
+    if lowered in _NAME_STOPWORDS or first_tok in _NAME_STOPWORDS:
+        return False
+    block = _creator_name_blocklist(slug)
+    if lowered in block or first_tok in block:
+        return False
+    return True
 
 # ── Minor detection ───────────────────────────────────────────────────────
 # Catch explicit age statements indicating under-18. Checked before any
@@ -157,6 +245,13 @@ def extract_memory(
         location = str(data.get("location", ""))[:100]
         name     = str(data.get("name", ""))[:80].strip()
         tags     = [t for t in data.get("tags", []) if t in _ALLOWED_TAGS]
+
+        # Guard against storing the creator's/family's name or a filler word as
+        # the fan's name (fans open with "Hi Zarna", "tell Shalabh...", etc.).
+        if name and not is_valid_fan_name(name):
+            logger.info("Rejected implausible fan name %r — storing as unknown", name)
+            name = ""
+
         return memory, tags, location, False, name
 
     except Exception as exc:
