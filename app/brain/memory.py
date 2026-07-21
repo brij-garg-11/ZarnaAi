@@ -47,6 +47,15 @@ _NAME_STOPWORDS = frozenset({
     "dad", "daddy", "father", "husband", "wife", "hubby", "auntie", "aunty",
     "sir", "maam", "madam", "unknown", "none", "null", "na", "nan", "test",
     "good", "great", "nice", "cool", "fine", "morning", "night", "day",
+    # Common English function/filler words that leak in via phrases like
+    # "call me on my cell", "text me back", "I'm at work" — never real names.
+    "on", "off", "in", "at", "to", "up", "so", "of", "or", "if", "is", "it",
+    "as", "an", "be", "by", "we", "he", "she", "him", "her", "us", "them",
+    "the", "and", "but", "for", "yet", "not", "now", "back", "later", "again",
+    "just", "really", "very", "too", "also", "still", "then", "than", "out",
+    "about", "from", "with", "this", "that", "these", "those", "was", "were",
+    "are", "am", "im", "ive", "id", "ill", "dont", "doing", "done", "got",
+    "get", "going", "gonna", "wanna", "know", "think", "feel", "want", "need",
 })
 
 

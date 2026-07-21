@@ -72,6 +72,20 @@ def _recover_from_text(text: str) -> str:
     return ""
 
 
+def _alpha_root(s: str) -> str:
+    return re.sub(r"[^a-z]", "", (s or "").lower())
+
+
+def _is_same_root(a: str, b: str) -> bool:
+    """True if one name is just a prefix/root of the other (e.g. 'Bj' vs the
+    corrupted 'Bj?rn'). Used to reject a 'recovery' that only re-derives the
+    same broken token we're trying to replace."""
+    ra, rb = _alpha_root(a), _alpha_root(b)
+    if not ra or not rb:
+        return False
+    return ra.startswith(rb) or rb.startswith(ra)
+
+
 def _recover_with_gemini(user_messages: list) -> str:
     """Ask Gemini for the fan's own first name from their inbound messages.
     Returns '' unless it finds an explicit, valid self-stated name."""
@@ -161,6 +175,11 @@ def process_fan(phone_number: str, current: str, memory: str, recover: bool) -> 
         recovered = _recover_from_text("\n".join(msgs))
         if not recovered:
             recovered = _recover_with_gemini(msgs)
+
+    # Reject a "recovery" that's just a truncated/root form of the same bad
+    # value (corrupted names like "Bj?rn" -> "Bj"): clear to unknown instead.
+    if recovered and _is_same_root(current, recovered):
+        recovered = ""
 
     if recovered:
         return phone_number, current, "fix", recovered
