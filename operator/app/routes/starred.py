@@ -39,6 +39,7 @@ def register_starred_api_routes(api_bp, slug_or_abort, require_performer_account
                     SELECT
                         sf.phone_number,
                         sf.created_at AS starred_at,
+                        sf.note,
                         c.fan_name,
                         c.fan_tier,
                         c.fan_tags,
@@ -76,6 +77,7 @@ def register_starred_api_routes(api_bp, slug_or_abort, require_performer_account
             "phone_number": r["phone_number"],
             "phone_last4": (r["phone_number"] or "")[-4:],
             "starred_at": r["starred_at"].isoformat() if r["starred_at"] else None,
+            "note": r["note"] or "",
             "fan_name": r["fan_name"] or "",
             "fan_tier": r["fan_tier"] or "",
             "fan_tags": (r["fan_tags"] or [])[:5],
@@ -132,3 +134,36 @@ def register_starred_api_routes(api_bp, slug_or_abort, require_performer_account
             logger.exception("api: failed to unstar fan")
             return jsonify(error="failed to unstar fan"), 500
         return jsonify(success=True, starred=False)
+
+    @api_bp.route("/api/starred-fans/note", methods=["POST"])
+    @login_required
+    def starred_fans_set_note():
+        """Save the operator's private note for a starred fan.
+
+        Only affects a fan that's already starred (the note lives on the
+        starred_fans row); an empty note clears it. Tenant-scoped by slug.
+        """
+        require_performer_account()
+        slug = slug_or_abort()
+        data = request.get_json(force=True, silent=True) or {}
+        phone = (data.get("phone") or "").strip()
+        # Cap length so a runaway paste can't bloat the row; trim whitespace.
+        note = (data.get("note") or "").strip()[:2000]
+        if not phone:
+            return jsonify(error="phone is required"), 400
+        try:
+            conn = get_conn()
+            with conn, conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE starred_fans SET note = %s "
+                    "WHERE phone_number = %s AND creator_slug = %s",
+                    (note, phone, slug),
+                )
+                updated = cur.rowcount
+            conn.close()
+        except Exception:
+            logger.exception("api: failed to save starred-fan note")
+            return jsonify(error="failed to save note"), 500
+        if not updated:
+            return jsonify(error="fan is not starred"), 404
+        return jsonify(success=True, note=note)

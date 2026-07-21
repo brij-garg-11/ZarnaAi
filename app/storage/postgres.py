@@ -534,6 +534,9 @@ _PODCAST_MIGRATIONS = (
         UNIQUE (creator_slug, phone_number)
     )
     """,
+    # Private operator note on a starred fan — free-text reminder of why they
+    # were starred / things to remember about them. Operator-only.
+    "ALTER TABLE starred_fans ADD COLUMN IF NOT EXISTS note TEXT DEFAULT ''",
     # Giveaway campaigns — each is one weekly drawing with a keyword and an
     # active window. When a fan texts a message containing the keyword while the
     # campaign is active, they're recorded once in giveaway_entries (see
