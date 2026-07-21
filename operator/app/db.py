@@ -721,6 +721,9 @@ def init_db():
             UNIQUE (creator_slug, phone_number)
         )
         """,
+        # Private operator note on a starred fan — free-text reminder of why
+        # they were starred / things to remember. Mirrors the main app migration.
+        "ALTER TABLE starred_fans ADD COLUMN IF NOT EXISTS note TEXT DEFAULT ''",
         # Giveaway campaigns — one weekly drawing with a keyword + active window.
         # A fan texting a message containing the keyword while active is recorded
         # once in giveaway_entries by the main app (app/giveaway/entry.py).
