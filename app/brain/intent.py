@@ -5,7 +5,8 @@ import re
 
 from google import genai
 
-from app.config import GEMINI_API_KEY, INTENT_MODEL
+from app.brain.thinking import build_thinking_config, generate_with_thinking
+from app.config import CLASSIFIER_THINKING_LEVEL, GEMINI_API_KEY, INTENT_MODEL
 
 if TYPE_CHECKING:
     from app.brain.creator_config import CreatorConfig
@@ -28,6 +29,10 @@ class Intent(str, Enum):
 
 
 _client = genai.Client(api_key=GEMINI_API_KEY)
+
+# Intent classification emits a single label — bound hidden reasoning so a
+# Gemini 3.x "thinking" default can't add seconds to intent_chunks_ms.
+_THINKING_CONFIG = build_thinking_config(CLASSIFIER_THINKING_LEVEL)
 
 # ---------------------------------------------------------------------------
 # Keyword / heuristic tables
@@ -535,10 +540,7 @@ Message: "{message}"
 Reply with only one word: greeting, joke, clip, show, book, podcast, merch, personal, feedback, question, or general"""
 
     try:
-        response = _client.models.generate_content(
-            model=INTENT_MODEL,
-            contents=prompt,
-        )
+        response = generate_with_thinking(_client, INTENT_MODEL, prompt, _THINKING_CONFIG)
         raw = response.text.strip().lower()
     except Exception:
         return Intent.GENERAL

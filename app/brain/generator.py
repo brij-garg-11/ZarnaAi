@@ -13,11 +13,13 @@ from google import genai
 
 from app.brain.emphasis import strip_all_emphasis
 from app.brain.intent import Intent
+from app.brain.thinking import build_thinking_config, generate_with_thinking
 from app.config import (
     ANTHROPIC_API_KEY,
     CONVERSATION_HISTORY_LIMIT,
     GEMINI_API_KEY,
     GENERATION_MODEL,
+    GENERATION_THINKING_LEVEL,
     HIGH_MODEL,
     MID_MODEL,
     MULTI_MODEL_REPLY,
@@ -1010,10 +1012,15 @@ def _get_fallback(creator_config: "Optional[CreatorConfig]" = None) -> str:
     return reply
 
 
+# Bounds hidden reasoning on the SMS reply call — without this, Gemini 3.x
+# models (which gemini-flash-latest now resolves to) default to high/dynamic
+# thinking and every text reply pays seconds of invisible latency.
+_SMS_THINKING_CONFIG = build_thinking_config(GENERATION_THINKING_LEVEL)
+
+
 def _generate_gemini_raw(prompt: str) -> str:
-    response = _CLIENT.models.generate_content(
-        model=GENERATION_MODEL,
-        contents=prompt,
+    response = generate_with_thinking(
+        _CLIENT, GENERATION_MODEL, prompt, _SMS_THINKING_CONFIG
     )
     text = (response.text or "").strip()
     usage = response.usage_metadata
@@ -1266,20 +1273,8 @@ def _voice_stream_config():
     Returns None if the installed google-genai is too old to expose ThinkingConfig,
     in which case the caller streams without a config (still correct, just slower).
     """
-    try:
-        from google.genai import types
-    except Exception:
-        return None
-
-    # NB: never send thinking_budget=0 — Gemini 3.x returns 400 for it.
-    for thinking_kwargs in ({"thinking_level": "low"}, {"thinking_budget": 128}):
-        try:
-            return types.GenerateContentConfig(
-                thinking_config=types.ThinkingConfig(**thinking_kwargs)
-            )
-        except Exception:
-            continue
-    return None
+    # Delegates to the shared builder so voice and SMS can't drift apart.
+    return build_thinking_config("low", fallback_budget=128)
 
 
 def _clean_voice_sentence(sentence: str, user_message: str, is_first: bool) -> str:

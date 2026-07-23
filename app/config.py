@@ -9,6 +9,20 @@ INTENT_MODEL     = os.getenv("INTENT_MODEL", "gemini-flash-latest")
 ROUTER_MODEL     = os.getenv("ROUTER_MODEL", "gemini-flash-latest")  # complexity routing (fast/cheap)
 EMBEDDING_MODEL  = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001")
 
+# --- Gemini thinking control (see app/brain/thinking.py) ---
+# gemini-flash-latest rolled to gemini-3.6-flash (Jul 2026), a reasoning model
+# that defaults to high/dynamic thinking — the un-configured default added
+# ~3-4s of hidden reasoning to every SMS reply (prod gen_ms hit 4-5s).
+# Values: minimal | low | medium | high | off. "off" sends no thinking config
+# at all (model default) — the instant env-only rollback.
+# Measured on gemini-3.6-flash with the real SMS prompt (Jul 2026): no config
+# ~4.6s median / ~750 thought tokens; low ~3.4s / ~480; minimal ~1.2s / 0 —
+# with structured link formatting, emotional tone, and identity honesty all
+# intact at minimal. Bump to "low" via env if reply quality ever regresses.
+GENERATION_THINKING_LEVEL = os.getenv("GENERATION_THINKING_LEVEL", "minimal").strip().lower()
+# Intent + router just emit a label/JSON — they need near-zero reasoning.
+CLASSIFIER_THINKING_LEVEL = os.getenv("CLASSIFIER_THINKING_LEVEL", "minimal").strip().lower()
+
 # --- Multi-model replies (optional; falls back to Gemini if keys missing) ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")

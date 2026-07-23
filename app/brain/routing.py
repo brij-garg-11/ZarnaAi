@@ -14,7 +14,9 @@ from typing import Any, Dict, List, Literal
 
 from google import genai
 
+from app.brain.thinking import build_thinking_config, generate_with_thinking
 from app.config import (
+    CLASSIFIER_THINKING_LEVEL,
     GEMINI_API_KEY,
     ROUTER_MODEL,
     ROUTER_SKIP_MAX_CHARS,
@@ -26,6 +28,10 @@ logger = logging.getLogger(__name__)
 RoutingTier = Literal["low", "medium", "high"]
 
 _client = genai.Client(api_key=GEMINI_API_KEY)
+
+# The router emits a tiny JSON label — bound hidden reasoning so a Gemini 3.x
+# "thinking" default can't add seconds to route_ms.
+_THINKING_CONFIG = build_thinking_config(CLASSIFIER_THINKING_LEVEL)
 
 _SENSITIVE_HINTS = re.compile(
     r"\b(suicid|kill myself|end my life|self[- ]harm|hurt myself|"
@@ -125,7 +131,7 @@ def classify_routing_tier(
     prompt = _router_prompt(message, history, fan_memory)
 
     try:
-        response = _client.models.generate_content(model=ROUTER_MODEL, contents=prompt)
+        response = generate_with_thinking(_client, ROUTER_MODEL, prompt, _THINKING_CONFIG)
         raw = (response.text or "").strip()
         data = _parse_router_json(raw)
         tier = str(data.get("tier", "medium")).lower().strip()
