@@ -1250,19 +1250,36 @@ _SENTENCE_BOUNDARY_RE = re.compile(r'[.!?]+["\'\)\]]*\s+|\n+')
 
 
 def _voice_stream_config():
-    """GenerateContentConfig that disables Gemini thinking for lowest latency.
+    """GenerateContentConfig tuned for the lowest-latency voice reply.
+
+    We want as little "thinking" as possible so the first spoken token arrives fast.
+    The knob for that changed between model generations:
+      - Gemini 3.x reject ``thinking_budget=0`` with 400 INVALID_ARGUMENT (thinking
+        can no longer be fully disabled) and instead take ``thinking_level="low"``.
+      - Gemini 2.5 take a numeric ``thinking_budget`` (and accept 0 to disable).
+    ``gemini-flash-latest`` is a floating alias, so it can roll forward from a 2.5
+    model to a 3.x one under us — which is exactly what broke the voice line. Try
+    the modern knob first, fall back to a small positive budget, and finally fall
+    back to no config at all. The caller also retries without any config if the
+    model still rejects what we send, so a live call never dies on this.
 
     Returns None if the installed google-genai is too old to expose ThinkingConfig,
     in which case the caller streams without a config (still correct, just slower).
     """
     try:
         from google.genai import types
-
-        return types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(thinking_budget=0)
-        )
     except Exception:
         return None
+
+    # NB: never send thinking_budget=0 — Gemini 3.x returns 400 for it.
+    for thinking_kwargs in ({"thinking_level": "low"}, {"thinking_budget": 128}):
+        try:
+            return types.GenerateContentConfig(
+                thinking_config=types.ThinkingConfig(**thinking_kwargs)
+            )
+        except Exception:
+            continue
+    return None
 
 
 def _clean_voice_sentence(sentence: str, user_message: str, is_first: bool) -> str:
@@ -1307,33 +1324,49 @@ def generate_zarna_reply_stream(
     )
 
     config = _voice_stream_config()
-    buffer = ""
-    is_first = True
-    try:
-        kwargs = {"model": _VOICE_GENERATION_MODEL, "contents": prompt}
-        if config is not None:
-            kwargs["config"] = config
-        for chunk in _CLIENT.models.generate_content_stream(**kwargs):
-            piece = getattr(chunk, "text", "") or ""
-            if not piece:
-                continue
-            buffer += piece
-            while True:
-                m = _SENTENCE_BOUNDARY_RE.search(buffer)
-                if not m:
-                    break
-                end = m.end()
-                out = _clean_voice_sentence(buffer[:end], user_message, is_first)
-                buffer = buffer[end:]
-                is_first = False
-                if out:
-                    yield out
-    except Exception:
-        _LOGGER.exception("[ZARNA] voice stream generation failed")
 
-    tail = _clean_voice_sentence(buffer, user_message, is_first)
-    if tail:
-        yield tail
+    # Stream with the low-latency config first. If generation fails before producing
+    # anything — e.g. the model alias rolled forward and rejects our thinking config
+    # (400 INVALID_ARGUMENT) — retry once without the config so a live call is never
+    # dropped over a config incompatibility. We only retry when nothing was emitted
+    # yet, so a mid-stream error can't duplicate already-spoken sentences.
+    attempts = [config, None] if config is not None else [None]
+    produced = False
+    for attempt_config in attempts:
+        buffer = ""
+        is_first = True
+        try:
+            kwargs = {"model": _VOICE_GENERATION_MODEL, "contents": prompt}
+            if attempt_config is not None:
+                kwargs["config"] = attempt_config
+            for chunk in _CLIENT.models.generate_content_stream(**kwargs):
+                piece = getattr(chunk, "text", "") or ""
+                if not piece:
+                    continue
+                buffer += piece
+                while True:
+                    m = _SENTENCE_BOUNDARY_RE.search(buffer)
+                    if not m:
+                        break
+                    end = m.end()
+                    out = _clean_voice_sentence(buffer[:end], user_message, is_first)
+                    buffer = buffer[end:]
+                    is_first = False
+                    if out:
+                        produced = True
+                        yield out
+            tail = _clean_voice_sentence(buffer, user_message, is_first)
+            if tail:
+                produced = True
+                yield tail
+            return  # streamed cleanly (with or without config)
+        except Exception:
+            _LOGGER.exception(
+                "[ZARNA] voice stream generation failed (with_config=%s)",
+                attempt_config is not None,
+            )
+            if produced:
+                return  # already spoke part of the reply — don't restart
 
 
 def _find_banned_word(text: str, banned: tuple) -> Optional[str]:
