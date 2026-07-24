@@ -67,6 +67,13 @@ class TestCallMatcher:
         "I got a call from school about my kid",
         "last call for the show tickets?",
         "don't call me crazy but I love your MIL bits",
+        # Idioms — "call" but not a phone call
+        "let's call it a night",
+        "I want to call it quits with my diet",
+        "I want to call out that MIL joke, so true",
+        "gonna call BS on that one",
+        "you call the shots Zarna",
+        "I call dibs on front row",
         # Benign / unrelated
         "when are you coming to Portland?",
         "tell me a joke",

@@ -81,6 +81,14 @@ _NAMING_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# Idioms where "call" isn't a phone call — "call it a night", "call out that
+# joke", "call BS", "call the shots", "call dibs". Vetoes EVERYTHING,
+# including the strong asks ("want to call it a night" must not fire).
+_IDIOM_PATTERNS = re.compile(
+    r"\bcall(ing)?\s+(out\b|bs\b|bullsh|dibs\b|it\s+(a|an|quits)\b|the\s+shots\b)",
+    re.IGNORECASE,
+)
+
 _NORMALIZE_RE = re.compile(r"[^a-z0-9\s]+")
 
 
@@ -89,6 +97,8 @@ def is_call_request(message: str) -> bool:
     try:
         text = (message or "").strip()
         if not text:
+            return False
+        if _IDIOM_PATTERNS.search(text):
             return False
         if _STRONG_ASK_PATTERNS.search(text):
             return True
