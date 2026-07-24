@@ -6189,6 +6189,11 @@ from .power_users import register_power_users_api_routes  # noqa: E402
 
 register_power_users_api_routes(api_bp, _slug_or_abort, _require_performer_account)
 
+# ── Recent signups (newest subscribers, links to their threads) ───────────────
+from .recent_signups import register_recent_signups_api_routes  # noqa: E402
+
+register_recent_signups_api_routes(api_bp, _slug_or_abort, _require_performer_account)
+
 # ── Inbox AI pause / resume (human takeover) ─────────────────────────────────
 from .inbox_pause import register_inbox_pause_api_routes  # noqa: E402
 
