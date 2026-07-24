@@ -139,7 +139,23 @@ class ZarnaBrain:
             self.storage.save_message(phone_number, "assistant", giveaway_reply)
             return giveaway_reply
 
-        # 2c. Conversation closers (lol, thanks, ok) — no reply expected
+        # 2c. CALL gate — fans regularly text "CALL" to ask if they can phone
+        #     the bot. The LLM knows nothing about the voice feature and used
+        #     to deny it exists, so answer deterministically: SMS fans get
+        #     "yes, call this number", WhatsApp fans get "texting works, but
+        #     WhatsApp calling isn't supported yet". Only fires when this
+        #     creator's voice feature is enabled. Never blocks a fan's reply.
+        try:
+            from app.brain.call_gate import try_call_gate
+            call_reply = try_call_gate(phone_number, message_text, self.creator_config)
+        except Exception:
+            _logger.warning("[ZARNA] call gate error", exc_info=True)
+            call_reply = None
+        if call_reply:
+            self.storage.save_message(phone_number, "assistant", call_reply)
+            return call_reply
+
+        # 2d. Conversation closers (lol, thanks, ok) — no reply expected
         if is_conversation_ender(message_text):
             return ""
 
