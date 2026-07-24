@@ -82,7 +82,11 @@ class _FakeConn:
 def client(monkeypatch):
     monkeypatch.setattr(verify, "_VERIFY_SECRET", "test-secret")
     verify._volume_hits.clear()
-    verify._last_alert_at = 0.0
+    # -inf, not 0.0: time.monotonic() is time since boot, which can be under
+    # _VOLUME_WINDOW on a freshly booted CI runner. Resetting to 0.0 makes
+    # "now - _last_alert_at > _VOLUME_WINDOW" false there, wrongly suppressing
+    # the first alert and flaking test_high_volume_never_blocks_and_warns.
+    verify._last_alert_at = float("-inf")
     app = Flask(__name__)
     app.register_blueprint(verify.verify_bp)
     return app.test_client()
