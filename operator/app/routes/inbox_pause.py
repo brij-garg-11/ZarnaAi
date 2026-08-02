@@ -5,9 +5,8 @@ POST /api/inbox/<ident>/pause-ai   → stop the bot from auto-replying to this f
 POST /api/inbox/<ident>/resume-ai  → let the bot auto-reply again
 
 `ident` is the fan's last-4 digits or full number (same resolver the rest of the
-inbox uses). Pausing is also triggered automatically when the operator sends a
-manual message (see api_inbox_send), so a feedback conversation never gets
-interrupted by the AI.
+inbox uses). Pausing only happens through these explicit endpoints — sending a
+manual message from the inbox does NOT auto-pause the bot.
 
 Registered via register_inbox_pause_api_routes(api_bp) from
 operator/app/routes/api.py.
