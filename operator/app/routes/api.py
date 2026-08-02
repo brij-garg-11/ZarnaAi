@@ -958,22 +958,15 @@ def api_inbox_send(phone_last4):
     except Exception as e:
         logger.warning("api_inbox_send: failed to log message (send already happened): %s", e)
 
-    # Auto-pause AI for this fan: an operator manual message means a human has
-    # taken over the conversation, so the bot must not reply on top of them. The
-    # pause holds until the operator hits Resume (no TTL).
-    try:
-        from ..ai_pause import pause_ai
-        pause_ai(phone, inbox_slug or _slug_for_send, paused_by=(user or {}).get("email", ""))
-    except Exception:
-        logger.warning("api_inbox_send: auto-pause failed (send already happened)", exc_info=True)
-
+    # Note: sending a manual message intentionally does NOT pause the AI.
+    # Operators pause explicitly via the "Take over (pause AI)" button
+    # (POST /api/inbox/<ident>/pause-ai) when they want the bot silenced.
     return jsonify(
         success=True,
         message_id=message_id,
         sent_at=sent_at.isoformat(),
         phone_last4=phone_last4,
         media_url=media_url or None,
-        ai_paused=True,
     )
 
 
