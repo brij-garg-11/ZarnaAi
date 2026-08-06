@@ -40,6 +40,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("pick_fan_of_the_week")
 
+CREATOR_SLUG = os.getenv("CREATOR_SLUG", "zarna")
+
+# Internal/test numbers that must never win (mirrors the dashboard API).
+TEST_NUMBERS = ("+16466406086", "+16467244908", "+16467242012")
+
 
 def get_conn():
     import psycopg2
@@ -58,11 +63,13 @@ def ensure_table(conn):
                 week_of      DATE        NOT NULL,
                 message_text TEXT        DEFAULT '',
                 selected_at  TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE (week_of)
+                creator_slug TEXT        NOT NULL DEFAULT 'zarna',
+                UNIQUE (creator_slug, week_of)
             )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_fotw_week  ON fan_of_the_week (week_of DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_fotw_phone ON fan_of_the_week (phone_number)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_fotw_slug_week ON fan_of_the_week (creator_slug, week_of DESC)")
     conn.commit()
     logger.info("ensure_table: fan_of_the_week ready")
 
@@ -72,8 +79,9 @@ def already_picked_this_week(conn) -> bool:
         cur.execute("""
             SELECT 1 FROM fan_of_the_week
             WHERE week_of = DATE_TRUNC('week', CURRENT_DATE)::date
+              AND creator_slug = %s
             LIMIT 1
-        """)
+        """, (CREATOR_SLUG,))
         return cur.fetchone() is not None
 
 
@@ -88,6 +96,7 @@ def pick_top_candidate(conn) -> dict | None:
             SELECT phone_number, COUNT(*) AS reply_count
             FROM   messages
             WHERE  role = 'user'
+              AND  creator_slug = %s
               AND  created_at >= NOW() - INTERVAL '7 days'
               AND  did_user_reply = true
             GROUP  BY phone_number
@@ -96,7 +105,7 @@ def pick_top_candidate(conn) -> dict | None:
             SELECT phone_number, COUNT(*) > 0 AS did_come_back
             FROM   conversation_sessions
             WHERE  came_back_within_7d = true
-              AND  created_at >= NOW() - INTERVAL '7 days'
+              AND  started_at >= NOW() - INTERVAL '7 days'
             GROUP  BY phone_number
         ),
         best_msg AS (
@@ -106,6 +115,7 @@ def pick_top_candidate(conn) -> dict | None:
                 m.created_at AS msg_at
             FROM messages m
             WHERE m.role = 'user'
+              AND m.creator_slug = %s
               AND m.created_at >= NOW() - INTERVAL '1 day' * %s
               AND LENGTH(m.text) BETWEEN 50 AND 400
               AND m.text NOT ILIKE 'stop%%'
@@ -133,18 +143,22 @@ def pick_top_candidate(conn) -> dict | None:
             ) AS candidate_score
         FROM best_msg bm
         LEFT JOIN contacts           c  ON c.phone_number  = bm.phone_number
+                                       AND c.creator_slug  = %s
         LEFT JOIN recent_replies     rr ON rr.phone_number = bm.phone_number
         LEFT JOIN came_back          cb ON cb.phone_number = bm.phone_number
         WHERE bm.phone_number NOT IN (
             SELECT phone_number FROM fan_of_the_week
             WHERE week_of >= CURRENT_DATE - INTERVAL '8 weeks'
+              AND creator_slug = %s
         )
+          AND bm.phone_number NOT IN %s
         ORDER BY candidate_score DESC
         LIMIT 1
     """
     with conn.cursor() as cur:
         for days_back in (7, 30, 90):
-            cur.execute(sql, (days_back,))
+            cur.execute(sql, (CREATOR_SLUG, CREATOR_SLUG, days_back,
+                              CREATOR_SLUG, CREATOR_SLUG, TEST_NUMBERS))
             row = cur.fetchone()
             if row:
                 return {
@@ -161,10 +175,10 @@ def pick_top_candidate(conn) -> dict | None:
 def save_pick(conn, phone_number: str, message_text: str):
     with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO fan_of_the_week (phone_number, week_of, message_text)
-            VALUES (%s, DATE_TRUNC('week', CURRENT_DATE)::date, %s)
-            ON CONFLICT (week_of) DO NOTHING
-        """, (phone_number, message_text))
+            INSERT INTO fan_of_the_week (phone_number, week_of, message_text, creator_slug)
+            VALUES (%s, DATE_TRUNC('week', CURRENT_DATE)::date, %s, %s)
+            ON CONFLICT (creator_slug, week_of) DO NOTHING
+        """, (phone_number, message_text, CREATOR_SLUG))
 
         cur.execute("""
             UPDATE contacts
@@ -173,8 +187,9 @@ def save_pick(conn, phone_number: str, message_text: str):
                 'fan_of_the_week'
             )
             WHERE phone_number = %s
+              AND creator_slug = %s
               AND NOT ('fan_of_the_week' = ANY(COALESCE(fan_tags, '{}')))
-        """, (phone_number,))
+        """, (phone_number, CREATOR_SLUG))
     conn.commit()
 
 
