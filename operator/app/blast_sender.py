@@ -13,6 +13,101 @@ import time
 logger = logging.getLogger(__name__)
 
 
+def _normalize_bare(phone: str) -> str:
+    """Strip a whatsapp: prefix, returning the bare E.164 number."""
+    p = (phone or "").strip()
+    if p.lower().startswith("whatsapp:"):
+        return p[len("whatsapp:"):].strip()
+    return p
+
+
+def _wa_from() -> str:
+    """The configured WhatsApp sender (whatsapp:+E164), or '' when unset."""
+    wa = (os.getenv("TWILIO_WHATSAPP_NUMBER") or "").strip()
+    if wa and not wa.lower().startswith("whatsapp:"):
+        wa = f"whatsapp:{wa}"
+    return wa
+
+
+def _partition_audience(
+    phones: list[str], wa_bare: set[str]
+) -> list[tuple[str, bool]]:
+    """Dedupe audience rows and decide the delivery channel per fan.
+
+    WhatsApp fans exist in the DB under two keys: the brain stores their
+    contact/messages rows with the whatsapp: prefix, while live-show signups
+    store the bare E.164. The same fan can therefore appear twice in one
+    audience. This collapses each fan to their bare number and marks them for
+    WhatsApp delivery when any of their rows carried the whatsapp: prefix or
+    their bare number is in ``wa_bare`` (e.g. they signed up to the target
+    show via WhatsApp).
+
+    Returns [(bare_phone, deliver_whatsapp), ...] preserving first-seen order.
+    """
+    order: list[str] = []
+    wa_flags: dict[str, bool] = {}
+    for raw in phones:
+        p = (raw or "").strip()
+        if not p:
+            continue
+        is_wa = p.lower().startswith("whatsapp:")
+        bare = _normalize_bare(p)
+        if bare not in wa_flags:
+            order.append(bare)
+            wa_flags[bare] = False
+        if is_wa or bare in wa_bare:
+            wa_flags[bare] = True
+    return [(b, wa_flags[b]) for b in order]
+
+
+def _wa_signup_bare_set(draft: dict, creator_slug: str | None) -> set[str]:
+    """Bare phones that signed up to the blast's target show via WhatsApp.
+
+    Only applies to show audiences — for every other audience type the
+    whatsapp: prefix on the contact row itself is the routing signal.
+    Fails open to SMS (empty set) so a lookup error never blocks a blast.
+    """
+    if (draft.get("audience_type") or "") != "show":
+        return set()
+    try:
+        show_id = int((draft.get("audience_filter") or "").strip())
+    except (TypeError, ValueError):
+        return set()
+    try:
+        from .db import get_conn
+        conn = get_conn()
+        with conn.cursor() as cur:
+            if creator_slug:
+                cur.execute(
+                    """
+                    SELECT lss.phone_number
+                    FROM   live_show_signups lss
+                    JOIN   live_shows ls ON ls.id = lss.show_id
+                    WHERE  lss.show_id = %s
+                      AND  ls.creator_slug = %s
+                      AND  lss.channel ILIKE '%%whatsapp%%'
+                    """,
+                    (show_id, creator_slug),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT phone_number FROM live_show_signups
+                    WHERE  show_id = %s AND channel ILIKE '%%whatsapp%%'
+                    """,
+                    (show_id,),
+                )
+            rows = {r[0] for r in cur.fetchall()}
+        conn.close()
+        return rows
+    except Exception:
+        logger.warning(
+            "could not resolve WhatsApp signup channels for draft show — "
+            "all recipients default to SMS", exc_info=True,
+        )
+        return set()
+
+
 def execute_blast(draft_id: int):
     """Load draft, fetch audience phones, send via the chosen channel."""
     from .queries import (
@@ -120,6 +215,18 @@ def execute_blast(draft_id: int):
         mark_blast_sent(draft_id, 0, 0, 0)
         return
 
+    # Per-fan channel routing: fans who signed up via WhatsApp get the blast
+    # on WhatsApp; everyone else keeps SMS. Also dedupes fans who appear under
+    # both bare and whatsapp:-prefixed keys.
+    routing = _partition_audience(phones, _wa_signup_bare_set(draft, blast_owner_slug))
+    phones = [p for p, _ in routing]
+    wa_set = {p for p, wa in routing if wa}
+    if wa_set:
+        logger.info(
+            "  channel routing: %d WhatsApp, %d SMS (deduped audience: %d)",
+            len(wa_set), len(phones) - len(wa_set), len(phones),
+        )
+
     body = draft["body"]
     channel = draft["channel"]
 
@@ -144,7 +251,10 @@ def execute_blast(draft_id: int):
     needs_merge = "{{name}}" in body or "{{location}}" in body
     fan_data: dict = {}
     if needs_merge:
-        fan_data = get_audience_fan_data(phones)
+        # WhatsApp fans' contact rows may live under the whatsapp:-prefixed
+        # key, so fetch both forms and let _build_fan_body try each.
+        lookup_phones = phones + [f"whatsapp:{p}" for p in wa_set]
+        fan_data = get_audience_fan_data(lookup_phones)
         logger.info("  merge tags detected — fetched fan data for %d phones", len(fan_data))
 
     # Create the blast_context_sessions row NOW — before the send loop — so
@@ -171,7 +281,7 @@ def execute_blast(draft_id: int):
     def _build_fan_body(phone: str) -> str:
         """Per-fan body: {{name}} / {{location}} merge tags + personalized tracked URL."""
         if needs_merge:
-            fan_info = fan_data.get(phone, {})
+            fan_info = fan_data.get(phone) or fan_data.get(f"whatsapp:{phone}") or {}
             fan_name = fan_info.get("fan_name", "") or "friend"
             fan_location = fan_info.get("fan_location", "")
             fan_body_base = body.replace("{{name}}", fan_name).replace("{{location}}", fan_location)
@@ -187,6 +297,10 @@ def execute_blast(draft_id: int):
     def _after_success(phone: str, fan_body: str) -> None:
         """Post-send bookkeeping: credits + inbox message row. Thread-safe
         (each call opens its own DB connection)."""
+        # WhatsApp fans' conversation threads are keyed by the whatsapp:-
+        # prefixed number (that's how the brain stores their messages), so
+        # save the blast row under the same key for inbox continuity.
+        thread_phone = f"whatsapp:{phone}" if phone in wa_set else phone
         # Charge credits to the blast owner (per recipient, per segment).
         # MMS gets a flat 3-credit charge handled by count_segments.
         if blast_owner_user_id:
@@ -205,7 +319,7 @@ def execute_blast(draft_id: int):
         # shows up in the operator inbox thread. has_link drives
         # link_clicked_1h tracking.
         _save_blast_message(
-            phone, fan_body, blast_owner_slug or "",
+            thread_phone, fan_body, blast_owner_slug or "",
             has_link=bool(tracked_link_slug),
         )
 
@@ -244,6 +358,7 @@ def execute_blast(draft_id: int):
         sent, failed, sent_phones = _run_concurrent_twilio_blast(
             draft_id=draft_id,
             phones=phones,
+            wa_set=wa_set,
             build_fan_body=_build_fan_body,
             media_url=media_url,
             after_success=_after_success,
@@ -257,8 +372,15 @@ def execute_blast(draft_id: int):
         for i, phone in enumerate(phones):
             try:
                 fan_body = _build_fan_body(phone)
-                ok = _send_one(phone, fan_body, channel, media_url=media_url)
-                logger.info("  send to ...%s via %s: %s", phone[-4:], channel, "OK" if ok else "FAIL")
+                if phone in wa_set:
+                    # SlickText has no WhatsApp support — WhatsApp fans always
+                    # go out via the Twilio WhatsApp sender.
+                    ok = _send_twilio(phone, fan_body, media_url=media_url, whatsapp=True)
+                else:
+                    ok = _send_one(phone, fan_body, channel, media_url=media_url)
+                logger.info("  send to ...%s via %s: %s", phone[-4:],
+                            "whatsapp" if phone in wa_set else channel,
+                            "OK" if ok else "FAIL")
                 if ok:
                     sent += 1
                     sent_phones.append(phone)
@@ -322,6 +444,7 @@ def _run_concurrent_twilio_blast(
     *,
     draft_id: int,
     phones: list[str],
+    wa_set: set[str],
     build_fan_body,
     media_url: str,
     after_success,
@@ -368,11 +491,23 @@ def _run_concurrent_twilio_blast(
 
     from_number = os.getenv("TWILIO_PHONE_NUMBER", "")
     messaging_service_sid = os.getenv("TWILIO_MESSAGING_SERVICE_SID", "")
+    wa_from = _wa_from()
+    if wa_set and not wa_from:
+        logger.error(
+            "  [Twilio] %d WhatsApp recipients but TWILIO_WHATSAPP_NUMBER is "
+            "not set — those sends will fail", len(wa_set),
+        )
 
     def _send_with_client(client, phone: str, fan_body: str) -> bool:
+        if phone in wa_set:
+            # WhatsApp requires an explicit registered sender — the A2P
+            # messaging service pool is SMS-only.
+            if not wa_from:
+                return False
+            kwargs = dict(body=fan_body, from_=wa_from, to=f"whatsapp:{phone}")
         # Route through the A2P messaging service when available — same
         # compliance path as conversational replies.
-        if messaging_service_sid:
+        elif messaging_service_sid:
             kwargs = dict(body=fan_body, messaging_service_sid=messaging_service_sid, to=phone)
         else:
             kwargs = dict(body=fan_body, from_=from_number, to=phone)
@@ -577,7 +712,7 @@ def _send_one(phone: str, body: str, channel: str, *, media_url: str = "") -> bo
     return _send_twilio(phone, body, media_url=media_url)
 
 
-def _send_twilio(phone: str, body: str, *, media_url: str = "") -> bool:
+def _send_twilio(phone: str, body: str, *, media_url: str = "", whatsapp: bool = False) -> bool:
     try:
         from twilio.rest import Client
         account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
@@ -588,10 +723,17 @@ def _send_twilio(phone: str, body: str, *, media_url: str = "") -> bool:
             logger.error("Twilio credentials not configured")
             return False
         client = Client(account_sid, auth_token)
+        if whatsapp:
+            # WhatsApp needs an explicit registered sender (no A2P service pool).
+            wa_from = _wa_from()
+            if not wa_from:
+                logger.error("  [Twilio] TWILIO_WHATSAPP_NUMBER not set — cannot send WhatsApp blast")
+                return False
+            kwargs = dict(body=body, from_=wa_from, to=f"whatsapp:{_normalize_bare(phone)}")
         # Route through the A2P messaging service when available — this ensures
         # blasts benefit from the same campaign compliance as conversational replies.
         # Fall back to direct from_number for accounts without a service SID.
-        if messaging_service_sid:
+        elif messaging_service_sid:
             kwargs = dict(body=body, messaging_service_sid=messaging_service_sid, to=phone)
             logger.info("  [Twilio] sending blast via A2P messaging service %s", messaging_service_sid)
         else:
