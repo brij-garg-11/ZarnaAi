@@ -81,6 +81,48 @@ def _twiml(body: str) -> Response:
     return Response(content=xml, media_type="text/xml")
 
 
+_ELEVENLABS_INBOUND_URL = "https://api.elevenlabs.io/twilio/inbound_call"
+
+
+def _strip_wa(value: str) -> str:
+    v = (value or "").strip()
+    if v.lower().startswith("whatsapp:"):
+        return v[len("whatsapp:"):].strip()
+    return v
+
+
+def _forward_whatsapp_to_elevenlabs(form: dict) -> str | None:
+    """Hand a WhatsApp call to the same ElevenLabs agent that answers PSTN calls.
+
+    PSTN calls to the business number never reach this service — the number's
+    voice_url points straight at ElevenLabs Agents. WhatsApp Business Calling,
+    however, must route through a Twilio TwiML app (this service), and
+    ConversationRelay can't use the private cloned voice that lives in the
+    creator's ElevenLabs account. So instead of answering here, re-POST the
+    webhook to ElevenLabs with bare E.164 numbers (its agent lookup rejects the
+    whatsapp:-prefixed forms) and return its <Connect><Stream> TwiML verbatim —
+    the caller gets the exact same agent, voice, and brain as a phone call.
+
+    Returns the TwiML string, or None so the caller can fall back.
+    """
+    import requests
+
+    payload = dict(form)
+    payload["To"] = _strip_wa(form.get("To", ""))
+    payload["From"] = _strip_wa(form.get("From", ""))
+    try:
+        r = requests.post(_ELEVENLABS_INBOUND_URL, data=payload, timeout=10)
+        if r.status_code == 200 and "<Response" in r.text:
+            return r.text
+        _logger.error(
+            "[ZARNA] ElevenLabs WhatsApp-call handoff failed: %s %s",
+            r.status_code, r.text[:200],
+        )
+    except Exception:
+        _logger.exception("[ZARNA] ElevenLabs WhatsApp-call handoff error")
+    return None
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "voice", "slug": _slug()}
@@ -94,6 +136,22 @@ async def twilio_voice(request: Request):
     if not _validate_twilio_signature(request, form):
         _logger.warning("[ZARNA] rejected voice webhook — bad Twilio signature")
         return Response(content="Forbidden", status_code=403)
+
+    # WhatsApp Business Calling: hand off to the ElevenLabs agent (the same
+    # flow PSTN calls use), since ConversationRelay can't access the private
+    # cloned voice. Falls through to the apology TwiML if the handoff fails.
+    if (form.get("To") or "").lower().startswith("whatsapp:"):
+        xml = await asyncio.to_thread(_forward_whatsapp_to_elevenlabs, form)
+        if xml:
+            _logger.info(
+                "[ZARNA] WhatsApp call handed to ElevenLabs agent (from=...%s)",
+                _strip_wa(form.get("From", ""))[-4:],
+            )
+            return Response(content=xml, media_type="text/xml")
+        return _twiml(
+            "<Say>Sorry, the voice line isn't available right now. "
+            "Please send a text message instead.</Say><Hangup/>"
+        )
 
     voice = _voice_settings()
     if not voice or not voice.enabled or not voice.voice_id:
