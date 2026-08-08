@@ -706,7 +706,15 @@ def _record_recipients(blast_id: int, phones: list[str]) -> None:
 
 
 def _send_one(phone: str, body: str, channel: str, *, media_url: str = "") -> bool:
-    """Route to Twilio or SlickText based on channel setting."""
+    """Route to Twilio or SlickText based on channel setting.
+
+    A whatsapp:-prefixed number means the thread lives on WhatsApp (inbound
+    WhatsApp messages are stored under that key), so deliver via the WhatsApp
+    sender regardless of the channel setting — the SMS messaging service
+    rejects whatsapp: recipients outright.
+    """
+    if (phone or "").strip().lower().startswith("whatsapp:"):
+        return _send_twilio(phone, body, media_url=media_url, whatsapp=True)
     if channel == "slicktext":
         return _send_slicktext(phone, body, media_url=media_url)
     return _send_twilio(phone, body, media_url=media_url)
