@@ -156,3 +156,60 @@ def test_send_twilio_sms_path_unchanged(monkeypatch):
     assert kwargs["to"] == "+15550000001"
     assert kwargs["messaging_service_sid"] == "MGtest"
     assert "from_" not in kwargs
+
+
+# ---------------------------------------------------------------------------
+# _send_one — manual inbox sends must respect whatsapp: thread keys
+# ---------------------------------------------------------------------------
+# Regression: replying from the operator inbox to a WhatsApp fan passed the
+# whatsapp:-prefixed thread key straight into the SMS path (A2P messaging
+# service), which Twilio rejects — the message silently never went out.
+
+def test_send_one_routes_whatsapp_thread_to_whatsapp(monkeypatch):
+    _twilio_env(monkeypatch)
+    fake_client = MagicMock()
+    fake_client.messages.create.return_value = MagicMock(sid="SMxxx")
+    with patch("twilio.rest.Client", return_value=fake_client):
+        ok = bs._send_one("whatsapp:+447700900123", "hi", channel="twilio")
+    assert ok is True
+    kwargs = fake_client.messages.create.call_args.kwargs
+    assert kwargs["to"] == "whatsapp:+447700900123"
+    assert kwargs["from_"] == "whatsapp:+18556081717"
+    assert "messaging_service_sid" not in kwargs
+
+
+def test_send_one_whatsapp_overrides_slicktext_channel(monkeypatch):
+    _twilio_env(monkeypatch)
+    fake_client = MagicMock()
+    fake_client.messages.create.return_value = MagicMock(sid="SMxxx")
+    with patch("twilio.rest.Client", return_value=fake_client):
+        ok = bs._send_one("whatsapp:+447700900123", "hi", channel="slicktext")
+    assert ok is True
+    assert fake_client.messages.create.call_args.kwargs["to"] == "whatsapp:+447700900123"
+
+
+def test_send_one_whatsapp_passes_media_url(monkeypatch):
+    _twilio_env(monkeypatch)
+    fake_client = MagicMock()
+    fake_client.messages.create.return_value = MagicMock(sid="SMxxx")
+    with patch("twilio.rest.Client", return_value=fake_client):
+        ok = bs._send_one(
+            "whatsapp:+447700900123", "", channel="twilio",
+            media_url="https://x/operator/blast/img/v.mp3",
+        )
+    assert ok is True
+    kwargs = fake_client.messages.create.call_args.kwargs
+    assert kwargs["media_url"] == ["https://x/operator/blast/img/v.mp3"]
+    assert kwargs["to"] == "whatsapp:+447700900123"
+
+
+def test_send_one_bare_number_keeps_sms_path(monkeypatch):
+    _twilio_env(monkeypatch)
+    fake_client = MagicMock()
+    fake_client.messages.create.return_value = MagicMock(sid="SMxxx")
+    with patch("twilio.rest.Client", return_value=fake_client):
+        ok = bs._send_one("+15550000001", "hi", channel="twilio")
+    assert ok is True
+    kwargs = fake_client.messages.create.call_args.kwargs
+    assert kwargs["to"] == "+15550000001"
+    assert kwargs["messaging_service_sid"] == "MGtest"
