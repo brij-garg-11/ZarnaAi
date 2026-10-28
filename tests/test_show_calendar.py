@@ -191,7 +191,11 @@ class TestBuildDirective:
         assert "Cap City" in d.instruction
 
     def test_upcoming_match_without_show_link_falls_back_to_generic(self):
-        cfg = _cfg(shows=[{"city": "Austin", "venue": "Cap City", "date": "Jun 25, 2026"}],
+        # Relative future date so the show stays upcoming regardless of when
+        # the suite runs (a hardcoded "Jun 25, 2026" became a time bomb).
+        today = datetime.now(timezone.utc).date()
+        cfg = _cfg(shows=[{"city": "Austin", "venue": "Cap City",
+                           "date": _label(today + timedelta(days=20))}],
                    tickets="https://generic/tickets")
         d = sc.build_show_directive("austin?", cfg)
         assert d.ticket_url == "https://generic/tickets"
