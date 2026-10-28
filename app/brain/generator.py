@@ -1026,7 +1026,13 @@ def _generate_gemini_raw(prompt: str) -> str:
     usage = response.usage_metadata
     _usage_local.provider = "gemini"
     _usage_local.prompt_tokens = getattr(usage, "prompt_token_count", 0) or 0
-    _usage_local.completion_tokens = getattr(usage, "candidates_token_count", 0) or 0
+    # Thinking ("thought") tokens are billed as output tokens but reported
+    # separately from candidates — ignoring them is how a 3x Gemini spend
+    # spike (Oct 2026) stayed invisible to our own cost tracking.
+    _usage_local.completion_tokens = (
+        (getattr(usage, "candidates_token_count", 0) or 0)
+        + (getattr(usage, "thoughts_token_count", 0) or 0)
+    )
     return text
 
 

@@ -19,6 +19,10 @@ EMBEDDING_MODEL  = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001")
 # ~4.6s median / ~750 thought tokens; low ~3.4s / ~480; minimal ~1.2s / 0 —
 # with structured link formatting, emotional tone, and identity honesty all
 # intact at minimal. Bump to "low" via env if reply quality ever regresses.
+# Oct 2026: gemini-flash-latest rolled to gemini-3.8-flash, which REJECTS
+# "minimal" (400 INVALID_ARGUMENT) but accepts "low" (measured 0 thought
+# tokens). app/brain/thinking.py now auto-downgrades a rejected level to
+# "low" and caches it, so "minimal" stays a safe default either way.
 GENERATION_THINKING_LEVEL = os.getenv("GENERATION_THINKING_LEVEL", "minimal").strip().lower()
 # Intent + router just emit a label/JSON — they need near-zero reasoning.
 CLASSIFIER_THINKING_LEVEL = os.getenv("CLASSIFIER_THINKING_LEVEL", "minimal").strip().lower()

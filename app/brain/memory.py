@@ -24,10 +24,22 @@ from typing import Tuple
 
 from google import genai
 
-from app.config import GEMINI_API_KEY, INTENT_MODEL, CREATOR_SLUG
+from app.brain.thinking import build_thinking_config, generate_with_thinking
+from app.config import (
+    CLASSIFIER_THINKING_LEVEL,
+    CREATOR_SLUG,
+    GEMINI_API_KEY,
+    INTENT_MODEL,
+)
 
 logger = logging.getLogger(__name__)
 _client = genai.Client(api_key=GEMINI_API_KEY)
+
+# Memory extraction just emits a small JSON object — it needs near-zero
+# reasoning. This call site was missed in #78, so it ran with the model's
+# default (high/dynamic) thinking on every inbound message from the Jul 2026
+# alias roll onward — pure wasted spend.
+_THINKING_CONFIG = build_thinking_config(CLASSIFIER_THINKING_LEVEL)
 
 # ── Fan-name validation ──────────────────────────────────────────────────────
 # The extractor occasionally mistakes the creator's or family's names (fans open
@@ -230,9 +242,8 @@ def extract_memory(
     )
 
     try:
-        response = _client.models.generate_content(
-            model=INTENT_MODEL,
-            contents=prompt,
+        response = generate_with_thinking(
+            _client, INTENT_MODEL, prompt, _THINKING_CONFIG
         )
         raw = response.text.strip()
 
