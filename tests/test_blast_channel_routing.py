@@ -203,6 +203,20 @@ def test_send_one_whatsapp_passes_media_url(monkeypatch):
     assert kwargs["to"] == "whatsapp:+447700900123"
 
 
+def test_send_one_slicktext_channel_delivers_via_twilio(monkeypatch):
+    # SlickText is retired: a legacy draft saved with channel="slicktext"
+    # must deliver through the Twilio SMS path, never the SlickText API.
+    _twilio_env(monkeypatch)
+    fake_client = MagicMock()
+    fake_client.messages.create.return_value = MagicMock(sid="SMxxx")
+    with patch("twilio.rest.Client", return_value=fake_client):
+        ok = bs._send_one("+15550000001", "hi", channel="slicktext")
+    assert ok is True
+    kwargs = fake_client.messages.create.call_args.kwargs
+    assert kwargs["to"] == "+15550000001"
+    assert kwargs["messaging_service_sid"] == "MGtest"
+
+
 def test_send_one_bare_number_keeps_sms_path(monkeypatch):
     _twilio_env(monkeypatch)
     fake_client = MagicMock()

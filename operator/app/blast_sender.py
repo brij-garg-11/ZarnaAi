@@ -351,52 +351,24 @@ def execute_blast(draft_id: int):
                 logger.warning("mid-send credit check failed (non-fatal)", exc_info=True)
         return False
 
-    # Twilio supports concurrent high-throughput sending (account is
-    # provisioned for 25 MPS) — run a rate-limited thread pool. SlickText's
-    # per-number API has tight rate limits, so it keeps the sequential loop.
-    if channel != "slicktext":
-        sent, failed, sent_phones = _run_concurrent_twilio_blast(
-            draft_id=draft_id,
-            phones=phones,
-            wa_set=wa_set,
-            build_fan_body=_build_fan_body,
-            media_url=media_url,
-            after_success=_after_success,
-            should_stop=_should_stop,
-            mark_progress=mark_blast_progress,
+    # All blasts send via Twilio's concurrent rate-limited thread pool.
+    # SlickText is retired as a blast channel — legacy drafts saved with
+    # channel="slicktext" are delivered via Twilio too.
+    if channel == "slicktext":
+        logger.warning(
+            "=== BLAST %s has legacy channel 'slicktext' — sending via Twilio ===",
+            draft_id,
         )
-    else:
-        sent = 0
-        failed = 0
-        sent_phones = []
-        for i, phone in enumerate(phones):
-            try:
-                fan_body = _build_fan_body(phone)
-                if phone in wa_set:
-                    # SlickText has no WhatsApp support — WhatsApp fans always
-                    # go out via the Twilio WhatsApp sender.
-                    ok = _send_twilio(phone, fan_body, media_url=media_url, whatsapp=True)
-                else:
-                    ok = _send_one(phone, fan_body, channel, media_url=media_url)
-                logger.info("  send to ...%s via %s: %s", phone[-4:],
-                            "whatsapp" if phone in wa_set else channel,
-                            "OK" if ok else "FAIL")
-                if ok:
-                    sent += 1
-                    sent_phones.append(phone)
-                    _after_success(phone, fan_body)
-                else:
-                    failed += 1
-            except Exception as e:
-                logger.warning("  send error for ...%s: %s", phone[-4:], e)
-                failed += 1
-            time.sleep(0.05)
-            # Write progress every 50 sends so the UI can poll live counts
-            if (i + 1) % 50 == 0:
-                mark_blast_progress(draft_id, sent, failed)
-                if _should_stop(sent, failed):
-                    mark_blast_sent(draft_id, sent, failed, total)
-                    return
+    sent, failed, sent_phones = _run_concurrent_twilio_blast(
+        draft_id=draft_id,
+        phones=phones,
+        wa_set=wa_set,
+        build_fan_body=_build_fan_body,
+        media_url=media_url,
+        after_success=_after_success,
+        should_stop=_should_stop,
+        mark_progress=mark_blast_progress,
+    )
 
     mark_blast_sent(draft_id, sent, failed, total)
     logger.info("=== BLAST %s DONE: %s sent, %s failed of %s ===", draft_id, sent, failed, len(phones))
@@ -706,17 +678,18 @@ def _record_recipients(blast_id: int, phones: list[str]) -> None:
 
 
 def _send_one(phone: str, body: str, channel: str, *, media_url: str = "") -> bool:
-    """Route to Twilio or SlickText based on channel setting.
+    """Send one message via Twilio (SlickText is retired as a blast channel).
 
     A whatsapp:-prefixed number means the thread lives on WhatsApp (inbound
     WhatsApp messages are stored under that key), so deliver via the WhatsApp
-    sender regardless of the channel setting — the SMS messaging service
-    rejects whatsapp: recipients outright.
+    sender — the SMS messaging service rejects whatsapp: recipients outright.
+    The `channel` arg is kept for call-site compatibility but no longer routes
+    anywhere except Twilio.
     """
     if (phone or "").strip().lower().startswith("whatsapp:"):
         return _send_twilio(phone, body, media_url=media_url, whatsapp=True)
     if channel == "slicktext":
-        return _send_slicktext(phone, body, media_url=media_url)
+        logger.warning("_send_one: legacy 'slicktext' channel requested — sending via Twilio")
     return _send_twilio(phone, body, media_url=media_url)
 
 
@@ -756,53 +729,3 @@ def _send_twilio(phone: str, body: str, *, media_url: str = "", whatsapp: bool =
         return False
 
 
-def _send_slicktext(phone: str, body: str, *, media_url: str = "") -> bool:
-    """
-    Send via SlickText v1 API — mirrors the main app's SlickTextAdapter._send_v1 exactly.
-    Requires: SLICKTEXT_PUBLIC_KEY, SLICKTEXT_PRIVATE_KEY, SLICKTEXT_TEXTWORD_ID
-    Supports MMS by adding mediaUrl when provided.
-    """
-    try:
-        import requests
-        pub_key     = os.getenv("SLICKTEXT_PUBLIC_KEY", "")
-        priv_key    = os.getenv("SLICKTEXT_PRIVATE_KEY", "")
-        textword_id = os.getenv("SLICKTEXT_TEXTWORD_ID", "")
-
-        logger.info("  [ST-v1] pub_key set=%s  priv_key set=%s  textword_id=%r",
-                    bool(pub_key), bool(priv_key), textword_id)
-
-        if not pub_key or not priv_key:
-            logger.error("  [ST-v1] MISSING credentials: SLICKTEXT_PUBLIC_KEY / SLICKTEXT_PRIVATE_KEY not set")
-            return False
-        if not textword_id:
-            logger.error("  [ST-v1] MISSING SLICKTEXT_TEXTWORD_ID — required for v1 outbound sends")
-            return False
-
-        payload = {
-            "action":   "SEND",
-            "textword": textword_id,
-            "number":   phone,
-            "body":     body,
-        }
-        if media_url:
-            payload["mediaUrl"] = media_url
-            logger.info("  [ST-v1] sending MMS with mediaUrl=%r", media_url[:60])
-
-        logger.info("  [ST-v1] POST /v1/messages/  payload=%r", payload)
-
-        resp = requests.post(
-            "https://api.slicktext.com/v1/messages/",
-            data=payload,
-            auth=(pub_key, priv_key),
-            timeout=10,
-        )
-        logger.info("  [ST-v1] response: status=%s  body=%r", resp.status_code, resp.text[:300])
-
-        if resp.status_code == 200:
-            logger.info("  [ST-v1] SENT OK to ...%s", phone[-4:])
-            return True
-        logger.error("  [ST-v1] FAILED: %s — %s", resp.status_code, resp.text[:300])
-        return False
-    except Exception as e:
-        logger.exception("  [ST-v1] EXCEPTION: %s", e)
-        return False
