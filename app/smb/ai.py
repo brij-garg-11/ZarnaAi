@@ -8,16 +8,21 @@ clients directly, so every call gets resilience for free.
 
 import logging
 
+from app.brain.thinking import build_thinking_config, generate_with_thinking
 from app.config import (
     ANTHROPIC_API_KEY,
     GEMINI_API_KEY,
     GENERATION_MODEL,
+    GENERATION_THINKING_LEVEL,
     HIGH_MODEL,
     MID_MODEL,
     OPENAI_API_KEY,
 )
 
 logger = logging.getLogger(__name__)
+
+# Bound Gemini's hidden reasoning — same protection as the main SMS path (#78).
+_GEMINI_THINKING_CONFIG = build_thinking_config(GENERATION_THINKING_LEVEL)
 
 
 def generate(prompt: str) -> str:
@@ -54,7 +59,9 @@ def _gemini(prompt: str) -> str:
     from google import genai
 
     client = genai.Client(api_key=GEMINI_API_KEY)
-    response = client.models.generate_content(model=GENERATION_MODEL, contents=prompt)
+    response = generate_with_thinking(
+        client, GENERATION_MODEL, prompt, _GEMINI_THINKING_CONFIG
+    )
     text = (response.text or "").strip()
     if not text:
         raise ValueError("Gemini returned empty response")
