@@ -1,6 +1,6 @@
 """
 Blast Tool — send group texts to segmented audiences.
-Toggle between Twilio (SMS) and SlickText.
+All blasts send via Twilio (SlickText is retired as a blast channel).
 Draft board for composing and saving messages before sending.
 Scheduled send support via the background scheduler.
 """
@@ -166,7 +166,7 @@ def blast_new_for_show(show_id: int):
     new_id = save_blast_draft(
         name=f"{show_name} — show message",
         body="",
-        channel="slicktext",
+        channel="twilio",
         audience_type="show",
         audience_filter=str(show_id),
         sample_pct=100,
@@ -489,7 +489,7 @@ def upload_image():
         finally:
             conn.close()
 
-        # Always use the public HTTPS origin so SlickText/Twilio can fetch
+        # Always use the public HTTPS origin so Twilio can fetch
         # the image without being redirected (Railway terminates TLS at proxy).
         scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
         host = request.headers.get("X-Forwarded-Host", request.host)
@@ -711,9 +711,9 @@ def save_draft():
 
     name = (request.form.get("name") or "Untitled draft").strip()[:120]
     body = body_raw.strip()
-    channel = request.form.get("channel", "twilio")
-    if channel not in ("twilio", "slicktext"):
-        channel = "twilio"
+    # SlickText is retired — every blast sends via Twilio regardless of what
+    # the form submits (protects against stale forms and old drafts).
+    channel = "twilio"
     audience_type = request.form.get("audience_type", "all")
     if audience_type not in ("all", "tag", "location", "area_code", "random", "show", "tier", "compound"):
         audience_type = "all"
@@ -794,7 +794,7 @@ def save_draft():
                 )
                 logger.info("  TEST: blast_context_session created for draft %s", new_id)
         else:
-            flash("Test send failed — check Twilio/SlickText credentials in Railway env vars.", "error")
+            flash("Test send failed — check Twilio credentials in Railway env vars.", "error")
         return redirect(url_for("blast.blast_compose", draft_id=new_id))
 
     if intent == "schedule":
@@ -871,9 +871,8 @@ def send_now(draft_id: int):
         return redirect(url_for("blast.blast_compose", draft_id=draft_id))
 
     name = (request.form.get("name") or draft.get("name") or "Untitled draft").strip()[:120]
-    channel = request.form.get("channel") or draft.get("channel") or "twilio"
-    if channel not in ("twilio", "slicktext"):
-        channel = "twilio"
+    # SlickText is retired — force Twilio even for old drafts saved with slicktext.
+    channel = "twilio"
     audience_type = request.form.get("audience_type") or draft.get("audience_type") or "all"
     if audience_type not in ("all", "tag", "location", "area_code", "random", "show", "tier", "compound"):
         audience_type = "all"
@@ -960,9 +959,7 @@ def send_test(draft_id: int):
         return redirect(url_for("blast.blast_compose", draft_id=draft_id))
 
     body = (request.form.get("body") or "").strip()
-    channel = request.form.get("channel", "twilio")
-    if channel not in ("twilio", "slicktext"):
-        channel = "twilio"
+    channel = "twilio"  # SlickText is retired — tests always send via Twilio
 
     if not body:
         flash("Add a message before sending a test.", "error")
@@ -993,7 +990,7 @@ def send_test(draft_id: int):
                 creator_slug=(draft.get("creator_slug") or None),
             )
     else:
-        flash("Test send failed — check that your Twilio/SlickText credentials are set on Railway.", "error")
+        flash("Test send failed — check that your Twilio credentials are set on Railway.", "error")
     return redirect(url_for("blast.blast_compose", draft_id=draft_id))
 
 

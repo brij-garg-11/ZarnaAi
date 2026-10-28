@@ -141,29 +141,18 @@
                  {{ 'readonly' if active_draft.status == 'scheduled' else '' }}>
         </div>
 
-        <!-- Channel toggle -->
+        <!-- Channel (Twilio only — SlickText is retired) -->
         <div class="mb-5">
           <label class="section-label mb-2 block">Channel</label>
+          <input type="hidden" name="channel" value="twilio">
           <div class="flex rounded-lg overflow-hidden border" style="border-color:var(--border);width:fit-content;">
-            <label class="flex items-center gap-2 px-4 py-2.5 cursor-pointer transition-colors text-sm font-medium"
-                   :class="channel==='twilio' ? 'bg-gold-active' : ''"
-                   :style="channel==='twilio' ? 'background:#3a2a0e;color:var(--pink);' : 'color:var(--text-muted);'">
-              <input type="radio" name="channel" value="twilio" x-model="channel" class="sr-only"
-                     {{ 'checked' if active_draft.channel == 'twilio' else '' }}>
+            <span class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium"
+                  style="background:#3a2a0e;color:var(--pink);">
               📱 Twilio SMS
-            </label>
-            <label class="flex items-center gap-2 px-4 py-2.5 cursor-pointer transition-colors text-sm font-medium border-l"
-                   style="border-color:var(--border);"
-                   :class="channel==='slicktext' ? 'bg-gold-active' : ''"
-                   :style="channel==='slicktext' ? 'background:#3a2a0e;color:var(--pink);' : 'color:var(--text-muted);'">
-              <input type="radio" name="channel" value="slicktext" x-model="channel" class="sr-only"
-                     {{ 'checked' if active_draft.channel == 'slicktext' else '' }}>
-              💬 SlickText
-            </label>
+            </span>
           </div>
           <p class="text-xs mt-2" style="color:var(--text-dim);">
-            <span x-show="channel==='twilio'">Twilio SMS — direct carrier delivery via your 212 number</span>
-            <span x-show="channel==='slicktext'">SlickText — uses your SlickText account API for delivery</span>
+            Twilio SMS — direct carrier delivery
           </p>
         </div>
 
@@ -496,10 +485,8 @@
                     class="text-xs px-2 py-1 rounded transition-colors"
                     style="color:#f87171;border:1px solid #f87171;background:transparent;">Remove</button>
           </div>
-          <!-- Channel-specific constraints note -->
           <p class="text-xs mb-2" style="color:var(--text-dim);">
-            <span x-show="channel==='slicktext'">SlickText MMS: JPG, PNG, or GIF only · <strong style="color:#fbbf24;">max 590 KB</strong></span>
-            <span x-show="channel==='twilio'">Twilio MMS: JPG, PNG, GIF, WEBP, or PDF · max 5 MB</span>
+            Twilio MMS: JPG, PNG, GIF, WEBP, or PDF · max 5 MB
           </p>
 
           <!-- Stale /tmp URL warning (old uploads before DB storage was added) -->
@@ -536,8 +523,7 @@
             <div class="text-3xl">🖼️</div>
             <p class="text-sm font-medium" style="color:var(--text);">Drop image here or click to upload</p>
             <p class="text-xs" style="color:var(--text-dim);">
-              <span x-show="channel==='slicktext'">JPG, PNG, or GIF · keep under 590 KB for SlickText</span>
-              <span x-show="channel==='twilio'">JPG, PNG, GIF, WEBP, or PDF · max 5 MB</span>
+              JPG, PNG, GIF, WEBP, or PDF · max 5 MB
             </p>
             <input type="file" accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
                    x-ref="fileInput" class="hidden" @change="onFileChange($event)">
@@ -620,7 +606,7 @@
             <p class="text-sm" style="color:var(--text-muted);">
               This will immediately send to
               <strong style="color:var(--pink);" x-text="audienceCount.toLocaleString() + ' recipients'"></strong>
-              via <strong style="color:var(--text);" x-text="channel === 'twilio' ? 'Twilio SMS' : 'SlickText'"></strong>.
+              via <strong style="color:var(--text);">Twilio SMS</strong>.
               No phone numbers are shown — the system handles routing privately.
             </p>
           </div>
@@ -720,7 +706,7 @@
 
 function blastCompose() {
   return {
-    channel: '{{ active_draft.channel if active_draft else "twilio" }}',
+    channel: 'twilio',
     audienceType: '{{ active_draft.audience_type if active_draft else "all" }}',
     audienceFilter: '{{ active_draft.audience_filter if active_draft else "" }}',
     samplePct: {{ active_draft.audience_sample_pct if active_draft else 100 }},
@@ -843,22 +829,11 @@ function imageAttach(initialUrl, uploadEnabled) {
     },
 
     async uploadFile(file) {
-      // Get channel from parent blastCompose scope via closest x-data
-      const channelEl = document.querySelector('[name="channel"]:checked');
-      const ch = channelEl ? channelEl.value : 'twilio';
-      const maxBytes = ch === 'slicktext' ? 590 * 1024 : 5 * 1024 * 1024;
-      const maxLabel = ch === 'slicktext' ? '590 KB' : '5 MB';
+      // Twilio MMS limit
+      const maxBytes = 5 * 1024 * 1024;
       if (file.size > maxBytes) {
-        this.uploadError = `File too large for ${ch === 'slicktext' ? 'SlickText' : 'Twilio'} — max ${maxLabel}. Compress or resize the image and try again.`;
+        this.uploadError = 'File too large for Twilio — max 5 MB. Compress or resize the image and try again.';
         return;
-      }
-      // SlickText only supports JPG/PNG/GIF
-      if (ch === 'slicktext') {
-        const ext = file.name.split('.').pop().toLowerCase();
-        if (!['jpg','jpeg','png','gif'].includes(ext)) {
-          this.uploadError = 'SlickText only supports JPG, PNG, or GIF images.';
-          return;
-        }
       }
       this.uploading = true;
       this.uploadError = '';

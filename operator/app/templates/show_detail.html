@@ -81,7 +81,7 @@
     <div>
       <div class="section-label mb-1" style="color:var(--pink);">🔴 Show is live — reach them now</div>
       <p class="text-sm" style="color:var(--text-muted);">
-        Opens a pre-filled blast to everyone who signed up for <strong style="color:var(--text);">{{ show.name }}</strong> via SlickText.
+        Opens a pre-filled blast to everyone who signed up for <strong style="color:var(--text);">{{ show.name }}</strong> via Twilio SMS.
       </p>
     </div>
     <a href="{{ url_for('blast.blast_new_for_show', show_id=show.id) }}"
@@ -97,7 +97,7 @@
       <div class="section-label mb-1">Message this show's audience</div>
       <p class="text-sm" style="color:var(--text-muted);">
         Send a follow-up to everyone who signed up for <strong style="color:var(--text);">{{ show.name }}</strong>.
-        Opens a pre-filled blast via SlickText.
+        Opens a pre-filled blast via Twilio SMS.
       </p>
     </div>
     <a href="{{ url_for('blast.blast_new_for_show', show_id=show.id) }}"
