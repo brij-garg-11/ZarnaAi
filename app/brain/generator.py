@@ -11,6 +11,7 @@ except Exception:  # pragma: no cover - only on exotic runtimes
 
 from google import genai
 
+from app.brain.budget import AIBudgetExceeded, guard_ai_call
 from app.brain.emphasis import strip_all_emphasis
 from app.brain.intent import Intent
 from app.brain.thinking import build_thinking_config, generate_with_thinking
@@ -1192,6 +1193,11 @@ def generate_zarna_reply(
         _LOGGER.info("Code/homework request detected — returning redirect reply")
         return _get_code_redirect()
 
+    # Global spend kill-switch — covers every provider tier (Gemini/OpenAI/
+    # Anthropic). Raises AIBudgetExceeded, which callers treat like any other
+    # generation failure.
+    guard_ai_call("reply")
+
     prompt = _build_prompt(
         intent,
         user_message,
@@ -1311,6 +1317,13 @@ def generate_zarna_reply_stream(
     """
     if _CODE_REQUEST_RE.search(user_message or ""):
         yield _get_code_redirect()
+        return
+
+    # Global spend kill-switch (see app.brain.budget). Yield nothing when
+    # capped — the voice caller already falls back on an empty stream.
+    try:
+        guard_ai_call("voice_stream")
+    except AIBudgetExceeded:
         return
 
     prompt = _build_prompt(
