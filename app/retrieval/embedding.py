@@ -155,6 +155,9 @@ class EmbeddingRetriever(BaseRetriever):
         return src in self._podcast_transcript_sources
 
     def _embed(self, text: str) -> List[float]:
+        from app.brain.budget import guard_ai_call
+
+        guard_ai_call("embedding")
         result = self._client.models.embed_content(
             model=EMBEDDING_MODEL,
             contents=text,

@@ -37,6 +37,8 @@ from __future__ import annotations
 
 import logging
 
+from app.brain.budget import guard_ai_call
+
 logger = logging.getLogger(__name__)
 
 _VALID_LEVELS = frozenset({"minimal", "low", "medium", "high"})
@@ -135,7 +137,11 @@ def generate_with_thinking(client, model: str, contents: str, config):
     errors: one config-less retry, nothing cached (original #78 behaviour).
     Exceptions from the final config-less attempt propagate so callers keep
     their existing error handling (fallback text, Intent.GENERAL, ...).
+
+    Every call passes the global spend kill-switch first (see app.brain.budget);
+    AIBudgetExceeded propagates to the caller like any other generation error.
     """
+    guard_ai_call("generate")
     if config is None:
         return client.models.generate_content(model=model, contents=contents)
 

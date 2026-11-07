@@ -132,6 +132,9 @@ class PgRetriever(BaseRetriever):
                 return int(row[0]) if row else 0
 
     def _embed(self, text: str) -> List[float]:
+        from app.brain.budget import guard_ai_call
+
+        guard_ai_call("embedding")
         result = self._client.models.embed_content(
             model=EMBEDDING_MODEL,
             contents=text,
